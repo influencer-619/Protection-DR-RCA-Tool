@@ -1,0 +1,201 @@
+.toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.sheet {
+  background: #f4f7f9;
+  color: #2a3a48;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 24px 28px;
+  box-shadow: var(--shadow-panel);
+  max-width: 920px;
+}
+
+.eyebrow {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6a7d8e;
+}
+
+.title {
+  margin: 4px 0 6px;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #3d566a;
+}
+
+.meta {
+  font-size: 0.85rem;
+  color: #4a5d6e;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #4f8794;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
+.fault {
+  padding: 2px 8px;
+  border: 1px solid #c2410c;
+  background: rgba(194, 65, 12, 0.08);
+  border-radius: 2px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #9a3412;
+}
+
+.sheet h2 {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #3d566a;
+}
+
+.sheet section + section {
+  margin-top: 18px;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.table th {
+  text-align: left;
+  width: 38%;
+  padding: 5px 8px 5px 0;
+  color: #5c7188;
+  font-weight: 600;
+  vertical-align: top;
+}
+
+.table td {
+  padding: 5px 0;
+  color: #1a2b3c;
+  vertical-align: top;
+}
+
+.rcaHead {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.statement {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.explain {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: #3d5166;
+}
+
+.muted {
+  margin: 0;
+  color: #5c7188;
+  font-size: 0.85rem;
+}
+
+.timeline,
+.findings,
+.verify {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.timeline li,
+.findings li {
+  margin-bottom: 4px;
+}
+
+.timeline li span:first-child,
+.findings li span:first-child {
+  display: inline-block;
+  min-width: 72px;
+  margin-right: 8px;
+  color: #5c7188;
+}
+
+.footer {
+  margin-top: 22px;
+  padding-top: 12px;
+  border-top: 1px solid #b8c5d4;
+  font-size: 0.72rem;
+  color: #5c7188;
+}
+
+@media (max-width: 720px) {
+  .grid2 {
+    grid-template-columns: 1fr;
+  }
+
+  .header {
+    flex-direction: column;
+  }
+}
+
+@media print {
+  .toolbar,
+  :global(.no-print) {
+    display: none !important;
+  }
+
+  .sheet {
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    max-width: none;
+  }
+
+  /* Hide app chrome when printing summary */
+  :global(aside),
+  :global(header.topbar),
+  :global([class*='topbar']),
+  :global([class*='sidebar']),
+  :global([class*='tabs']),
+  :global([class*='progress']),
+  :global([class*='banner']) {
+    display: none !important;
+  }
+
+  :global(main),
+  :global([class*='content']),
+  :global([class*='body']),
+  :global([class*='main']) {
+    overflow: visible !important;
+    background: #fff !important;
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "comtrade_version": "IEEE C37.111-1999",
+  "data_format": "FLOAT32",
+  "support_status": "SUPPORTED",
+  "fixture": "comtrade/ieee_float32/ag_fault.cfg"
+}

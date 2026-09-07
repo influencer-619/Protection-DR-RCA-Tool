@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Protection Disturbance Event Report</title>
+  <style>
+    body { font-family: Georgia, "Times New Roman", serif; margin: 2rem; color: #1a1a1a; }
+    h1 { font-size: 1.6rem; }
+    h2 { font-size: 1.15rem; margin-top: 1.6rem; border-bottom: 1px solid #ccc; padding-bottom: 0.25rem; }
+    .kind { font-weight: bold; font-size: 0.75rem; letter-spacing: 0.04em; }
+    .OBSERVED { color: #0b5; }
+    .CALCULATED { color: #06c; }
+    .INFERRED { color: #a60; }
+    .HYPOTHESIS { color: #808; }
+    table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
+    th, td { border: 1px solid #ccc; padding: 0.35rem 0.5rem; text-align: left; font-size: 0.9rem; }
+    .limitations { background: #fff8e6; padding: 0.75rem; }
+    .meta { color: #555; font-size: 0.85rem; }
+    pre { white-space: pre-wrap; font-size: 0.85rem; background: #f7f7f7; padding: 0.5rem; }
+  </style>
+</head>
+<body>
+  {% set ev = analysis.event or {} %}
+  {% set decision = analysis.decision or {} %}
+  <h1>1. Executive Summary</h1>
+  <p class="meta">Decision: {{ decision.state or "NOT AVAILABLE" }}
+     | Confidence: {{ decision.confidence or "INCONCLUSIVE" }}</p>
+  <ul>
+  {% for s in statements %}
+    <li><span class="kind {{ s.kind }}">[{{ s.kind }}]</span> {{ s.text }}</li>
+  {% else %}
+    <li>No structured statements available — see detailed sections below.</li>
+  {% endfor %}
+  </ul>
+
+  <h2>2. Event Information</h2>
+  <p>Event ID: {{ ev.event_id or "NOT AVAILABLE" }}</p>
+  <p>Description: {{ ev.description or "NOT AVAILABLE" }}</p>
+  {% if ev.feeder %}<p>Feeder: {{ ev.feeder }}</p>{% endif %}
+  {% if ev.nominal_voltage_kv %}<p>Nominal voltage: {{ ev.nominal_voltage_kv }} kV</p>{% endif %}
+
+  <h2>3. Asset Information</h2>
+  {% if ev.asset %}
+  <p>{{ ev.asset }}</p>
+  {% elif ev.substation or ev.bay or ev.feeder %}
+  <p>
+    {% if ev.substation %}Substation: {{ ev.substation }}{% endif %}
+    {% if ev.bay %}{% if ev.substation %} · {% endif %}Bay: {{ ev.bay }}{% endif %}
+    {% if ev.feeder %}{% if ev.substation or ev.bay %} · {% endif %}Feeder: {{ ev.feeder }}{% endif %}
+  </p>
+  {% else %}
+  <p>NOT AVAILABLE — set plant labels on Overview or re-run analysis after COMTRADE ingest.</p>
+  {% endif %}
+
+  <h2>4. Relay Information</h2>
+  {% if ev.relay %}
+  <p>{{ ev.relay }}</p>
+  {% else %}
+  <p>NOT AVAILABLE — set relay tag on Overview or ensure CFG recording device is present.</p>
+  {% endif %}
+
+  <h2>5. COMTRADE Data Quality</h2>
+  {% if analysis.data_quality %}
+  <pre>{{ analysis.data_quality }}</pre>
+  {% else %}
+  <p>NOT AVAILABLE</p>
+  {% endif %}
+
+  <h2>6. Setting Reference</h2>
+  {% if analysis.setting_reference %}
+  <pre>{{ analysis.setting_reference }}</pre>
+  {% else %}
+  <p>Setting reference: NOT AVAILABLE / NOT VERIFIED</p>
+  {% endif %}
+
+  <h2>7. Event Timeline</h2>
+  <table>
+    <tr><th>Type</th><th>Timestamp (s)</th><th>Source</th><th>Confidence</th></tr>
+    {% for e in analysis.timeline or [] %}
+    <tr>
+      <td>{{ e.event_type }}{% if e.label %} ({{ e.label }}){% endif %}</td>
+      <td>{{ "%.6f"|format(e.timestamp|float) if e.timestamp is not none else "—" }}</td>
+      <td>{{ e.source or "—" }}</td>
+      <td>{{ e.confidence or "—" }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4">NOT AVAILABLE — re-run analysis to reconstruct timeline from COMTRADE / SOE.</td></tr>
+    {% endfor %}
+  </table>
+
+  <h2>8. Electrical Analysis</h2>
+  {% if analysis.electrical_analysis %}
+  <p>Limitations: {{ analysis.electrical_analysis.limitations or "None recorded" }}</p>
+  {% if analysis.electrical_analysis.sample_rate_hz %}
+  <p class="meta">Sample rate: {{ analysis.electrical_analysis.sample_rate_hz }} Hz
+     {% if analysis.electrical_analysis.nominal_frequency_hz %}
+     · Nominal f: {{ analysis.electrical_analysis.nominal_frequency_hz }} Hz
+     {% endif %}
+  </p>
+  {% endif %}
+  {% if analysis.electrical_analysis.rms %}
+  <table>
+    <tr><th>Channel</th><th>RMS</th><th>Unit</th><th>Status</th></tr>
+    {% for name, row in analysis.electrical_analysis.rms.items() %}
+    <tr>
+      <td>{{ name }}</td>
+      <td>{{ row.value if row.value is not none else "—" }}</td>
+      <td>{{ row.unit or "" }}</td>
+      <td>{{ row.status or "" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% else %}
+  <p>Limitations: NOT AVAILABLE</p>
+  {% endif %}
+
+  <h2>9. Fault Classification</h2>
+  {% set fault = analysis.fault_classification or {} %}
+  <p>Type: {{ fault.fault_type or "UNKNOWN" }} | Status: {{ fault.status or "UNKNOWN" }}
+     | Confidence: {{ fault.confidence or "INCONCLUSIVE" }}</p>
+  {% if fault.distance_display %}
+  <p>Location: {{ fault.distance_display }}</p>
+  {% else %}
+  <p>Location: Not applicable / not calculated for this disturbance (optional for non-distance schemes).</p>
+  {% endif %}
+
+  <h2>10. Protection Operation</h2>
+  <table>
+    <tr><th>Element</th><th>Enabled</th><th>Pickup</th><th>Trip</th><th>Expected</th><th>Actual</th><th>Consistency</th></tr>
+    {% for a in analysis.protection_assessment or [] %}
+    <tr>
+      <td>{{ a.element }}</td>
+      <td>{{ a.enabled }}</td>
+      <td>{{ a.pickup }}</td>
+      <td>{{ a.trip }}</td>
+      <td>{{ a.expected_operation }}</td>
+      <td>{{ a.actual_operation }}</td>
+      <td>{{ a.consistency }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7">NOT AVAILABLE — re-run analysis after settings + COMTRADE digitals are loaded.</td></tr>
+    {% endfor %}
+  </table>
+
+  <h2>11. Protection Consistency Check</h2>
+  <table>
+    <tr><th>Element</th><th>Check</th><th>Status</th><th>Severity</th><th>Explanation</th></tr>
+    {% for f in analysis.consistency_findings or [] %}
+    <tr>
+      <td>{{ f.element }}</td>
+      <td>{{ f.check_type }}</td>
+      <td>{{ f.status }}</td>
+      <td>{{ f.severity }}</td>
+      <td>{{ f.explanation }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5">NOT AVAILABLE</td></tr>
+    {% endfor %}
+  </table>
+
+  <h2>12. Breaker Analysis</h2>
+  <p>{{ analysis.breaker_analysis or "INCONCLUSIVE" }}</p>
+
+  <h2>13. RCA Assessment</h2>
+  {% set rca = analysis.rca_hypotheses or {} %}
+  {% if rca.primary %}
+  <p>Primary: {{ rca.primary.hypothesis_id }} — {{ rca.primary.status }} (score {{ rca.primary.score }})</p>
+  {% else %}
+  <p>INCONCLUSIVE</p>
+  {% endif %}
+  <table>
+    <tr><th>Hypothesis</th><th>Status</th><th>Score (%)</th><th>Missing Evidence</th></tr>
+    {% for h in rca.hypotheses or [] %}
+    <tr>
+      <td>{{ h.hypothesis_id }}</td>
+      <td>{{ h.status }}</td>
+      <td>{{ h.score }}</td>
+      <td>{{ h.missing_evidence }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4">NOT AVAILABLE</td></tr>
+    {% endfor %}
+  </table>
+
+  <h2>14. Evidence Table</h2>
+  <table>
+    <tr><th>ID</th><th>Source</th><th>Parameter</th><th>Value</th><th>Interpretation</th></tr>
+    {% for e in analysis.evidence or [] %}
+    <tr>
+      <td>{{ e.evidence_id }}</td>
+      <td>{{ e.source_type }}</td>
+      <td>{{ e.parameter }}</td>
+      <td>{{ e.value }}</td>
+      <td>{{ e.interpretation }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5">NOT AVAILABLE</td></tr>
+    {% endfor %}
+  </table>
+
+  <h2>15. Similar Historical Events</h2>
+  {% set sim = analysis.similar_events or {} %}
+  <p>{{ sim.message or "SIMILARITY RESULT: NOT AVAILABLE" }}</p>
+  <p class="meta">{{ sim.note or "Supporting evidence only — never treat as proof" }}</p>
+
+  <h2>16. Recommended Actions</h2>
+  <ul>
+  {% for a in decision.recommended_actions or [] %}
+    <li>{{ a }}</li>
+  {% else %}
+    <li>NOT AVAILABLE</li>
+  {% endfor %}
+  </ul>
+
+  <h2>17. Confidence</h2>
+  <p>{{ decision.confidence or "INCONCLUSIVE" }}</p>
+
+  <h2>18. Limitations</h2>
+  <div class="limitations">
+    <ul>
+    {% for lim in analysis.limitations or [] %}
+      <li>{{ lim }}</li>
+    {% else %}
+      <li>None recorded</li>
+    {% endfor %}
+    </ul>
+  </div>
+
+  <h2>19. Engineer Review</h2>
+  {% set er = analysis.engineer_review %}
+  {% if er is mapping %}
+  <p><strong>{{ er.action or "PENDING" }}</strong></p>
+  {% if er.reviewed_at %}<p>Reviewed at: {{ er.reviewed_at }}</p>{% endif %}
+  {% if er.decision_state %}<p>Decision state: {{ er.decision_state }}</p>{% endif %}
+  {% if er.comments %}<p>Comments: {{ er.comments }}</p>{% endif %}
+  {% elif er %}
+  <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{ er }}</pre>
+  {% else %}
+  <p>PENDING</p>
+  {% endif %}
+</body>
+</html>

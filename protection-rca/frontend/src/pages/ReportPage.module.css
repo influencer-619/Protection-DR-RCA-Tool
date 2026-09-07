@@ -1,0 +1,64 @@
+.report {
+  background: #f4f7f9;
+  color: #2a3a48;
+  border: 1px solid #c5d0da;
+  border-radius: 3px;
+  padding: 24px 28px;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  line-height: 1.5;
+  box-shadow: 0 1px 2px rgba(58, 81, 100, 0.08);
+}
+
+.report :global(h1) {
+  margin: 0 0 10px;
+  font-size: 1.25rem;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  color: #3d566a;
+  border-bottom: 2px solid #4f8794;
+  padding-bottom: 6px;
+}
+
+.report :global(h2) {
+  margin: 18px 0 6px;
+  font-size: 0.95rem;
+  font-family: 'Segoe UI', Tahoma, sans-serif;
+  color: #3d566a;
+  border-bottom: 1px solid #c5d0da;
+  padding-bottom: 3px;
+}
+
+.report :global(p) {
+  margin: 0 0 8px;
+}
+
+.report :global(ul) {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.report :global(em) {
+  font-style: italic;
+}
+
+.report :global(table) {
+  border: 1px solid #c5d0da;
+}
+
+.report :global(th) {
+  background: #e4ecf2;
+  color: #3d566a;
+}
+
+.report :global(pre) {
+  white-space: pre-wrap;
+  font-family: inherit;
+  margin: 0;
+  color: #2a3a48;
+}
+
+@media print {
+  .report {
+    border: none;
+    box-shadow: none;
+  }
+}

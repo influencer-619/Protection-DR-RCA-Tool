@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local tooling
+.tools/
+scripts/build/
+
+# PyInstaller
+*.spec
+
+# Storage / uploads
+backend/storage/
+*.log
+*.db
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docker / secrets
+docker/secrets/
+*.pem
+*.key
+
+# Celery
+celerybeat-schedule

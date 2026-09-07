@@ -1,0 +1,8 @@
+{
+  "comtrade_version": "IEEE C37.111-1999",
+  "data_format": "BINARY",
+  "support_status": "SUPPORTED",
+  "fixture": "comtrade/ieee_binary/ag_fault.cfg",
+  "channel_count_analog": 4,
+  "sample_rate_hz": 1000.0
+}

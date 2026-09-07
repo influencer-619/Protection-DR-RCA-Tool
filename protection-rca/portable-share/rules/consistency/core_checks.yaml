@@ -1,0 +1,68 @@
+version: "1.0.0"
+rules:
+  - rule_id: CONS-ENABLED-PICKUP
+    check_type: enabled_vs_pickup
+    description: "Enabled=FALSE with pickup=TRUE is INCONSISTENT"
+    severity: HIGH
+  - rule_id: CONS-ENABLED-TRIP
+    check_type: enabled_vs_trip
+    description: "Enabled=FALSE with trip=TRUE is INCONSISTENT"
+    severity: CRITICAL
+  - rule_id: CONS-PICKUP-TRIP
+    check_type: pickup_vs_trip
+    description: "Trip without pickup requires investigation"
+    severity: HIGH
+  - rule_id: CONS-SEQUENCE
+    check_type: protection_sequence
+    description: "Pickup -> Trip -> Breaker -> Current interruption"
+    severity: MEDIUM
+  - rule_id: CONS-DISTANCE
+    check_type: distance
+    elements: ["21"]
+    severity: MEDIUM
+  - rule_id: CONS-DIRECTIONAL
+    check_type: directional
+    elements: ["67", "67N"]
+    severity: MEDIUM
+  - rule_id: CONS-EARTH
+    check_type: earth_fault
+    elements: ["50N", "51N", "67N"]
+    severity: MEDIUM
+  - rule_id: CONS-OC
+    check_type: overcurrent
+    elements: ["50", "51"]
+    severity: MEDIUM
+  - rule_id: CONS-VOLTAGE
+    check_type: voltage
+    elements: ["27", "59"]
+    severity: MEDIUM
+  - rule_id: CONS-FREQ
+    check_type: frequency
+    elements: ["81U", "81O", "81R"]
+    severity: MEDIUM
+  - rule_id: CONS-DIFF
+    check_type: differential
+    elements: ["87T", "87L", "87B"]
+    severity: MEDIUM
+  - rule_id: CONS-BF
+    check_type: breaker_failure
+    elements: ["50BF"]
+    severity: HIGH
+  - rule_id: CONS-AR
+    check_type: auto_reclose
+    elements: ["79"]
+    severity: MEDIUM
+  - rule_id: CONS-LOCKOUT
+    check_type: lockout
+    elements: ["86"]
+    severity: HIGH
+  - rule_id: CONS-SYNC
+    check_type: synchronism
+    elements: ["25"]
+    severity: LOW
+critical_rule:
+  id: CONS-CRITICAL-51-DISABLED-OPERATE
+  description: >
+    If 51 enabled=FALSE but pickup/trip TRUE, mark INCONSISTENT,
+    investigate setting sources, RCA remains INCONCLUSIVE until verified.
+    Do NOT auto-conclude relay malfunction.

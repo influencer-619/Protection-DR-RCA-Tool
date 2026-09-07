@@ -1,0 +1,85 @@
+version: "1.0.0"
+types: [AG, BG, CG, AB, BC, CA, ABG, BCG, CAG, ABC, ABCG, UNKNOWN]
+thresholds:
+  phase_current_ratio: 2.0
+  voltage_collapse_ratio: 0.8
+  zero_sequence_ratio: 0.2
+  negative_sequence_ratio: 0.2
+rules:
+  - id: FC-AG
+    type: AG
+    require:
+      - Ia_elevated
+      - Ib_not_elevated
+      - Ic_not_elevated
+      - V0_or_I0_present
+  - id: FC-BG
+    type: BG
+    require:
+      - Ib_elevated
+      - Ia_not_elevated
+      - Ic_not_elevated
+      - V0_or_I0_present
+  - id: FC-CG
+    type: CG
+    require:
+      - Ic_elevated
+      - Ia_not_elevated
+      - Ib_not_elevated
+      - V0_or_I0_present
+  - id: FC-AB
+    type: AB
+    require:
+      - Ia_elevated
+      - Ib_elevated
+      - Ic_not_elevated
+      - ground_absent
+  - id: FC-BC
+    type: BC
+    require:
+      - Ib_elevated
+      - Ic_elevated
+      - Ia_not_elevated
+      - ground_absent
+  - id: FC-CA
+    type: CA
+    require:
+      - Ic_elevated
+      - Ia_elevated
+      - Ib_not_elevated
+      - ground_absent
+  - id: FC-ABG
+    type: ABG
+    require:
+      - Ia_elevated
+      - Ib_elevated
+      - Ic_not_elevated
+      - V0_or_I0_present
+  - id: FC-BCG
+    type: BCG
+    require:
+      - Ib_elevated
+      - Ic_elevated
+      - Ia_not_elevated
+      - V0_or_I0_present
+  - id: FC-CAG
+    type: CAG
+    require:
+      - Ic_elevated
+      - Ia_elevated
+      - Ib_not_elevated
+      - V0_or_I0_present
+  - id: FC-ABC
+    type: ABC
+    require:
+      - Ia_elevated
+      - Ib_elevated
+      - Ic_elevated
+      - ground_absent
+  - id: FC-ABCG
+    type: ABCG
+    require:
+      - Ia_elevated
+      - Ib_elevated
+      - Ic_elevated
+      - V0_or_I0_present

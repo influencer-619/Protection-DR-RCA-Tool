@@ -1,0 +1,118 @@
+.drawer {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.list {
+  padding: 8px;
+}
+
+.node + .node {
+  margin-top: 4px;
+}
+
+.head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.85rem;
+}
+
+.head:hover {
+  background: var(--bg-hover);
+}
+
+.supporting {
+  border-left: 3px solid var(--status-ok);
+}
+
+.contradicting {
+  border-left: 3px solid var(--status-error);
+}
+
+.missing {
+  border-left: 3px solid var(--sev-medium);
+}
+
+.neutral {
+  border-left: 3px solid var(--status-neutral);
+}
+
+.chev {
+  color: var(--text-muted);
+  width: 12px;
+}
+
+.key {
+  font-size: 0.72rem;
+  color: var(--accent-bright);
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.pol {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.polBadge {
+  font-size: 0.68rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.conf {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.body {
+  padding: 8px 10px 8px 28px;
+}
+
+.summary {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}

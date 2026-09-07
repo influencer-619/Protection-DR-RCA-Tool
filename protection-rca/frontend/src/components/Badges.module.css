@@ -1,0 +1,110 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  line-height: 1.4;
+}
+
+.ok {
+  color: var(--alert-ok-text);
+  background: var(--sev-low-bg);
+  border-color: var(--status-ok);
+}
+
+.warn {
+  color: var(--alert-warn-text);
+  background: var(--sev-medium-bg);
+  border-color: var(--sev-medium);
+}
+
+.error {
+  color: var(--alert-error-text);
+  background: var(--sev-critical-bg);
+  border-color: var(--sev-critical);
+}
+
+.pending {
+  color: var(--alert-info-text);
+  background: var(--sev-info-bg);
+  border-color: var(--sev-info);
+}
+
+.running {
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.neutral {
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+.sevInfo {
+  color: var(--alert-info-text);
+  background: var(--sev-info-bg);
+  border-color: var(--sev-info);
+}
+
+.sevLow {
+  color: var(--alert-ok-text);
+  background: var(--sev-low-bg);
+  border-color: var(--sev-low);
+}
+
+.sevMedium {
+  color: var(--alert-warn-text);
+  background: var(--sev-medium-bg);
+  border-color: var(--sev-medium);
+}
+
+.sevHigh {
+  color: var(--sev-high);
+  background: var(--sev-high-bg);
+  border-color: var(--sev-high);
+}
+
+.sevCritical {
+  color: var(--alert-error-text);
+  background: var(--sev-critical-bg);
+  border-color: var(--sev-critical);
+}
+
+.dqGood {
+  color: var(--alert-ok-text);
+  background: var(--sev-low-bg);
+  border-color: var(--dq-good);
+}
+
+.dqAcceptable {
+  color: var(--status-ok);
+  background: var(--sev-low-bg);
+  border-color: var(--dq-acceptable);
+}
+
+.dqWarning {
+  color: var(--alert-warn-text);
+  background: var(--sev-medium-bg);
+  border-color: var(--dq-warning);
+}
+
+.dqPoor {
+  color: var(--sev-high);
+  background: var(--sev-high-bg);
+  border-color: var(--dq-poor);
+}
+
+.dqInvalid {
+  color: var(--alert-error-text);
+  background: var(--sev-critical-bg);
+  border-color: var(--dq-invalid);
+}

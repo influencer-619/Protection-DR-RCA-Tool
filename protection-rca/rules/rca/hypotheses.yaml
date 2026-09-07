@@ -1,0 +1,91 @@
+version: "1.0.0"
+# Hypothesis IDs are stable. EXTERNAL_LINE_FAULT is displayed as "Protected circuit fault"
+# (scheme-agnostic electrical fault cleared by protection — not distance-only).
+#
+# Zone matching (engine-enforced):
+#   21 / 87L  → EXTERNAL_LINE_FAULT (+ lightning/vegetation/flashover/cable when evidence)
+#   50/51/EF  → INTERNAL_FEEDER_FAULT (+ same causes when evidence)
+#   87T/87RGF → TRANSFORMER_INTERNAL_FAULT (CT sat as competing instrumentation hyp)
+#   87B       → BUS_ZONE_FAULT
+#   87G       → GENERATOR_INTERNAL_FAULT
+# Wrong-zone hyps are ranked UNLIKELY. Cause hyps without field evidence stay INCONCLUSIVE.
+scoring_weights:
+  deterministic: 0.50
+  consistency: 0.20
+  electrical: 0.15
+  ml: 0.10
+  similarity: 0.05
+hypotheses:
+  - id: EXTERNAL_LINE_FAULT
+    required_for_confirmed:
+      - fault_classified
+      - protection_operated_consistently
+      - current_increase_observed
+  - id: INTERNAL_FEEDER_FAULT
+    required_for_confirmed:
+      - fault_classified
+      - protection_operated_consistently
+  - id: CABLE_FAULT
+    required_for_confirmed:
+      - fault_classified
+      - cable_asset_confirmed
+  - id: TRANSFORMER_INTERNAL_FAULT
+    required_for_confirmed:
+      - differential_operated
+      - through_fault_excluded
+  - id: BUS_ZONE_FAULT
+    required_for_confirmed:
+      - bus_diff_operated
+      - fault_classified
+  - id: GENERATOR_INTERNAL_FAULT
+    required_for_confirmed:
+      - generator_diff_operated
+      - fault_classified
+  - id: LIGHTNING
+    required_for_confirmed:
+      - lightning_evidence
+  - id: VEGETATION
+    required_for_confirmed:
+      - field_report_vegetation
+  - id: INSULATION_FLASHOVER
+    required_for_confirmed:
+      - insulation_evidence
+  - id: CT_SATURATION
+    required_for_confirmed:
+      - waveform_distortion
+      - harmonic_evidence
+  - id: VT_CVT_ABNORMALITY
+    required_for_confirmed:
+      - voltage_channel_anomaly
+  - id: PROTECTION_SETTING_ERROR
+    required_for_confirmed:
+      - setting_verified
+      - inconsistency_with_verified_settings
+  - id: RELAY_CONFIGURATION_ERROR
+    required_for_confirmed:
+      - configuration_verified
+      - mismatch_documented
+  - id: RELAY_MISOPERATION
+    required_for_confirmed:
+      - settings_verified
+      - electrical_no_fault
+      - trip_observed
+  - id: BREAKER_FAILURE
+    required_for_confirmed:
+      - trip_command_observed
+      - current_persists
+      - bf_logic_satisfied
+  - id: COMMUNICATION_FAILURE
+    required_for_confirmed:
+      - comm_channel_evidence
+  - id: INTERTRIP_OPERATION
+    required_for_confirmed:
+      - intertrip_signal_observed
+  - id: SWITCHING_TRANSIENT
+    required_for_confirmed:
+      - switching_event_correlated
+  - id: EXTERNAL_GRID_DISTURBANCE
+    required_for_confirmed:
+      - external_event_correlated
+  - id: UNKNOWN
+    required_for_confirmed: []

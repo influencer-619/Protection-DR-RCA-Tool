@@ -1,0 +1,38 @@
+rule_id: PROT-51-001
+version: "1.1.0"
+element: "51"
+description: "Time overcurrent protection with IEC/IEEE inverse-time physics"
+inputs:
+  - enabled
+  - pickup
+  - trip
+  - pickup_time
+  - trip_time
+  - pickup_current
+  - time_dial
+  - curve
+  - measured_current
+logic:
+  enabled_vs_pickup: true
+  enabled_vs_trip: true
+  pickup_vs_trip: true
+  timing: true
+  inverse_time_physics: true
+physics:
+  default_curve: IEC_NORMAL_INVERSE
+  timing_tolerance_s: 0.05
+  supported_curves:
+    - IEC_NORMAL_INVERSE
+    - IEC_VERY_INVERSE
+    - IEC_EXTREMELY_INVERSE
+    - IEC_LONG_TIME_INVERSE
+    - IEEE_MODERATELY_INVERSE
+    - IEEE_VERY_INVERSE
+    - IEEE_EXTREMELY_INVERSE
+expected_result: "Operate only when enabled and pickup criteria met; time per selected curve"
+severity:
+  disabled_operation: HIGH
+  trip_without_pickup: HIGH
+  unverifiable_settings: MEDIUM
+  timing_mismatch: MEDIUM
+effective_date: "2026-01-01"

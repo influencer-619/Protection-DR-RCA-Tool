@@ -1,0 +1,26 @@
+rule_id: PROT-21-001
+version: "1.1.0"
+element: "21"
+description: "Distance protection with mho/quad zone-reach physics"
+inputs:
+  - enabled
+  - pickup
+  - trip
+  - zone1_reach
+  - apparent_impedance
+logic:
+  enabled_vs_pickup: true
+  enabled_vs_trip: true
+  pickup_vs_trip: true
+  timing: true
+  zone_reach_physics: true
+physics:
+  shape: mho
+  characteristic_angle_deg: 75.0
+expected_result: "Operate when enabled and apparent impedance enters configured zone"
+severity:
+  disabled_operation: HIGH
+  trip_without_pickup: HIGH
+  out_of_zone_trip: HIGH
+  unverifiable_settings: MEDIUM
+effective_date: "2026-01-01"

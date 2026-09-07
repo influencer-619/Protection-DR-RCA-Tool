@@ -1,0 +1,9 @@
+{
+  "comtrade_version": "IEEE C37.111-1991",
+  "support_status": "PARTIALLY_SUPPORTED",
+  "fixture": "comtrade/ieee_1991/ag_fault.cfg",
+  "channel_count_analog": 4,
+  "channel_count_digital": 2,
+  "sample_rate_hz": 1000.0,
+  "expected_fault": "AG"
+}

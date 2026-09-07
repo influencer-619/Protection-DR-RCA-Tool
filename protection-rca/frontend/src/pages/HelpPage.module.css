@@ -1,0 +1,55 @@
+﻿.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.grid ol,
+.grid ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  line-height: 1.55;
+}
+
+.grid li + li {
+  margin-top: 0.35rem;
+}
+
+.glossary {
+  margin: 0;
+}
+
+.glossaryRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) 1fr;
+  gap: 10px 16px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.glossaryRow dt {
+  font-weight: 600;
+  color: var(--accent-bright);
+}
+
+.glossaryRow dd {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.subhead {
+  margin: 18px 0 8px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+  .glossaryRow {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

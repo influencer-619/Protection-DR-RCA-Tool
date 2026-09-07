@@ -1,0 +1,6 @@
+{
+  "comtrade_version": "IEEE C37.111-1999",
+  "container": "CFF",
+  "support_status": "SUPPORTED",
+  "fixture": "comtrade/cff/ag_fault.cff"
+}

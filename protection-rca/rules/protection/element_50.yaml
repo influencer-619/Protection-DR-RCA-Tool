@@ -1,0 +1,21 @@
+rule_id: PROT-50-001
+version: "1.0.0"
+element: "50"
+description: "Instantaneous overcurrent protection consistency and assessment rules"
+inputs:
+  - enabled
+  - pickup
+  - trip
+  - pickup_time
+  - trip_time
+logic:
+  enabled_vs_pickup: true
+  enabled_vs_trip: true
+  pickup_vs_trip: true
+  timing: true
+expected_result: "Operate only when enabled and pickup criteria met"
+severity:
+  disabled_operation: HIGH
+  trip_without_pickup: HIGH
+  unverifiable_settings: MEDIUM
+effective_date: "2026-01-01"

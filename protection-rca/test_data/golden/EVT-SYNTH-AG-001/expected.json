@@ -1,0 +1,61 @@
+{
+  "case_id": "EVT-SYNTH-AG-001",
+  "title": "Synthetic AG fault — IEEE C37.111-1999 ASCII",
+  "support_status": "SUPPORTED",
+  "validation_status_expected": ["VALID", "VALID_WITH_WARNINGS"],
+  "fixture": {
+    "standard": "IEEE",
+    "revision": "1999",
+    "container": "CFG_DAT",
+    "data_format": "ASCII",
+    "paths": {
+      "cfg": "../../comtrade/ieee_1999/ag_fault.cfg",
+      "dat": "../../comtrade/ieee_1999/ag_fault.dat"
+    }
+  },
+  "comtrade": {
+    "station": "TEST_STATION",
+    "device": "REL_01",
+    "revision_year": "1999",
+    "nominal_frequency_hz": 50.0,
+    "nrates": 1,
+    "sample_rate_hz": 1000.0,
+    "end_sample": 100,
+    "samples": 100,
+    "analog_channels": [
+      { "index": 1, "name": "Ia", "phase": "A", "unit": "A", "ps": "P" },
+      { "index": 2, "name": "Ib", "phase": "B", "unit": "A", "ps": "P" },
+      { "index": 3, "name": "Ic", "phase": "C", "unit": "A", "ps": "P" },
+      { "index": 4, "name": "Va", "phase": "A", "unit": "V", "ps": "P" }
+    ],
+    "digital_channels": [
+      { "index": 1, "name": "TRIP" },
+      { "index": 2, "name": "52A" }
+    ],
+    "analog_count": 4,
+    "digital_count": 2,
+    "time_multiplier": 1.0
+  },
+  "signal_checks": {
+    "ia_prefault_peak_abs_max": 500,
+    "ia_fault_peak_abs_min": 1500,
+    "fault_inception_sample_approx": 50,
+    "timestamp_step_us": 1000
+  },
+  "fault": {
+    "expected_type": "AG",
+    "involved_phases": ["A"],
+    "ground_involved": true,
+    "classification_status_acceptable": ["CLASSIFIED", "PROBABLE"],
+    "distance": {
+      "may_be_not_calculable": true,
+      "reason": "Line impedance / full voltage set may be unavailable on this synthetic fixture; do not invent distance."
+    }
+  },
+  "engineering_notes": [
+    "Primary validated IEEE 1999 path — not IEEE 1991.",
+    "Single sample-rate section only (nrates=1); multi-rate is PARTIALLY_SUPPORTED elsewhere.",
+    "No generative AI expectations.",
+    "OT control not applicable."
+  ]
+}

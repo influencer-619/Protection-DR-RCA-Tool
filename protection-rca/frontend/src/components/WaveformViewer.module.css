@@ -1,0 +1,175 @@
+.viewer {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.fill {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+}
+
+.fill .body {
+  flex: 1;
+  min-height: 0;
+}
+
+.fill .channels {
+  max-height: none;
+  height: 100%;
+}
+
+.fill .plotCol {
+  height: 100%;
+}
+
+.fill .plotCol .canvas {
+  flex: 1;
+  min-height: 0;
+  height: 100% !important;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.toggles {
+  display: flex;
+  gap: 14px;
+}
+
+.toggles label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.hint {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.zoomLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.zoomRange {
+  width: 100px;
+  accent-color: var(--accent, #5b9fd4);
+  cursor: pointer;
+}
+
+.body {
+  display: flex;
+  min-height: 0;
+}
+
+.channels {
+  width: 140px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  padding: 8px;
+  max-height: 480px;
+  overflow: auto;
+  background: var(--bg-elevated);
+}
+
+.chTitle {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.chItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  padding: 3px 0;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.chType {
+  margin-left: 4px;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.plotCol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.canvas {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  cursor: crosshair;
+  display: block;
+  touch-action: none;
+}
+
+.scrollTrack {
+  position: relative;
+  height: 14px;
+  margin: 0 12px 0 118px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  touch-action: none;
+}
+
+.scrollThumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  min-width: 24px;
+  background: var(--accent, #5b9fd4);
+  border-radius: 3px;
+  opacity: 0.85;
+  cursor: grab;
+}
+
+.scrollThumb:active {
+  cursor: grabbing;
+  opacity: 1;
+}
+
+.readout {
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
