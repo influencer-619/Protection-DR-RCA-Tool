@@ -1,0 +1,14 @@
+id: xfmr_unit
+label: Transformer unit differential (87T)
+description: Transformer zone unit protection; line causes demoted.
+zone: xfmr
+distance_applicable: false
+primary_elements: [87T, 87RGF]
+supporting_elements: [50, 51, 87G, 86]
+required_digitals: []
+evidence_tokens:
+  - scheme_profile_xfmr_unit
+  - scheme_xfmr_diff_present
+rca_hypotheses:
+  - TRANSFORMER_INTERNAL_FAULT
+  - CT_SATURATION

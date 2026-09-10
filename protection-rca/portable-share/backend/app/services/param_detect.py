@@ -309,3 +309,146 @@ def line_ct_vt_from_any(data: Any) -> tuple[dict[str, Any], dict[str, Any], dict
     """Convenience wrapper used by ingest/analysis."""
     det = detect_plant_parameters(data)
     return det["ct_vt"], det["line"], det["detected_keys"]
+
+
+_KV_EXPLICIT_KEYS = frozenset(
+    {
+        "nominalvoltagekv",
+        "nominalsystemvoltage",
+        "nominalsystemvoltagekv",
+        "systemvoltagekv",
+        "ratedvoltagekv",
+        "vnomkv",
+        "vnkv",
+        "unomkv",
+        "linevoltagekv",
+        "voltagelevelkv",
+        "kv",
+    }
+)
+
+_KV_TEXT_PATTERNS = (
+    re.compile(
+        r"(?i)nominal\s+system\s+voltage\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*kV"
+    ),
+    re.compile(
+        r"(?i)(?:system|rated|line|bus|nominal)\s*voltage\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*kV"
+    ),
+    re.compile(r"(?i)\b([0-9]{2,4}(?:\.[0-9]+)?)\s*kV\b"),
+)
+
+_VT_RATIO_RE = re.compile(
+    r"(?i)\b(?:vt|pt|voltage\s*transformer)?\s*ratio\s*[:=]?\s*"
+    r"([0-9]{3,7}(?:\.[0-9]+)?)\s*[/:]\s*([0-9]+(?:\.[0-9]+)?)"
+)
+_VT_RATIO_BARE = re.compile(
+    r"(?i)\b([0-9]{4,7})\s*[/:]\s*([0-9]{2,4})\b"  # e.g. 132000/110
+)
+
+
+def _sane_kv(val: Optional[float]) -> Optional[float]:
+    if val is None:
+        return None
+    try:
+        x = float(val)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(x) or x <= 0:
+        return None
+    # Accept common HV/MV range; reject secondary volts mistaken as kV
+    if 0.38 <= x <= 1200:
+        return round(x, 3) if x < 10 else (round(x, 1) if x != int(x) else float(int(x)))
+    return None
+
+
+def _kv_from_vt_primary_volts(primary_v: float) -> Optional[float]:
+    """132000 V → 132 kV; 11000 → 11 kV."""
+    if primary_v >= 1000:
+        return _sane_kv(primary_v / 1000.0)
+    # Already in kV (e.g. 132/0.11)
+    return _sane_kv(primary_v)
+
+
+def extract_nominal_voltage_kv(
+    *,
+    json_blobs: Optional[list[Any]] = None,
+    texts: Optional[list[str]] = None,
+    filenames: Optional[list[str]] = None,
+    station: Optional[str] = None,
+) -> tuple[Optional[float], Optional[str]]:
+    """
+    Derive nominal system voltage (kV) from settings / names when present.
+
+    Never invents — returns (None, None) if no explicit evidence.
+    Priority: explicit JSON keys → settings text → VT primary → filename/station.
+    """
+    # 1) Explicit JSON keys / nested plant params
+    for blob in json_blobs or []:
+        if not isinstance(blob, dict):
+            continue
+        for path, nk, val in _walk(blob):
+            if nk in _KV_EXPLICIT_KEYS or (
+                "nominal" in nk and "voltage" in nk and ("kv" in nk or nk.endswith("voltage"))
+            ):
+                f = _as_float(val)
+                if f is not None and f > 400:  # likely volts
+                    f = f / 1000.0
+                hit = _sane_kv(f)
+                if hit is not None:
+                    return hit, f"json:{path}"
+            if nk in ("vtratio", "ptratio", "voltagetransformerratio") or (
+                "vt" in nk and "ratio" in nk
+            ):
+                if isinstance(val, str):
+                    m = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*[/:]\s*([0-9]+(?:\.[0-9]+)?)", val)
+                    if m:
+                        pri = float(m.group(1))
+                        hit = _kv_from_vt_primary_volts(pri)
+                        if hit is not None:
+                            return hit, f"json_vt_ratio:{path}"
+                f = _as_float(val)
+                if f is not None:
+                    hit = _kv_from_vt_primary_volts(f)
+                    if hit is not None:
+                        return hit, f"json_vt_primary:{path}"
+
+    # 2) Settings / report text
+    for text in texts or []:
+        if not text:
+            continue
+        for pat in _KV_TEXT_PATTERNS[:2]:  # explicit nominal/system lines first
+            m = pat.search(text)
+            if m:
+                hit = _sane_kv(float(m.group(1)))
+                if hit is not None:
+                    return hit, "settings_text:nominal_voltage"
+        m = _VT_RATIO_RE.search(text) or _VT_RATIO_BARE.search(text)
+        if m:
+            hit = _kv_from_vt_primary_volts(float(m.group(1)))
+            if hit is not None:
+                return hit, "settings_text:vt_ratio"
+
+    # 3) Filename / station name (…132kV… / …132KV…)
+    for label, src in (
+        *[(n, "filename") for n in (filenames or [])],
+        *([(station, "station")] if station else []),
+    ):
+        if not label:
+            continue
+        m = re.search(r"(?i)(?:^|[^0-9])([0-9]{2,3}(?:\.[0-9]+)?)\s*k\s*v(?:[^a-z]|$)", label)
+        if m:
+            hit = _sane_kv(float(m.group(1)))
+            if hit is not None:
+                return hit, f"{src}:kv_token"
+
+    # 4) Any remaining bare "NNN kV" in concatenated texts (last resort)
+    for text in texts or []:
+        if not text:
+            continue
+        m = _KV_TEXT_PATTERNS[2].search(text)
+        if m:
+            hit = _sane_kv(float(m.group(1)))
+            if hit is not None:
+                return hit, "text:kv_token"
+
+    return None, None

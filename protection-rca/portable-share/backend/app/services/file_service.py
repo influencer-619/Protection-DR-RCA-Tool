@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -26,10 +27,22 @@ SOURCE_BY_EXT = {
     ".inf": "COMTRADE",
     ".csv": "SOE",
     ".xml": "SETTINGS",
+    ".xrio": "SETTINGS",
+    ".rio": "SETTINGS",
+    ".set": "SETTINGS",
+    ".rdb": "SETTINGS",
     ".json": "OTHER",
     ".txt": "RELAY_EVENT_REPORT",
+    ".log": "RELAY_EVENT_REPORT",
+    ".eve": "RELAY_EVENT_REPORT",
+    ".cev": "COMTRADE",  # converted to CFG/DAT on ingest
     ".pdf": "ATTACHMENT",
     ".zip": "PACKAGE",
+    ".dz5": "PACKAGE",
+    ".dex5": "PACKAGE",
+    ".d5z": "PACKAGE",
+    ".pcmi": "PACKAGE",
+    ".pcmp": "PACKAGE",
 }
 
 
@@ -56,18 +69,44 @@ def infer_source_type(filename: str, ext: str = "", override: Optional[str] = No
             "param",
             "relay_set",
             "protection_setting",
+            "set_all",
+            "xrio",
+            "pcm600",
         )
-    )
-    if settings_name or ext == ".set":
-        if ext in (".json", ".txt", ".xml", ".csv", ".set"):
+    ) or bool(re.search(r"(^|[_\-.])set\d*([_\-.]|$)", name)) or name.startswith("set_")
+    if settings_name or ext in (".set", ".rdb", ".xrio"):
+        if ext in (".json", ".txt", ".xml", ".csv", ".set", ".rdb", ".xrio", ".cfg"):
             return "SETTINGS"
-        # Rare: settings dump with .cfg suffix (not COMTRADE)
         if ext == ".cfg" and ("setting" in name or "settings" in name):
             return "SETTINGS"
 
+    # --- SOE / SER ---
+    if ext == ".csv" and any(
+        h in name
+        for h in (
+            "soe",
+            "ser",
+            "sequential",
+            "sequence_of_event",
+            "eventlog",
+            "event_log",
+            "alarm_log",
+        )
+    ):
+        return "SOE"
+
     # --- Explicit relay event report ---
-    if ext == ".txt" and any(
-        h in name for h in ("event_report", "event-report", "relay_event", "ser_report")
+    if ext in (".txt", ".log", ".eve", ".cev") and any(
+        h in name
+        for h in (
+            "event_report",
+            "event-report",
+            "relay_event",
+            "ser_report",
+            "fault_report",
+            "history",
+            "_eve",
+        )
     ):
         return "RELAY_EVENT_REPORT"
 
@@ -362,8 +401,96 @@ async def store_event_file(
         chunks.append(chunk)
     data = b"".join(chunks)
 
-    if ext != ".zip":
-        ef = await _store_bytes(
+    from app.services.vendor_formats import (
+        expand_vendor_package,
+        is_vendor_package,
+    )
+
+    # DIGSI / PCM600 / ZIP-like project packages → expand members
+    if ext in (".zip", ".dz5", ".dex5", ".d5z", ".pcmi", ".pcmp") or is_vendor_package(
+        filename, data
+    ):
+        if ext != ".zip" and not is_zip_bytes_safe(data):
+            # Fall through to single-file store with clear typing
+            ef = await _store_bytes(
+                db,
+                event,
+                filename=filename,
+                data=data,
+                content_type=upload.content_type,
+                source_type=source_type or "PACKAGE",
+                uploaded_by=uploaded_by,
+                request_id=request_id,
+            )
+            return [ef]
+
+        if ext == ".zip":
+            members, skipped = expand_zip_bytes(data)
+            member_payloads = [{"filename": n, "data": b} for n, b in members]
+            skip_notes = skipped
+        else:
+            expanded = expand_vendor_package(data, filename=filename)
+            if expanded.get("status") != "OK":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=expanded.get("reason") or "Vendor package could not be expanded",
+                )
+            member_payloads = expanded["members"]
+            skip_notes = expanded.get("skipped") or []
+
+        if not member_payloads:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Package contained no allowed files to process. "
+                    + ("; ".join(str(s) for s in skip_notes[:5]) if skip_notes else "Archive empty.")
+                ),
+            )
+
+        stored: list[EventFile] = []
+        package = await _store_bytes(
+            db,
+            event,
+            filename=filename,
+            data=data,
+            content_type=upload.content_type or "application/zip",
+            source_type=source_type or "PACKAGE",
+            uploaded_by=uploaded_by,
+            request_id=request_id,
+        )
+        stored.append(package)
+        for mem in member_payloads:
+            mem_name = mem["filename"] if isinstance(mem, dict) else mem[0]
+            mem_data = mem["data"] if isinstance(mem, dict) else mem[1]
+            # Nested CEV → also store derived CFG/DAT
+            if Path(mem_name).suffix.lower() == ".cev":
+                stored.extend(
+                    await _store_cev_and_derivatives(
+                        db,
+                        event,
+                        filename=mem_name,
+                        data=mem_data,
+                        uploaded_by=uploaded_by,
+                        request_id=request_id,
+                    )
+                )
+                continue
+            child = await _store_bytes(
+                db,
+                event,
+                filename=mem_name,
+                data=mem_data,
+                content_type=None,
+                source_type=None,
+                uploaded_by=uploaded_by,
+                request_id=request_id,
+            )
+            stored.append(child)
+        return stored
+
+    # SEL CEV → store original + derived COMTRADE CFG/DAT
+    if ext == ".cev":
+        return await _store_cev_and_derivatives(
             db,
             event,
             filename=filename,
@@ -373,53 +500,85 @@ async def store_event_file(
             uploaded_by=uploaded_by,
             request_id=request_id,
         )
-        return [ef]
 
-    members, skipped = expand_zip_bytes(data)
-    if not members:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "ZIP contained no allowed files to process. "
-                + ("; ".join(skipped[:5]) if skipped else "Archive empty.")
-            ),
-        )
-
-    stored: list[EventFile] = []
-    package = await _store_bytes(
+    ef = await _store_bytes(
         db,
         event,
         filename=filename,
         data=data,
-        content_type=upload.content_type or "application/zip",
-        source_type=source_type or "PACKAGE",
+        content_type=upload.content_type,
+        source_type=source_type,
         uploaded_by=uploaded_by,
         request_id=request_id,
-        file_metadata={
-            "extracted": True,
-            "member_count": len(members),
-            "skipped": skipped[:50],
-        },
     )
-    stored.append(package)
+    return [ef]
 
-    for member_name, member_data in members:
-        ef = await _store_bytes(
+
+def is_zip_bytes_safe(data: bytes) -> bool:
+    return len(data) >= 4 and data[:2] == b"PK"
+
+
+async def _store_cev_and_derivatives(
+    db: AsyncSession,
+    event: Event,
+    *,
+    filename: str,
+    data: bytes,
+    content_type: Optional[str] = None,
+    source_type: Optional[str] = None,
+    uploaded_by: Optional[str] = None,
+    request_id: Optional[str] = None,
+) -> list[EventFile]:
+    """Store CEV and, when convertible, derived CFG+DAT (+ optional settings)."""
+    from app.services.vendor_formats import cev_to_comtrade_files
+
+    stored: list[EventFile] = []
+    original = await _store_bytes(
+        db,
+        event,
+        filename=filename,
+        data=data,
+        content_type=content_type,
+        source_type=source_type or "COMTRADE",
+        uploaded_by=uploaded_by,
+        request_id=request_id,
+    )
+    stored.append(original)
+
+    converted = cev_to_comtrade_files(data, basename=filename)
+    if converted.get("status") == "OK" and converted.get("cfg") and converted.get("dat"):
+        cfg_ef = await _store_bytes(
             db,
             event,
-            filename=member_name,
-            data=member_data,
-            content_type=None,
-            source_type=infer_source_type(
-                member_name, Path(member_name).suffix.lower()
-            ),
+            filename=converted["cfg_name"],
+            data=converted["cfg"].encode("utf-8"),
+            content_type="text/plain",
+            source_type="COMTRADE",
             uploaded_by=uploaded_by,
             request_id=request_id,
-            file_metadata={
-                "extracted_from": filename,
-                "package_sha256": package.sha256,
-            },
         )
-        stored.append(ef)
-
+        dat_ef = await _store_bytes(
+            db,
+            event,
+            filename=converted["dat_name"],
+            data=converted["dat"].encode("utf-8"),
+            content_type="application/octet-stream",
+            source_type="COMTRADE",
+            uploaded_by=uploaded_by,
+            request_id=request_id,
+        )
+        stored.extend([cfg_ef, dat_ef])
+        settings_text = converted.get("settings_text") or ""
+        if settings_text.strip() and len(settings_text) > 40:
+            set_ef = await _store_bytes(
+                db,
+                event,
+                filename=f"{Path(filename).stem}_cev_settings.txt",
+                data=settings_text.encode("utf-8", errors="replace"),
+                content_type="text/plain",
+                source_type="SETTINGS",
+                uploaded_by=uploaded_by,
+                request_id=request_id,
+            )
+            stored.append(set_ef)
     return stored

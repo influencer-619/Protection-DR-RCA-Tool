@@ -2,7 +2,7 @@
 
 **Audience:** Protection engineers, analysts, approvers, and administrators  
 **Product:** Protection Disturbance Record (DR) / COMTRADE analysis and Root Cause Analysis (RCA) platform  
-**Document version:** 0.3.0  
+**Document version:** 0.5.0  
 **Application:** Protection RCA web application (React + FastAPI)
 
 This guide explains how to launch the application, create and analyse disturbance events, interpret results, generate reports, and complete engineer review. It reflects the **current implemented behaviour** of the platform.
@@ -11,7 +11,24 @@ This guide explains how to launch the application, create and analyse disturbanc
 
 ## Document revision — what is covered in this edition
 
-This edition documents the latest platform upgrades, including:
+This edition (**0.5.0**) documents platform upgrades since 0.4.0, including:
+
+| Area | What changed |
+|------|----------------|
+| **R–X locus** | Shows the **faulted loop only** (e.g. AG → ZAG; ABG → ZAB). Not all phase self-impedances for every fault |
+| **Trip zones on R–X** | Real **RIO / XRIO** (and scalar `21` reach) zone geometry — mho circles and polygons — when settings files provide them |
+| **Impedance table** | Electrical → Impedance lists **faulted-loop** rows only (title shows e.g. `AG loop`) |
+| **Harmonics heatmap** | Time × harmonic-order heatmap (short-time DFT) on Electrical and DR workspace, alongside harmonic bars |
+| **Id / Ir (87)** | Differential operate/restraint plot and physics when both-side / winding currents exist |
+| **87T through-fault** | `through_fault_excluded` for CONFIRMED transformer internal RCA when Id/Ir supports internal operate, or soft path when Id/Ir unavailable and phase CT-sat / inrush are not indicated |
+| **CT saturation detector** | Soft indicators use **phase currents (IA/IB/IC) only** — residual/IN high H2 during earth faults is not treated as phase CT sat |
+| **Decision badges** | **CONFIRMED** primary → `ANALYSIS_COMPLETE` unless **material** warnings (e.g. phase CT sat). Informational notes (SOE merge, unused loops) do **not** force WITH_WARNINGS. **PROBABLE** still → WITH_WARNINGS |
+| **Nominal voltage** | Auto-filled from settings text (`Nominal System Voltage`), VT ratio (e.g. `132000/110`), filename / station `…132kV…` when the event field was empty |
+| **Settings auto-approve** | Uploaded settings files are treated as **APPROVED** and active group **VERIFIED** automatically (`AUTO_APPROVE_UPLOADED_SETTINGS`, default on). Explicit DRAFT/REJECTED/PENDING packages are left alone |
+| **`.rio` upload** | Classic RIO trip-zone files accepted with settings / XRIO |
+| **Portable build** | `build-all-latest.bat` stops a running `ProtectionRCA.exe` before rebuild and fails if PyInstaller errors (avoids false “EXE OK” when Access denied) |
+
+Earlier **0.4.0** coverage (still valid):
 
 | Area | What changed |
 |------|----------------|
@@ -21,13 +38,19 @@ This edition documents the latest platform upgrades, including:
 | **Dashboard** | Clickable KPI tiles, 7/30/90-day trend, data-quality donut, Attention Required, richer Recent Events, empty-state workflow |
 | **Navigation** | Grouped sidebar: Operations · Plant · Engineering · Administration · Help |
 | **Create Event wizard** | Multi-step page at `/events/new`: Info → Upload → Detect → Validate → Analyse |
-| **Event workspace** | Pipeline status bar (COMTRADE / DATA / SETTINGS / PROTECTION / CONSISTENCY / RCA / REPORT) |
+| **Event workspace** | Tab groups **Setup · Analyse · Protect · Conclude**; pipeline lamps (COMTRADE / DATA / SETTINGS / PROTECTION / CONSISTENCY / RCA / REPORT) |
+| **Channel map** | Setup → **Channel map** — assign analog roles (Ia/Ib/Ic/In, Va/Vb/Vc, …) before trusting electrical / distance results |
+| **DR targets** | Setup → **DR targets** — map digital channels to Pickup / Trip / 52A / 52B / Reclose / Lockout (+ element) for timeline and protection |
+| **Vendor packages** | SEL `.rdb` / `.cev`, DIGSI/PCM600 packages (`.dz5` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp`), `.set` / `.xrio` / `.eve` / `.log` where extractable |
+| **Background analysis** | Analyse returns immediately; job runs in the background. Failures show the real error (hover FAILED badge / Details). Re-run after maps or settings change |
+| **Scheme library** | Scheme-aware RCA context (stepped 21, 87L+21, POTT, feeder OC/EF, transformer/bus/gen unit, BF cascade) from operated/enabled elements |
+| **Cause enrichment** | Protect → **RCA** — engineer checkboxes for lightning / vegetation / cable (etc.); physical causes stay INCONCLUSIVE until structured evidence is saved, then **re-run analysis** |
+| **Protection breadth** | Inverse-time **51 / 51N / 51P**; directional **67 / 67N / 67P**; differential **87L / 87T / 87B**; **50BF**; distance **21** |
 | **Overview** | What happened · Why · Which setting · What is uncertain · What should I verify |
 | **Waveforms** | Real sample streaming from parsed COMTRADE (cached samples, not metadata-only) |
-| **Protection physics** | Element **51** IEC/IEEE inverse-time curves; Element **21** mho/quad zone reach |
-| **RCA hypotheses** | Zone-aware ranking (e.g. 87T → transformer internal; lightning/vegetation only for line/feeder with evidence) |
+| **RCA hypotheses** | Zone/scheme-aware ranking; lightning/vegetation/cable only when field/asset evidence tokens exist |
 | **Reports** | Deterministic HTML + **PDF download** (ReportLab); JSON machine-readable companion |
-| **Upload attachments** | **`.pdf`** and **`.zip`** allowed; ZIP packages **auto-extract** and each allowed member is stored/processed |
+| **Upload attachments** | **`.pdf`** and **`.zip`** allowed; ZIP packages **auto-extract**; vendor binaries expanded when supported |
 | **Delete event** | Events list Actions → Delete; also Delete on event workspace header (ANALYST+) |
 | **Similarity** | Classical cosine historical similarity (supporting evidence only — never proof) |
 | **COMTRADE matrix** | Fixtures for IEEE 1991, BINARY, BINARY32, FLOAT32, CFF + golden expectations |
@@ -51,7 +74,7 @@ This edition documents the latest platform upgrades, including:
 10. [COMTRADE detection and validation](#10-comtrade-detection-and-validation)
 11. [Running analysis](#11-running-analysis)
 12. [Event analysis workspace (detailed)](#12-event-analysis-workspace-detailed)
-13. [Protection physics (51 and 21)](#13-protection-physics-51-and-21)
+13. [Protection physics and schemes](#13-protection-physics-and-schemes)
 14. [Understanding status badges and quality labels](#14-understanding-status-badges-and-quality-labels)
 15. [Settings and setting hierarchy](#15-settings-and-setting-hierarchy)
 16. [Assets (substations, bays, relays, breakers)](#16-assets-substations-bays-relays-breakers)
@@ -74,14 +97,15 @@ This edition documents the latest platform upgrades, including:
 
 An **engineering decision-support web application** that helps you:
 
-- Create disturbance events and upload COMTRADE / ZIP packages / PDF attachments
+- Create disturbance events and upload COMTRADE / ZIP / vendor packages / PDF attachments
 - Detect and validate COMTRADE format, revision, container, encoding
+- Map analog channels and digital DR targets (pickup/trip/52a/…)
 - Stream and inspect waveforms (raw/scaled samples)
-- Reconstruct an event timeline from analog/digital channels
-- Evaluate protection element behaviour (including curve/zone physics where inputs exist)
+- Reconstruct an event timeline from analog/digital channels (+ SOE when available)
+- Evaluate protection element behaviour and scheme context (including curve/zone physics where inputs exist)
 - Run a **Protection Consistency Check** before RCA
 - Classify faults when electrical evidence is sufficient
-- Rank RCA hypotheses with supporting / contradicting / missing evidence
+- Rank RCA hypotheses with supporting / contradicting / missing evidence (+ engineer cause enrichment)
 - Find historically similar events (supporting only)
 - Generate controlled HTML / PDF / JSON reports
 - Record engineer review (accept / modify / reject / inconclusive / field investigation)
@@ -375,18 +399,21 @@ No fake demo events are seeded unless you explicitly enable a demo mode (not def
 
 ```text
 1. Create Event          (/events/new wizard or Quick create)
-2. Upload disturbance package (CFG+DAT / CFF + related files)
+2. Upload disturbance package (CFG+DAT / CFF / ZIP / vendor package)
 3. Confirm COMTRADE detection / validation
-4. Start analysis
-5. Inspect Waveforms + Timeline
-6. Review Electrical + Protection
-7. Study Consistency (setting source!)
-8. Study RCA + Evidence (+ similar events if shown)
-9. Download Report (HTML / PDF)
-10. Complete Engineer Review
+4. Setup → Channel map + DR targets (correct if auto-infer looks wrong)
+5. Start / Re-run analysis (runs in background — watch status bar)
+6. Inspect DR workspace / Waveforms / Sequence (timeline)
+7. Review Electrical + Fault + Location + Protection
+8. Study Consistency (setting source!)
+9. Study RCA + Evidence (+ cause enrichment if field evidence exists)
+10. Download Report (HTML / PDF)
+11. Complete Engineer Review
 ```
 
 Do **not** skip Consistency when RCA looks “confident.” Consistency findings often explain why RCA must stay inconclusive.
+
+After changing **Channel map**, **DR targets**, settings, or **cause evidence**, always **Re-run analysis** so timeline, protection, consistency, and RCA refresh.
 
 ---
 
@@ -410,9 +437,20 @@ Never invent plant data.
 ### Step 2 — File upload
 
 Drag-and-drop disturbance package. Supported extensions include  
-`.cfg .dat .cff .hdr .inf .csv .txt .xml .json .pdf .zip`.
+`.cfg .dat .cff .hdr .inf .csv .txt .xml .json .pdf .zip`  
+plus vendor / settings packages:  
+`.set .rdb .xrio .rio .eve .cev .log .dz5 .dex5 .d5z .pcmi .pcmp`.
 
-**ZIP packages:** uploading a `.zip` **auto-extracts** the archive. Each allowed member (COMTRADE, settings, SOE, PDF, etc.) is stored as its own immutable event file and used for detection, validation, and analysis. The original ZIP is kept as a **PACKAGE** attachment for evidence. Nested ZIPs are expanded (limited depth). Unsupported members are skipped (recorded in metadata). Path-traversal / zip-bomb guards apply.
+**ZIP packages:** uploading a `.zip` **auto-extracts** the archive. Each allowed member (COMTRADE, settings, SOE, PDF, vendor extractables, etc.) is stored as its own immutable event file and used for detection, validation, and analysis. The original ZIP is kept as a **PACKAGE** attachment for evidence. Nested ZIPs are expanded (limited depth). Unsupported members are skipped (recorded in metadata). Path-traversal / zip-bomb guards apply.
+
+**Vendor notes (honest):**
+
+| Format | Behaviour |
+|--------|-----------|
+| SEL `.rdb` | OLE container — SET_ALL text extracted when present → settings ingest |
+| SEL `.cev` | Converted to CFG+DAT for waveform / timeline use when convertible |
+| DIGSI / PCM600 `.dz5` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp` | Treated as ZIP-like packages when they contain nested COMTRADE / settings / CEV; proprietary non-ZIP blobs stay **NOT CALCULABLE** with export guidance |
+| `.set` / `.xrio` / `.rio` / `.eve` / `.log` / SOE CSV | Parsed when structure is recognized; RIO/XRIO supply distance trip-zone geometry for R–X when present |
 
 ### Step 3 — Detection
 
@@ -454,8 +492,9 @@ On **Events** list → **Actions → Delete**, or open an event and use **Delete
 
 - Upload **CFG + DAT** together (same base name when possible)
 - For CFF, upload the `.cff`
-- Or upload a **ZIP** containing CFG/DAT/CFF (+ settings / SOE / PDF) — members are extracted automatically
+- Or upload a **ZIP** / vendor package containing CFG/DAT/CFF (+ settings / SOE / PDF)
 - Include settings exports / event reports / PDF attachments when available
+- After upload, confirm **Channel map** and **DR targets** before trusting protection timing
 - Prefer originals from relay software — do not re-save in Excel
 
 ---
@@ -488,8 +527,9 @@ The system does **not** silently interpolate missing samples or invent channels.
 
 ## 11. Running analysis
 
-1. After upload/validation, start analysis (wizard Step 5 or event workspace)
-2. Watch **Analysis progress** and the **status bar** lamps:
+1. After upload/validation (and preferably after Channel map / DR targets), start analysis from the wizard Step 5 or the event workspace (**Start analysis** / **Re-run analysis**)
+2. The API **queues** the job and returns immediately — engineering runs in the **background** so the browser does not time out
+3. Watch **Analysis progress** and the **status bar** lamps:
 
 ```text
 COMTRADE · DATA · SETTINGS · PROTECTION · CONSISTENCY · RCA · REPORT
@@ -509,9 +549,19 @@ On parse/analyse the platform:
 
 - Persists COMTRADE file/channel metadata
 - Caches waveform samples for the Waveforms tab
-- Runs consistency and RCA engines
+- Applies channel map + digital (DR target) map to electrical / timeline / protection
+- Runs consistency and RCA engines (scheme-aware where elements operate)
 - Indexes classical similarity features
 - Can generate an HTML report artefact
+
+**Recommended next step** banner on the workspace guides the engineer (e.g. fix channel map, re-run after FAILED, open DR workspace).
+
+If status is **FAILED**:
+
+- Hover the FAILED badge or open **Details** for the job `error_message`
+- Fix COMTRADE / channel map / DR targets / files as indicated
+- Click **Re-run analysis**
+- Prior results may still be viewable until the new run completes
 
 Typical local analysis for normal records targets **under ~2 minutes**.
 
@@ -520,6 +570,15 @@ Typical local analysis for normal records targets **under ~2 minutes**.
 ## 12. Event analysis workspace (detailed)
 
 Event header shows: **Event ID · Substation · Bay · Relay · Date/Time** plus status / DQ / decision badges.
+
+Tabs are grouped:
+
+| Group | Tabs |
+|-------|------|
+| **Setup** | Overview · Files · COMTRADE · Channel map · DR targets |
+| **Analyse** | DR workspace · Waveforms · Sequence · Electrical · Fault · Location |
+| **Protect** | Protection · Consistency · RCA · Evidence |
+| **Conclude** | Summary · Report · Review |
 
 ### Overview
 
@@ -531,15 +590,38 @@ Five engineering panels:
 4. **What is uncertain** — missing evidence, unverified settings, DQ, inconclusive items  
 5. **What should I verify** — deterministic recommended actions  
 
-Fault distance shows **NOT CALCULABLE** when inputs are missing (never invented).
+Plant labels (substation / bay / relay) and bay one-line context can be saved from Overview. Fault distance shows **NOT CALCULABLE** when inputs are missing (never invented).
 
 ### Files
 
-Uploaded originals, hashes, sizes, types.
+Uploaded originals, hashes, sizes, types (including extracted ZIP / vendor members).
 
 ### COMTRADE
 
 Detection, validation, channel counts, sample rates, parser version.
+
+### Channel map
+
+Assign analog channel **roles** (phase currents/voltages, neutral, etc.). Wrong roles produce wrong RMS/phasors/impedance — fix here, then **re-run analysis**.
+
+### DR targets (digital map)
+
+Map digital channels to protection roles:
+
+| Role | Typical use |
+|------|-------------|
+| **PICKUP** | Element pickup assert |
+| **TRIP** | Trip / operate assert |
+| **52A** / **52B** | Breaker auxiliary |
+| **RECLOSE** | Auto-reclose |
+| **LOCKOUT** | Lockout / 86 |
+| **UNKNOWN** | Leave unmapped |
+
+Optionally bind an **element** (21, 51, 51N, 67N, 87L, …). Rising-edge logic respects configured normal state. After save → **Re-run analysis** so Sequence / Protection / Consistency update.
+
+### DR workspace
+
+Combined disturbance-record view for day-to-day DR review: waveforms, cursors, phasors, **R–X (faulted loop)**, harmonic bars, and **harmonics heatmap**. Upload **`.rio` / `.xrio`** with settings when you want trip-zone outlines on R–X.
 
 ### Waveforms
 
@@ -552,19 +634,31 @@ Interactive viewer with **real sample arrays** (from analysis cache / on-demand 
 
 Inspect individual sample values — not smoothed-only curves.
 
-### Timeline
+### Sequence (timeline)
 
-Chronological reconstruction (inception → pickup → trip → breaker → interruption → reclose/lockout when evidence exists). Missing signals → **NOT AVAILABLE**.
+Chronological reconstruction (inception → pickup → trip → breaker → interruption → reclose/lockout when evidence exists). Digitals follow the **DR targets** map. Missing signals → **NOT AVAILABLE**. External SOE / event-report events may merge when parsers succeed.
 
 ### Electrical
 
-RMS, phasors, sequences, power, impedance, etc., each with method/quality. Missing → **NOT CALCULABLE**.
+RMS, phasors, sequences, power, impedance, harmonics, etc., each with method/quality. Missing → **NOT CALCULABLE**.
+
+**Impedance / fault resistance table** — shows only the **faulted loop** for the classified fault (e.g. AG → `Z_AG`; ABG → `Z_AB`; ABC → `Z_AB` / `Z_BC` / `Z_CA`). Other phase/loop Z values may still be computed internally but are not listed as “the” fault impedance.
+
+**R–X locus** — plotted only when distance / 21 context applies and a fault type is classified. Points are the faulted loop only. **Trip zones** appear when RIO/XRIO geometry or scalar zone reaches are available from settings (never invented).
+
+**Harmonics** — fault-window harmonic bars plus a **time × order heatmap** (short-time DFT) for phase currents when calculable.
+
+**Nominal voltage** — Overview shows kV from the event field; if empty, analysis fills it from settings text, VT ratio, or `…NNNkV…` in filename/station name when present.
+
+### Fault / Location
+
+Fault type / characteristics and distance / location views when inputs exist. Distance never invented — **NOT CALCULABLE** with reason when CT/VT/line/settings are incomplete.
 
 ### Protection
 
 Per-element table: Enabled · Pickup · Trip · Expected · Timing · Consistency · Setting source · Evidence.
 
-See also [§13 Protection physics](#13-protection-physics-51-and-21).
+See also [§13 Protection physics and schemes](#13-protection-physics-and-schemes).
 
 ### Consistency (critical)
 
@@ -581,13 +675,23 @@ Always read:
 | UNVERIFIABLE | Cannot decide with available inputs |
 | DATA_QUALITY_ISSUE | Record quality blocks the check |
 
+Uploaded settings are **auto-APPROVED** and the active group marked **VERIFIED** by default (see [§15](#15-settings-and-setting-hierarchy)). You can still confirm or re-approve manually if your site policy requires it.
+
 **Mandatory rule:** `51 Enabled = FALSE` with pickup/trip observed → **INCONSISTENT** (typically HIGH). RCA remains **INCONCLUSIVE** regarding relay malfunction until active configuration is verified.
 
 ### RCA
 
 Hypothesis board with status CONFIRMED / PROBABLE / POSSIBLE / UNLIKELY / INCONCLUSIVE, score, supporting / contradicting / missing evidence.
 
-**CONFIRMED** only when evidence requirements are met. Similarity and ML are supporting only.
+Scheme label (when detected) appears in the subtitle (e.g. stepped distance, feeder OC/EF, 87L+21).
+
+**Cause enrichment (field / asset):** use the checkboxes on the RCA page (lightning evidence, vegetation field report, cable asset confirmed, …). Physical causes stay **INCONCLUSIVE** until these structured tokens are saved. After **Save cause evidence**, **Re-run analysis**.
+
+**CONFIRMED** only when evidence requirements are met. Similarity and ML are supporting only. Zone / scheme mismatch → **UNLIKELY** for mismatched asset hypotheses.
+
+**Transformer internal (87T / 87RGF):** CONFIRMED needs differential operate evidence **and** `through_fault_excluded`. The engine asserts through-fault exclusion when Id/Ir operate/restraint supports an internal fault, or (when winding phasors are missing) when 87T operated consistently without phase CT-sat / inrush indicators. Missing Id/Ir alone used to leave the hypothesis **PROBABLE** with “Missing evidence: through fault excluded.”
+
+**Decision vs RCA:** A **CONFIRMED** primary hypothesis maps to **ANALYSIS_COMPLETE** unless **material** limitations remain (e.g. phase CT saturation POSSIBLE). Informational notes such as “Merged N external timeline events from SOE” do **not** downgrade the decision to WITH_WARNINGS. A **PROBABLE** primary still yields **ANALYSIS_COMPLETE_WITH_WARNINGS**.
 
 ### Evidence
 
@@ -595,13 +699,11 @@ Hypothesis board with status CONFIRMED / PROBABLE / POSSIBLE / UNLIKELY / INCONC
 RCA → Hypothesis → Finding → Calculation → Source → Raw data / file
 ```
 
-### Report
+### Summary / Report / Review
 
-See [§18 Reports](#18-reports-html-pdf-json).
+Summary consolidates the event story. Report: see [§18 Reports](#18-reports-html-pdf-json).
 
-### Review
-
-| Action | When to use |
+| Review action | When to use |
 |--------|-------------|
 | **ACCEPT** | Agree with automated findings |
 | **MODIFY** | Accept with documented corrections |
@@ -613,9 +715,9 @@ Automated results are retained; overrides are audited separately.
 
 ---
 
-## 13. Protection physics (51 and 21)
+## 13. Protection physics and schemes
 
-### Element 51 — time overcurrent
+### Element 51 / 51N / 51P — time overcurrent
 
 When pickup current, time dial (TMS), curve type, and measured current are available, the engine computes expected operate time using IEC/IEEE inverse curves, for example:
 
@@ -624,13 +726,38 @@ When pickup current, time dial (TMS), curve type, and measured current are avail
 
 Formula family: `t = TDS × (A / (M^p − 1) + B)` for multiple `M > 1`.
 
-If inputs are missing → timing physics status **NOT_CALCULABLE** (stated in timing metadata). Observed vs expected timing may raise inconsistency when both exist and the error exceeds configured tolerance.
+Earth-fault (**51N**) and phase (**51P**) variants use the mapped residual / phase quantities. If inputs are missing → timing physics status **NOT_CALCULABLE**.
+
+### Element 67 / 67N / 67P — directional overcurrent
+
+Directional assessments use available voltage/current phasor relationships and settings. Missing polarizing quantity → **UNVERIFIABLE** / **NOT_CALCULABLE**, never invented direction.
 
 ### Element 21 — distance
 
 When apparent impedance and zone reach settings exist, a deterministic **mho** (default) or simple **quad** reach check evaluates zone entry.
 
+**R–X display:** uses the **faulted loop** impedance (phase–ground or phase–phase delta `(V1−V2)/(I1−I2)` as applicable). Zone outlines on the plot come from uploaded **RIO / XRIO** shapes or scalar Z1/Z2/Z3 reaches — never invented.
+
 If impedance or reach is missing → **NOT_CALCULABLE** / fault distance not invented.
+
+### Differential / BF (87L, 87T, 87B, 50BF)
+
+Assessed when multi-end / winding / bus currents or BF timing evidence exist in the record or event meta. Insufficient inputs stay explicitly incomplete.
+
+**87 operate/restraint:** when both-side currents exist, Id = |I1−I2|, Ir = (|I1|+|I2|)/2; trip expected if Id > Ip + k·Ir. The Protection tab can show an **Id/Ir** characteristic plot. Soft **CT saturation** cues use phase currents only (not residual IN alone).
+
+### Scheme library (RCA context)
+
+Deterministic scheme detection from operated/enabled elements and digital roles, for example:
+
+- Stepped distance (21)  
+- Line differential + distance (87L + 21)  
+- POTT / communication-aided schemes (when channel evidence exists)  
+- Feeder overcurrent / earth-fault  
+- Transformer / bus / generator unit schemes  
+- Breaker-failure cascade  
+
+Scheme context influences RCA ranking; it does **not** invent trips or measurements.
 
 ---
 
@@ -638,7 +765,15 @@ If impedance or reach is missing → **NOT_CALCULABLE** / fault distance not inv
 
 ### Decision states
 
-ANALYSIS_COMPLETE · ANALYSIS_COMPLETE_WITH_WARNINGS · INCONCLUSIVE · DATA_INSUFFICIENT · UNSUPPORTED_FORMAT · ENGINEER_REVIEW_REQUIRED
+| State | Typical meaning |
+|-------|-----------------|
+| **ANALYSIS_COMPLETE** | Primary RCA **CONFIRMED** and no material analysis warnings |
+| **ANALYSIS_COMPLETE_WITH_WARNINGS** | Primary is **PROBABLE**, or CONFIRMED with material warnings (e.g. phase CT sat) |
+| **ENGINEER_REVIEW_REQUIRED** | Primary POSSIBLE / INCONCLUSIVE / UNLIKELY |
+| **INCONCLUSIVE** | Forced by critical setting policy or no usable primary |
+| **DATA_INSUFFICIENT** / **UNSUPPORTED_FORMAT** | Record/format blocks analysis |
+
+Informational limitations (unused loops “NOT AVAILABLE”, SOE timeline merge notes, distance NOT APPLICABLE for feeder OC schemes) are listed for transparency but do **not** by themselves keep a CONFIRMED case in WITH_WARNINGS.
 
 ### Data quality
 
@@ -681,7 +816,29 @@ Priority (highest first):
 
 The UI shows which source was used. The system **never silently picks** a group without displaying it.
 
-If active group cannot be established → **Relay Base Settings** as first-level reference and active group **NOT VERIFIED**.
+### Auto-approve uploaded settings (default)
+
+When a settings file (JSON / text / vendor extract / `.set` / `.xrio` / `.rio`, …) is loaded with the event, the platform treats it as:
+
+- **Approval:** APPROVED  
+- **Active group:** VERIFIED  
+
+unless the package explicitly marks `DRAFT` / `REJECTED` / `PENDING` / `PENDING_REVIEW`.
+
+Environment override: set `AUTO_APPROVE_UPLOADED_SETTINGS=false` to require manual Approve / Confirm active group again.
+
+After changing this policy or uploading a new settings file, **Re-run analysis** so Consistency / Protection use the updated approval flags.
+
+### Nominal system voltage from settings
+
+If Overview shows **UNKNOWN kV**, analysis still tries to fill `nominal_voltage_kv` from:
+
+1. Explicit JSON keys / asset fields  
+2. Settings text lines such as `Nominal System Voltage : 132 kV`  
+3. VT ratio primary (e.g. `132000/110` → 132 kV)  
+4. Filename or station name tokens such as `132kV`
+
+Never invents a voltage without one of these evidences.
 
 ---
 
@@ -770,14 +927,18 @@ Each entry: who / when / what / old→new where applicable.
 | `.cfg` / `.dat` | COMTRADE configuration + data |
 | `.cff` | Combined COMTRADE file |
 | `.hdr` / `.inf` | Header / information |
-| `.csv` / `.txt` | SOE / reports (when parsers exist) |
-| `.xml` / `.json` | Settings / configuration exports |
+| `.csv` / `.txt` / `.log` | SOE / SER / event reports (when parsers exist) |
+| `.xml` / `.json` / `.set` / `.xrio` / `.rio` | Settings / configuration / trip-zone exports |
+| `.rdb` | SEL settings database (SET_ALL extract when present) |
+| `.cev` | SEL compressed event — converted to CFG+DAT when convertible |
+| `.eve` | Relay event report text (parsed when recognized) |
+| `.dz5` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp` | DIGSI / PCM600-style packages (ZIP-expand when possible) |
 | `.pdf` | Supporting attachment (reports, drawings, notes) — stored, not parsed as COMTRADE |
 | `.zip` | Package archive — **auto-extracted**; allowed members processed further; ZIP kept as PACKAGE |
 
-Detection prefers **file contents**, not extension alone.
+Detection prefers **file contents**, not extension alone. Proprietary non-extractable blobs are reported honestly (**NOT CALCULABLE** / unsupported) rather than silently invented.
 
-Supported / regression-covered families (see `docs/COMTRADE_SUPPORT.md` for partial notes):
+Supported / regression-covered COMTRADE families (see `docs/COMTRADE_SUPPORT.md` for partial notes):
 
 | Variant | Notes |
 |---------|-------|
@@ -835,7 +996,19 @@ Never treat fluent wording as stronger than status badges.
 A: No analysis yet, or names not linked. Complete Files → Analysis, or fill wizard labels.
 
 **Q: Why is RCA INCONCLUSIVE?**  
-A: Consistency findings (e.g. disabled 51 operating), unverified setting group, or missing evidence for CONFIRMED.
+A: Consistency findings (e.g. disabled 51 operating), or missing evidence for CONFIRMED. Uploaded settings are auto-APPROVED by default — INCONCLUSIVE is no longer forced solely by “NOT VERIFIED” upload flags.
+
+**Q: Why does Decision say WITH_WARNINGS when RCA is CONFIRMED?**  
+A: Older builds downgraded on any limitation text. Current behaviour: CONFIRMED → ANALYSIS_COMPLETE unless **material** warnings remain. Informational notes (SOE merge, unused loops) do not force WITH_WARNINGS. Re-run analysis on older events.
+
+**Q: Why does the impedance table show only one Z row?**  
+A: By design — only the **faulted loop** for the classified fault (AG→ZAG, ABG→ZAB, …). Other loops are not listed as the event fault impedance.
+
+**Q: Why is Nominal UNKNOWN kV?**  
+A: The event field was empty and no voltage evidence was found in settings/VT/filename/station. After uploading settings that state nominal kV (or a VT ratio), **Re-run analysis**.
+
+**Q: Do I still need to Approve settings?**  
+A: Not by default — uploads are auto-APPROVED / active group VERIFIED. Set `AUTO_APPROVE_UPLOADED_SETTINGS=false` to restore manual approval.
 
 **Q: Can the tool trip a breaker or change settings?**  
 A: No. OT control is disabled.
@@ -853,7 +1026,25 @@ A: Run analysis after upload so samples are parsed and cached; check COMTRADE va
 A: Event → Report → **Download PDF**.
 
 **Q: Can I upload a ZIP of CFG/DAT?**  
-A: Yes. The ZIP is auto-extracted; COMTRADE/settings/SOE/PDF members are stored and used in detect → validate → analysis. The original ZIP remains as evidence.
+A: Yes. The ZIP is auto-extracted; COMTRADE/settings/SOE/PDF/vendor members are stored and used in detect → validate → analysis. The original ZIP remains as evidence.
+
+**Q: Can I upload SEL `.rdb` / `.cev` or DIGSI / PCM600 packages?**  
+A: Yes where extractable. `.rdb` → settings when SET_ALL is present; `.cev` → CFG+DAT when convertible; DIGSI/PCM600 packages expand nested COMTRADE/settings when ZIP-like. Opaque proprietary blobs stay unsupported — export CFG/DAT from the vendor tool if needed.
+
+**Q: Why is analysis FAILED but older results still visible?**  
+A: Background analysis failed on the latest job. Hover FAILED / open Details for the error, fix Channel map / DR targets / files, then **Re-run analysis**. Prior completed artefacts may remain until overwritten.
+
+**Q: Pipeline still says “Queued (background)” after FAILED?**  
+A: That was the last progress message before the job crashed. Use the FAILED badge / error text and re-run after fixing inputs. Restart the app if you just updated the backend.
+
+**Q: Lightning / vegetation / cable stay INCONCLUSIVE**  
+A: Open Protect → **RCA**, tick the matching **cause enrichment** evidence, save, then **Re-run analysis**. Waveforms alone do not invent physical root causes.
+
+**Q: Pickup / trip times look wrong**  
+A: Open Setup → **DR targets**, map the correct digitals (and element), save, re-run. Rising-edge logic depends on the mapped role and normal state.
+
+**Q: Electrical / distance looks wrong after auto-detect**  
+A: Open Setup → **Channel map**, correct Ia/Ib/Ic/Va… roles, save, re-run.
 
 **Q: Can I delete an event?**  
 A: Yes — Events list **Delete**, or event header **Delete event** (ANALYST+). Confirm first.
@@ -886,12 +1077,17 @@ A: **8001** = portable (built UI served with the API). **5173** = developer Vite
 | UI blank / API errors | http://127.0.0.1:8001/health |
 | Port in use | Portable UI+API: **8001**; Vite UI: **5173** |
 | Colleague cannot open LAN URL | Same Wi‑Fi/LAN; use host IP not 127.0.0.1; allow Windows Firewall private network for port **8001** |
-| Exe rebuild “Access denied” | Close running `ProtectionRCA.exe`, then run `scripts\build-launcher-exe.bat` again |
+| Exe rebuild “Access denied” / false “EXE OK” | Close all `ProtectionRCA.exe` windows (Task Manager if needed). Prefer `scripts\build-all-latest.bat` — it kills locked processes and fails the build if PyInstaller cannot write the EXE |
+| Settings still NOT VERIFIED / Decision WITH_WARNINGS on old events | **Re-run analysis** after upgrading — approval and decision gating apply on the new run |
 | Upload rejected | Extension, size limit, or role |
 | COMTRADE INVALID | Fix source export; do not force confident RCA |
-| Analysis stuck | Progress stage + API logs; re-upload CFG+DAT |
+| Analysis FAILED / “background analysis failed” | Hover FAILED for `error_message`; fix Channel map / DR targets / files; **Re-run**; restart exe after backend updates |
+| Stuck “Queued (background)” with FAILED | Latest job never advanced — re-run after fix; check API logs if it fails again immediately |
 | Waveforms empty | Analysis/parse not run or validation failed |
+| Wrong pickup/trip sequence | Setup → **DR targets** → save → re-run |
+| Wrong phasors / distance | Setup → **Channel map** → save → re-run |
 | Consistency empty | Analysis not run or no digital/setting inputs |
+| Vendor `.rdb` / `.cev` / DIGSI unused | Confirm extract succeeded on Files tab; else export CFG/DAT + settings text from vendor tool |
 | PDF download fails | Ensure `reportlab` installed in backend env |
 | Cannot review | Role below PROTECTION_ENGINEER / APPROVER |
 
@@ -940,9 +1136,11 @@ STOP      → Close launcher control window
 SHARE     → scripts\build-portable-share.bat → zip portable-share\
 LAN       → Others open http://<host-IP>:8001/ (Firewall allow)
 LOGIN     → Local account or SSO (if configured)
-NEW WORK  → Create event wizard → upload CFG/DAT/CFF (or ZIP)
-ANALYSE   → Start analysis → watch status bar + progress
-VERIFY    → Waveforms → Timeline → Consistency → RCA → Evidence
+NEW WORK  → Create event wizard → upload CFG/DAT/CFF/ZIP/vendor package
+MAP       → Setup → Channel map + DR targets → save
+ANALYSE   → Start / Re-run analysis (background) → watch status bar
+VERIFY    → Waveforms → Sequence → Consistency → RCA → Evidence
+CAUSE     → RCA cause enrichment (field evidence) → re-run
 REPORT    → Download HTML or PDF
 CLOSE-OUT → Review (ACCEPT / MODIFY / REJECT / …)
 DELETE    → Events Actions → Delete (ANALYST+)
@@ -951,4 +1149,4 @@ REMEMBER  → No invented data · No OT control · No generative AI
 
 ---
 
-*End of User Guide — Protection RCA Platform (document version 0.3.0)*
+*End of User Guide — Protection RCA Platform (document version 0.5.0)*

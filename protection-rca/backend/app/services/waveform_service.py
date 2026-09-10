@@ -146,11 +146,15 @@ def _materialize_event_files(storage: StorageService, files: list[EventFile]) ->
     """Write COMTRADE-relevant event files to a temp dir for ingest.
 
     Skips ZIP packages and non-COMTRADE attachments so the original archive
-    binary cannot confuse CFG/DAT detection.
+    binary cannot confuse CFG/DAT detection. SEL ``.cev`` files are converted
+    to CFG+DAT in the temp dir when derived files were not already uploaded.
     """
+    from app.services.vendor_formats import cev_to_comtrade_files
+
     comtrade_exts = {".cfg", ".dat", ".cff", ".hdr", ".inf"}
     tmp = Path(tempfile.mkdtemp(prefix="wf_"))
     paths: list[Path] = []
+    have_cfg_dat = False
     for ef in files:
         name = ef.original_filename or f"{ef.sha256}.bin"
         ext = Path(name).suffix.lower()
@@ -162,6 +166,34 @@ def _materialize_event_files(storage: StorageService, files: list[EventFile]) ->
         dest = tmp / Path(name).name
         dest.write_bytes(raw)
         paths.append(dest)
+        if ext in (".cfg", ".dat", ".cff"):
+            have_cfg_dat = True
+
+    # Convert CEV on the fly when no CFG/DAT/CFF already materialized
+    if not have_cfg_dat:
+        for ef in files:
+            name = ef.original_filename or ""
+            if not name.lower().endswith(".cev"):
+                continue
+            if (ef.source_type or "").upper() == "PACKAGE":
+                continue
+            raw = storage.get_bytes(ef.storage_key)
+            converted = cev_to_comtrade_files(raw, basename=name)
+            if converted.get("status") != "OK":
+                logger.warning(
+                    "CEV conversion skipped for %s: %s",
+                    name,
+                    converted.get("reason"),
+                )
+                continue
+            cfg_p = tmp / converted["cfg_name"]
+            dat_p = tmp / converted["dat_name"]
+            cfg_p.write_text(converted["cfg"], encoding="utf-8", newline="\n")
+            dat_p.write_text(converted["dat"], encoding="utf-8", newline="\n")
+            paths.extend([cfg_p, dat_p])
+            have_cfg_dat = True
+            break
+
     return paths
 
 
@@ -307,6 +339,11 @@ async def ingest_and_persist_comtrade(
         sample_key = _put_json(
             storage, samples_trim, prefix=f"waveforms/{event.id}", suffix=f".{name}.json"
         )
+        ps = getattr(ch, "ps", None) if not isinstance(ch, dict) else ch.get("ps")
+        primary = getattr(ch, "primary", None) if not isinstance(ch, dict) else ch.get("primary")
+        secondary = (
+            getattr(ch, "secondary", None) if not isinstance(ch, dict) else ch.get("secondary")
+        )
         db.add(
             ComtradeChannel(
                 comtrade_file_id=ct.id,
@@ -315,12 +352,18 @@ async def ingest_and_persist_comtrade(
                 name=str(name),
                 phase=phase,
                 units=units,
+                primary=float(primary) if primary is not None else None,
+                secondary_ratio=float(secondary) if secondary is not None else None,
+                ps=str(ps).upper()[:8] if ps else None,
                 channel_metadata={
                     "sample_storage_key": sample_key,
                     "timestamp_storage_key": ts_key,
                     "sample_count": len(samples_trim),
                     "full_sample_count": len(samples),
                     "trimmed": len(samples) > len(samples_trim),
+                    "ps": str(ps).upper() if ps else None,
+                    "primary": primary,
+                    "secondary": secondary,
                 },
             )
         )
@@ -373,16 +416,27 @@ async def load_waveform_payload(
     *,
     storage: Optional[StorageService] = None,
     max_channels: int = 32,
+    comtrade_file_id: Optional[str] = None,
 ) -> dict[str, Any]:
     storage = storage or StorageService()
-    ct = (
-        await db.execute(
-            select(ComtradeFile)
-            .where(ComtradeFile.event_id == event_id)
-            .order_by(ComtradeFile.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    if comtrade_file_id:
+        ct = (
+            await db.execute(
+                select(ComtradeFile).where(
+                    ComtradeFile.event_id == event_id,
+                    ComtradeFile.id == comtrade_file_id,
+                )
+            )
+        ).scalar_one_or_none()
+    else:
+        ct = (
+            await db.execute(
+                select(ComtradeFile)
+                .where(ComtradeFile.event_id == event_id)
+                .order_by(ComtradeFile.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
 
     if ct is None:
         # Attempt on-demand ingest
@@ -447,6 +501,13 @@ async def load_waveform_payload(
                 "channel_type": c.channel_type,
                 "phase": c.phase,
                 "units": c.units,
+                "ps": c.ps or (meta.get("ps") if isinstance(meta, dict) else None),
+                "primary": c.primary
+                if c.primary is not None
+                else (meta.get("primary") if isinstance(meta, dict) else None),
+                "secondary": c.secondary_ratio
+                if c.secondary_ratio is not None
+                else (meta.get("secondary") if isinstance(meta, dict) else None),
                 "sample_count": meta.get("sample_count") or (len(samples) if samples else None),
                 "samples": samples,
                 "timestamps_us": timestamps_us,

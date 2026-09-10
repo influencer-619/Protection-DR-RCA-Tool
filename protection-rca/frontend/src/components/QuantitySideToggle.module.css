@@ -1,0 +1,48 @@
+.wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  padding: 5px 10px;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+}
+
+.btn:last-child {
+  border-right: 0;
+}
+
+.btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.active {
+  background: var(--accent-dim, #1a4a6e);
+  color: var(--text-inverse, #f4f8fb);
+  font-weight: 600;
+}

@@ -146,16 +146,21 @@ async def run_job_by_id(job_id: str) -> None:
                 return
             await run_pipeline_stages(db, job, event)
             await db.commit()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.exception("Background analysis failed for job %s", job_id)
-            await db.rollback()
+            err = str(exc)[:2000] or "Background analysis failed"
+            try:
+                await db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 async with AsyncSessionLocal() as db2:
                     job = await get_job(db2, job_id)
-                    if job is not None:
+                    if job is not None and job.status not in ("COMPLETED",):
                         job.status = "FAILED"
                         job.stage = JobStage.FAILED.value
-                        job.error_message = "Background analysis failed — see server logs"
+                        job.error_message = err
+                        job.current_message = "Analysis failed"
                         job.finished_at = datetime.now(timezone.utc)
                         event = await event_service.get_event(db2, job.event_id)
                         if event is not None:
@@ -216,13 +221,24 @@ async def run_pipeline_stages(
         event.data_quality = event.data_quality or "ACCEPTABLE"
         await db.flush()
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Analysis failed for job %s", job.id)
+        job_id = getattr(job, "id", None)
+        logger.exception("Analysis failed for job %s", job_id)
+        err = str(exc)[:2000]
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
         job.status = "FAILED"
         job.stage = JobStage.FAILED.value
-        job.error_message = str(exc)
+        job.error_message = err
+        job.current_message = "Analysis failed"
         job.finished_at = datetime.now(timezone.utc)
         event.status = "FAILED"
-        await db.flush()
+        try:
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not persist FAILED status for job %s", job_id)
+            raise
         raise
 
 
@@ -270,25 +286,11 @@ async def _execute_stage(db: AsyncSession, event: Event, stage: JobStage) -> Non
             eng = await persist_engineering_analysis(db, event, force=True)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Engineering pipeline crashed")
-            eng = {"success": False, "error": str(exc)}
+            raise RuntimeError(f"Engineering pipeline failed: {exc}") from exc
         if not eng.get("success"):
-            logger.warning("Engineering pipeline: %s", eng.get("error"))
-            existing = await db.execute(
-                select(Measurement).where(Measurement.event_id == event.id).limit(1)
-            )
-            if existing.scalar_one_or_none() is None:
-                db.add(
-                    Measurement(
-                        event_id=event.id,
-                        quantity="Ia_rms",
-                        phase="A",
-                        value=None,
-                        unit="A",
-                        algorithm="pending_full_electrical",
-                        algorithm_version=settings.signal_algorithm_version,
-                        quality="NOT_VALIDATED",
-                    )
-                )
+            err = eng.get("error") or "Engineering pipeline returned unsuccessful"
+            logger.warning("Engineering pipeline: %s", err)
+            raise RuntimeError(err)
         return
 
     if stage == JobStage.EVENT_RECONSTRUCTION:

@@ -143,30 +143,36 @@ def normalize_ct_vt(ct_vt: Optional[dict[str, Any]]) -> dict[str, Any]:
 def _loop_impedance(
     elec: ElectricalAnalysisResult, fault_type: str
 ) -> tuple[Optional[complex], str]:
-    """Pick loop Z for the classified fault type."""
+    """Pick loop Z for the classified fault type (PP delta preferred over phase self-Z)."""
     ft = (fault_type or "").upper()
-    phase_map = {
-        "AG": "A",
-        "BG": "B",
-        "CG": "C",
-        "AB": "A",
-        "BC": "B",
-        "CA": "C",
-        "ABG": "A",
-        "BCG": "B",
-        "CAG": "C",
-        "ABC": "A",
-        "ABCG": "A",
-    }
-    phase = phase_map.get(ft, "A")
-    z = _z_from_signal(elec.impedance.get(f"phase_{phase}"))
-    if z is not None:
-        return z, f"phase_{phase}"
-    # Fallback any available phase impedance
-    for p in ("A", "B", "C"):
-        z = _z_from_signal(elec.impedance.get(f"phase_{p}"))
+    # Distance R–X / location: use the faulted loop, not a random phase V/I.
+    preferred: list[str] = []
+    if ft in ("AG",):
+        preferred = ["loop_AG", "phase_A"]
+    elif ft in ("BG",):
+        preferred = ["loop_BG", "phase_B"]
+    elif ft in ("CG",):
+        preferred = ["loop_CG", "phase_C"]
+    elif ft in ("AB", "ABG"):
+        preferred = ["loop_AB", "phase_A", "phase_B"]
+    elif ft in ("BC", "BCG"):
+        preferred = ["loop_BC", "phase_B", "phase_C"]
+    elif ft in ("CA", "CAG"):
+        preferred = ["loop_CA", "phase_C", "phase_A"]
+    elif ft in ("ABC", "ABCG"):
+        preferred = ["loop_AB", "phase_A", "phase_B", "phase_C"]
+    else:
+        preferred = ["phase_A", "phase_B", "phase_C"]
+
+    for key in preferred:
+        z = _z_from_signal(elec.impedance.get(key))
         if z is not None:
-            return z, f"phase_{p}"
+            return z, key
+    # Fallback any available impedance
+    for key, payload in (elec.impedance or {}).items():
+        z = _z_from_signal(payload)
+        if z is not None:
+            return z, str(key)
     return None, "none"
 
 
@@ -345,14 +351,89 @@ def estimate_line_impedance_from_settings(line: dict[str, Any]) -> dict[str, Any
     return out
 
 
+def locate_two_ended(
+    elec_local: ElectricalAnalysisResult,
+    elec_remote: ElectricalAnalysisResult,
+    *,
+    fault_type: str,
+    z1_per_km: Optional[complex],
+    length_km: Optional[float],
+    sync_offset_us: Optional[float] = None,
+) -> dict[str, Any]:
+    """
+    Two-ended reactance / current-weighted location (simplified AFAS form).
+
+    Uses local and remote loop currents with line Z1:
+      d ≈ Im(V_L / I_L) / Im(Z1/km)  blended with remote-end estimate.
+    Requires clock alignment note when sync_offset_us is unknown.
+    """
+    name = "Two-Ended Current-Weighted"
+    if z1_per_km is None or abs(z1_per_km) < 1e-12:
+        return _row(algorithm=name, status="NOT_CALCULABLE", notes="Line Z1 per km NOT AVAILABLE")
+    if length_km is None or float(length_km) <= 0:
+        return _row(algorithm=name, status="NOT_CALCULABLE", notes="Line length NOT AVAILABLE")
+
+    z_l, _ = _loop_impedance(elec_local, fault_type)
+    z_r, _ = _loop_impedance(elec_remote, fault_type)
+    i_l = (
+        _phasor_complex(elec_local, "IA")
+        or _phasor_complex(elec_local, "IB")
+        or _phasor_complex(elec_local, "IC")
+    )
+    i_r = (
+        _phasor_complex(elec_remote, "IA")
+        or _phasor_complex(elec_remote, "IB")
+        or _phasor_complex(elec_remote, "IC")
+    )
+    if z_l is None or z_r is None:
+        return _row(
+            algorithm=name,
+            status="NOT_CALCULABLE",
+            notes="Local and remote loop impedances required",
+        )
+    if i_l is None or i_r is None or (abs(i_l) + abs(i_r)) < 1e-9:
+        return _row(
+            algorithm=name,
+            status="NOT_CALCULABLE",
+            notes="Local and remote fault currents required",
+        )
+
+    # Distance from each end via reactance, then current-magnitude weight
+    d_l = z_l.imag / z1_per_km.imag if abs(z1_per_km.imag) > 1e-12 else abs(z_l / z1_per_km)
+    d_r = z_r.imag / z1_per_km.imag if abs(z1_per_km.imag) > 1e-12 else abs(z_r / z1_per_km)
+    # Remote-end distance is from remote terminal; convert to local-referenced
+    d_r_from_local = float(length_km) - float(d_r)
+    w_l = abs(i_l)
+    w_r = abs(i_r)
+    dist = (w_l * float(d_l) + w_r * float(d_r_from_local)) / (w_l + w_r)
+
+    notes = "d = weighted mean of local & remote reactance distances"
+    if sync_offset_us is None:
+        notes += " — clock sync offset NOT VERIFIED"
+        status = "INCONCLUSIVE" if dist >= 0 else "NOT_CALCULABLE"
+    else:
+        notes += f" — sync_offset_us={float(sync_offset_us):.1f}"
+        status = "OK" if dist >= 0 else "INCONCLUSIVE"
+
+    return _row(
+        algorithm=name,
+        status=status,
+        distance_km=float(dist),
+        distance_pct=_pct(dist, length_km),
+        notes=notes,
+    )
+
+
 def compute_fault_locations(
     elec: ElectricalAnalysisResult,
     *,
     fault_type: str,
     line_params: Optional[dict[str, Any]] = None,
     ct_vt_ratios: Optional[dict[str, Any]] = None,
+    elec_remote: Optional[ElectricalAnalysisResult] = None,
+    sync_offset_us: Optional[float] = None,
 ) -> dict[str, Any]:
-    """Run AFAS-style single-end location suite. Prefer first OK row for primary distance."""
+    """Run AFAS-style location suite. Prefer first OK row for primary distance."""
     line = normalize_line_params(line_params)
     ct_vt = normalize_ct_vt(ct_vt_ratios)
     z1 = line.get("positive_sequence_impedance_ohm_per_km")
@@ -365,11 +446,24 @@ def compute_fault_locations(
         length_f = None
 
     z_loop, loop_src = _loop_impedance(elec, fault_type)
+    z1c = z1 if isinstance(z1, complex) else None
     algorithms = [
-        locate_reactance(z_loop, z1 if isinstance(z1, complex) else None, length_f),
-        locate_takagi(elec, fault_type, z1 if isinstance(z1, complex) else None, length_f),
-        locate_apparent_z(z_loop, z1 if isinstance(z1, complex) else None, length_f),
+        locate_reactance(z_loop, z1c, length_f),
+        locate_takagi(elec, fault_type, z1c, length_f),
+        locate_apparent_z(z_loop, z1c, length_f),
     ]
+    if elec_remote is not None:
+        algorithms.insert(
+            0,
+            locate_two_ended(
+                elec,
+                elec_remote,
+                fault_type=fault_type,
+                z1_per_km=z1c,
+                length_km=length_f,
+                sync_offset_us=sync_offset_us,
+            ),
+        )
 
     preferred = next((a for a in algorithms if a["status"] == "OK"), None)
     if preferred is None:
@@ -423,4 +517,6 @@ def compute_fault_locations(
         "algorithms": algorithms,
         "line_impedance_estimate": estimate_line_impedance_from_settings(line),
         "reason": reason,
+        "two_ended": elec_remote is not None,
+        "sync_offset_us": sync_offset_us,
     }

@@ -435,3 +435,176 @@ def test_rca_line_causes_need_field_evidence():
     assert by_id["CABLE_FAULT"].status == "INCONCLUSIVE"
     assert by_id["BUS_ZONE_FAULT"].status == "UNLIKELY"
     assert by_id["TRANSFORMER_INTERNAL_FAULT"].status == "UNLIKELY"
+
+
+def test_rca_xfmr_through_fault_excluded_confirms():
+    """87T + Id/Ir above characteristic → through_fault_excluded → CONFIRMED."""
+    fault = FaultClassificationResult(
+        fault_type="ABC", status="CLASSIFIED", confidence="HIGH"
+    )
+    # Internal: I1 ≈ 10∠0, I2 ≈ 0 → high Id, moderate Ir
+    assessments = [
+        ProtectionAssessment(
+            element="87T",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            evidence_ids=["d"],
+            confidence="MEDIUM",
+            metadata={
+                "differential": {
+                    "status": "OK",
+                    "operate_a": 10.0,
+                    "restraint_a": 5.0,
+                    "threshold_a": 1.7,  # 0.2 + 0.3*5
+                    "pickup_a": 0.2,
+                    "slope": 0.3,
+                    "operate_expected": True,
+                },
+                "inrush": {"status": "UNLIKELY"},
+            },
+        )
+    ]
+    rca = HypothesisEngine().run(
+        fault=fault,
+        assessments=assessments,
+        consistency=ConsistencyResult(summary_status="CONSISTENT"),
+        electrical_flags={"current_increase": True},
+    )
+    assert rca.primary is not None
+    assert rca.primary.hypothesis_id == "TRANSFORMER_INTERNAL_FAULT"
+    assert rca.primary.status == "CONFIRMED"
+    assert "through_fault_excluded" not in rca.primary.missing_evidence
+    assert "through_fault_excluded" in (
+        rca.primary.supporting_evidence or []
+    ) or "differential_operated" in (rca.primary.supporting_evidence or [])
+
+
+def test_rca_xfmr_through_fault_not_excluded_without_idir():
+    """87T operate alone without Id/Ir — soft exclusion when no CT-sat/inrush → CONFIRMED."""
+    fault = FaultClassificationResult(
+        fault_type="ABC", status="CLASSIFIED", confidence="MEDIUM"
+    )
+    assessments = [
+        ProtectionAssessment(
+            element="87T",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            evidence_ids=["d"],
+            confidence="MEDIUM",
+            metadata={
+                "differential": {
+                    "status": "NOT_CALCULABLE",
+                    "operate_expected": None,
+                },
+                "inrush": {"status": "NOT_INDICATED"},
+            },
+        )
+    ]
+    rca = HypothesisEngine().run(
+        fault=fault,
+        assessments=assessments,
+        consistency=ConsistencyResult(summary_status="CONSISTENT"),
+        electrical_flags={
+            "current_increase": True,
+            "detectors": {"ct_saturation": {"status": "NOT_INDICATED", "suspects": []}},
+        },
+    )
+    xfmr = next(h for h in rca.hypotheses if h.hypothesis_id == "TRANSFORMER_INTERNAL_FAULT")
+    assert xfmr.status == "CONFIRMED"
+    assert "through_fault_excluded" not in xfmr.missing_evidence
+
+
+def test_rca_xfmr_through_fault_blocked_by_phase_ct_sat():
+    """Soft through-fault exclusion blocked when phase CT-sat is POSSIBLE."""
+    fault = FaultClassificationResult(
+        fault_type="ABC", status="CLASSIFIED", confidence="MEDIUM"
+    )
+    assessments = [
+        ProtectionAssessment(
+            element="87T",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            evidence_ids=["d"],
+            confidence="MEDIUM",
+            metadata={
+                "differential": {"status": "NOT_CALCULABLE"},
+                "inrush": {"status": "NOT_INDICATED"},
+            },
+        )
+    ]
+    rca = HypothesisEngine().run(
+        fault=fault,
+        assessments=assessments,
+        consistency=ConsistencyResult(summary_status="CONSISTENT"),
+        electrical_flags={
+            "current_increase": True,
+            "detectors": {
+                "ct_saturation": {
+                    "status": "POSSIBLE",
+                    "suspects": [{"channel": "IA", "role": "IA"}],
+                }
+            },
+        },
+    )
+    xfmr = next(h for h in rca.hypotheses if h.hypothesis_id == "TRANSFORMER_INTERNAL_FAULT")
+    assert xfmr.status == "PROBABLE"
+    assert "through_fault_excluded" in xfmr.missing_evidence
+
+
+def test_rca_xfmr_through_fault_high_restraint_not_excluded():
+    """Borderline Id near characteristic (through-fault / CT mismatch look) stays unconfirmed."""
+    fault = FaultClassificationResult(
+        fault_type="ABC", status="CLASSIFIED", confidence="MEDIUM"
+    )
+    assessments = [
+        ProtectionAssessment(
+            element="87T",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            evidence_ids=["d"],
+            confidence="MEDIUM",
+            metadata={
+                "differential": {
+                    "status": "OK",
+                    "operate_a": 3.1,
+                    "restraint_a": 10.0,
+                    "threshold_a": 3.2,  # just below trip — operate_expected False path
+                    "pickup_a": 0.2,
+                    "slope": 0.3,
+                    "operate_expected": False,
+                }
+            },
+        )
+    ]
+    rca = HypothesisEngine().run(
+        fault=fault,
+        assessments=assessments,
+        consistency=ConsistencyResult(summary_status="CONSISTENT"),
+        electrical_flags={"current_increase": True},
+    )
+    xfmr = next(h for h in rca.hypotheses if h.hypothesis_id == "TRANSFORMER_INTERNAL_FAULT")
+    assert "through_fault_excluded" in xfmr.missing_evidence

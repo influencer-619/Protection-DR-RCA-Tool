@@ -42,17 +42,29 @@ def _rms_val(rms_result) -> Optional[float]:
 
 
 def _features_from_electrical(elec: ElectricalAnalysisResult) -> dict[str, Any]:
+    from common.units import normalize_unit
+
     roles = {v: k for k, v in elec.channel_roles.items()}
-    ia = _rms_val(elec.rms.get(roles.get("IA", ""), None)) if roles.get("IA") else None
-    ib = _rms_val(elec.rms.get(roles.get("IB", ""), None)) if roles.get("IB") else None
-    ic = _rms_val(elec.rms.get(roles.get("IC", ""), None)) if roles.get("IC") else None
+    ia_ch = roles.get("IA", "")
+    ib_ch = roles.get("IB", "")
+    ic_ch = roles.get("IC", "")
+    ia = _rms_val(elec.rms.get(ia_ch, None)) if ia_ch else None
+    ib = _rms_val(elec.rms.get(ib_ch, None)) if ib_ch else None
+    ic = _rms_val(elec.rms.get(ic_ch, None)) if ic_ch else None
     # Prefer end-of-record phasors for faulted state if RMS used whole window —
     # also check sequence components
     seq_i = elec.sequences.get("current_sequences")
     i0 = i2 = None
+    current_unit = "A"
     if seq_i and seq_i.status == "OK" and isinstance(seq_i.value, dict):
         i0 = seq_i.value.get("zero", {}).get("magnitude")
         i2 = seq_i.value.get("negative", {}).get("magnitude")
+        current_unit = normalize_unit(getattr(seq_i, "unit", None) or "", role="I") or "A"
+    for ch in (ia_ch, ib_ch, ic_ch):
+        rms = elec.rms.get(ch) if ch else None
+        if rms is not None and getattr(rms, "unit", None):
+            current_unit = normalize_unit(rms.unit, role="I") or current_unit
+            break
 
     vals = [v for v in (ia, ib, ic) if v is not None]
     if len(vals) < 3 or any(v is None for v in (ia, ib, ic)):
@@ -87,6 +99,7 @@ def _features_from_electrical(elec: ElectricalAnalysisResult) -> dict[str, Any]:
         "I2": i2,
         "ground": ground,
         "threshold": thr,
+        "current_unit": current_unit,
     }
 
 
@@ -147,25 +160,116 @@ def _classify_from_features(feat: dict[str, Any]) -> tuple[str, str, str]:
     return ft_enum.value, ClassificationStatus.CLASSIFIED.value, "MEDIUM"
 
 
+def _line_z_usable(line_params: Optional[dict[str, Any]]) -> bool:
+    """True when verified-enough Z1/km inputs exist for optional location."""
+    if not isinstance(line_params, dict) or not line_params:
+        return False
+    z1 = line_params.get("positive_sequence_impedance_ohm_per_km")
+    if not isinstance(z1, dict):
+        z1 = line_params.get("z1_ohm_per_km")
+    if not isinstance(z1, dict):
+        return False
+    try:
+        x = float(z1.get("X") if z1.get("X") is not None else z1.get("x") or 0)
+        length = float(line_params.get("length_km") or line_params.get("length") or 0)
+    except (TypeError, ValueError):
+        return False
+    return abs(x) > 0 and length > 0
+
+
+def _settings_distance_enabled(relay_settings: Optional[dict[str, Any]]) -> bool:
+    """Detect 21 / distance present in relay settings (backup or primary)."""
+    if not isinstance(relay_settings, dict):
+        return False
+    for key, val in relay_settings.items():
+        ku = str(key).upper().replace(" ", "")
+        if ku.startswith("21") or "DISTANCE" in ku:
+            if isinstance(val, dict) and val.get("enabled") is False:
+                continue
+            return True
+    return False
+
+
 def distance_scheme_applicable(
     *,
     assessments: Optional[list[Any]] = None,
     line_params: Optional[dict[str, Any]] = None,
+    relay_settings: Optional[dict[str, Any]] = None,
 ) -> bool:
-    """True when km / Z1 location messaging is in scope (21 operated or line Z1 supplied)."""
-    from fault_analysis.location import normalize_line_params
+    """True when km / Z1 location is in scope.
 
-    line = normalize_line_params(line_params)
-    if line.get("positive_sequence_impedance_ohm_per_km") is not None:
-        return True
-    for a in assessments or []:
-        d = a.to_dict() if hasattr(a, "to_dict") else (a if isinstance(a, dict) else {})
-        el = str(d.get("element") or "").upper()
-        if not (el.startswith("21") or "DISTANCE" in el):
-            continue
+    Industry practice (e.g. SEL 87L21 / 87L21P): line differential is often
+    primary with stepped/piloted distance enabled as backup. Therefore:
+
+    - 21 operated → applicable
+    - 21 enabled (backup) with differential → applicable even if 87 tripped first
+    - 87L + usable line Z1 → applicable (line location inputs exist)
+    - Pure 87B / 87T / 87G without 21 → NOT applicable (bus/xfmr/gen zone)
+    - Pure OC/EF without 21 → NOT applicable (line Z1 alone does not unlock)
+    """
+
+    def _row(a: Any) -> dict[str, Any]:
+        if hasattr(a, "to_dict"):
+            return a.to_dict()
+        return a if isinstance(a, dict) else {}
+
+    def _operated(d: dict[str, Any]) -> bool:
         op = str(d.get("actual_operation") or "").upper()
-        if op == "OPERATED" or d.get("pickup") is True or d.get("trip") is True:
-            return True
+        return op == "OPERATED" or d.get("pickup") is True or d.get("trip") is True
+
+    distance_operated = False
+    distance_enabled = _settings_distance_enabled(relay_settings)
+    line_diff_operated = False
+    unit_diff_operated = False  # bus / transformer / generator zone
+
+    for a in assessments or []:
+        d = _row(a)
+        el = str(d.get("element") or "").upper().replace(" ", "")
+        is_dist = el.startswith("21") or "DISTANCE" in el
+        is_line_diff = el.startswith("87L") or (
+            "DIFFERENTIAL" in el and "LINE" in el
+        )
+        is_unit_diff = (
+            el.startswith("87B")
+            or el.startswith("87T")
+            or el.startswith("87G")
+            or "BUSZONE" in el
+            or ("BUS" in el and "DIFF" in el)
+            or ("TRANSFORMER" in el and "DIFF" in el)
+        )
+
+        if is_dist:
+            if d.get("enabled") is True:
+                distance_enabled = True
+            if _operated(d):
+                distance_operated = True
+            continue
+
+        if not _operated(d):
+            continue
+        if is_line_diff:
+            line_diff_operated = True
+        elif is_unit_diff:
+            unit_diff_operated = True
+        elif el.startswith("87") or "DIFFERENTIAL" in el:
+            # Ambiguous "87": with line Z1 treat as line-capable; else zone/unit
+            if _line_z_usable(line_params):
+                line_diff_operated = True
+            else:
+                unit_diff_operated = True
+
+    if distance_operated:
+        return True
+
+    # Primary 87 + backup 21 enabled (may not have operated if 87 cleared first)
+    if distance_enabled and (line_diff_operated or unit_diff_operated):
+        return True
+
+    # Line differential with line impedance — location is an engineering input
+    if line_diff_operated and _line_z_usable(line_params):
+        return True
+
+    # Pure bus/xfmr/gen differential, or OC/EF-only: no km
     return False
 
 
@@ -177,6 +281,8 @@ def classify_fault(
     relay_settings: Optional[dict[str, Any]] = None,
     assessments: Optional[list[Any]] = None,
     distance_applicable: Optional[bool] = None,
+    elec_remote: Optional[ElectricalAnalysisResult] = None,
+    sync_offset_us: Optional[float] = None,
 ) -> FaultClassificationResult:
     from fault_analysis.location import compute_fault_locations, normalize_line_params
 
@@ -186,11 +292,11 @@ def classify_fault(
     if not feat.get("available"):
         limitations.append("Three-phase current evidence NOT AVAILABLE")
 
-    # relay_settings retained for API compatibility; location uses line + electrical
-    _ = relay_settings
     if distance_applicable is None:
         distance_applicable = distance_scheme_applicable(
-            assessments=assessments, line_params=line_params
+            assessments=assessments,
+            line_params=line_params,
+            relay_settings=relay_settings,
         )
 
     feat = dict(feat)
@@ -218,6 +324,8 @@ def classify_fault(
             fault_type=ft,
             line_params=line,
             ct_vt_ratios=ct_vt_ratios,
+            elec_remote=elec_remote,
+            sync_offset_us=sync_offset_us,
         )
         if distance.get("status") in ("NOT_CALCULABLE", "INCONCLUSIVE") and distance.get("reason"):
             limitations.append(str(distance["reason"]))

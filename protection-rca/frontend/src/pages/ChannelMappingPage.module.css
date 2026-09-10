@@ -1,0 +1,50 @@
+.matrix {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.col {
+  min-height: 120px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+}
+
+.colHead {
+  padding: 6px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg-panel);
+}
+
+.colBody {
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.chip {
+  padding: 4px 6px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  font-size: 0.75rem;
+  cursor: grab;
+  color: var(--text-primary);
+}
+
+.empty {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding: 8px 4px;
+}

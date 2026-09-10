@@ -6,6 +6,7 @@ import type { DashboardStats } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
+import { getLastEvent, loadRecentEvents } from '@/utils/recentEvents';
 import styles from './DashboardPage.module.css';
 
 type TrendDays = 7 | 30 | 90;
@@ -272,6 +273,13 @@ export function DashboardPage() {
   const attention = stats?.attention ?? [];
   const recent = stats?.recent_events ?? [];
   const empty = !loading && (stats?.total_events ?? 0) === 0;
+  const lastLocal = getLastEvent();
+  const recentLocal = loadRecentEvents().slice(0, 5);
+  const inboxNeed =
+    (stats?.awaiting_review ?? 0) +
+    (stats?.awaiting_analysis ?? 0) +
+    (stats?.consistency_issues ?? 0) +
+    (stats?.high_severity_findings ?? 0);
 
   return (
     <div className={`page ${styles.dash}`}>
@@ -279,21 +287,83 @@ export function DashboardPage() {
         <div>
           <h1>Operations dashboard</h1>
           <p className="subtitle">
-            Disturbance queue · consistency · RCA · data quality
+            Today&apos;s inbox · continue last event · consistency · RCA
           </p>
         </div>
         <div className={styles.headerActions}>
+          {lastLocal && (
+            <Link
+              to={`/events/${lastLocal.id}/summary`}
+              className="btn btn-primary"
+              title={lastLocal.event_id}
+            >
+              Continue {lastLocal.event_id}
+            </Link>
+          )}
+          <Link to="/events/compare" className="btn">
+            Compare
+          </Link>
           <Link to="/events" className="btn">
             All events
           </Link>
           <Link to="/events/new" className="btn btn-primary">
             + New event
           </Link>
-          <Link to="/upload" className="btn btn-primary">
+          <Link to="/upload" className="btn">
             Upload records
           </Link>
         </div>
       </div>
+
+      {!empty && !loading && (
+        <div className={styles.inboxHero}>
+          <div>
+            <div className={styles.inboxLabel}>Work inbox</div>
+            <div className={styles.inboxLine}>
+              <strong>{inboxNeed}</strong> items need attention
+              <span className={styles.inboxMuted}>
+                {' '}
+                · {stats?.awaiting_analysis ?? 0} analyse · {stats?.awaiting_review ?? 0} review ·{' '}
+                {stats?.consistency_issues ?? 0} consistency · {stats?.high_severity_findings ?? 0}{' '}
+                high severity
+              </span>
+            </div>
+            {recentLocal.length > 0 && (
+              <div className={styles.recentRow}>
+                Recent:{' '}
+                {recentLocal.map((r) => (
+                  <Link key={r.id} to={`/events/${r.id}/summary`} className="mono">
+                    {r.event_id}
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className={styles.inboxActions}>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => openQueue('awaiting_review')}
+            >
+              Review queue
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => openQueue('consistency_issues')}
+            >
+              Consistency
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => openQueue('awaiting_analysis')}
+            >
+              Analyse
+            </button>
+          </div>
+        </div>
+      )}
 
       {error && (
         <div className="alert alert-error" role="alert">

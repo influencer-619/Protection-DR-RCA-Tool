@@ -1,0 +1,46 @@
+.wrap {
+  margin-bottom: 12px;
+}
+
+.body {
+  padding-top: 8px;
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-size: 0.82rem;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr 0.8fr;
+  gap: 6px 10px;
+}
+
+.head {
+  font-weight: 700;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cell {
+  color: var(--text-primary);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.delta {
+  color: var(--accent-bright);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.hint {
+  margin: 10px 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}

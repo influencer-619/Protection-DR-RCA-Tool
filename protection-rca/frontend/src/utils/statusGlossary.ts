@@ -36,8 +36,9 @@ export const STATUS_GLOSSARY: Record<string, string> = {
   INCONCLUSIVE: 'Evidence insufficient for a firm root cause.',
   CLASSIFIED: 'Fault type classified from electrical evidence.',
   UNKNOWN: 'Not determined from available data.',
-  ANALYSIS_COMPLETE: 'Analysis finished without blocking issues.',
-  ANALYSIS_COMPLETE_WITH_WARNINGS: 'Analysis finished with warnings to review.',
+  ANALYSIS_COMPLETE: 'Analysis finished; primary RCA is CONFIRMED without material warnings.',
+  ANALYSIS_COMPLETE_WITH_WARNINGS:
+    'Analysis finished, but review warnings (or primary RCA is only PROBABLE).',
   ENGINEER_REVIEW_REQUIRED: 'Human review required before closing.',
   DATA_INSUFFICIENT: 'Not enough verified data for a conclusion.',
   UNSUPPORTED_FORMAT: 'File format not supported or unreadable.',

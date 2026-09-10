@@ -96,6 +96,124 @@ def _assessment_operated(assessment: ProtectionAssessment) -> bool:
     )
 
 
+def _diff_dict_from_assessment(
+    assessment: ProtectionAssessment,
+    electrical_flags: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Prefer element metadata; else event multi-end / compute from winding currents."""
+    meta = assessment.metadata if isinstance(assessment.metadata, dict) else {}
+    diff = meta.get("differential")
+    if isinstance(diff, dict) and diff.get("status"):
+        return diff
+    flags = electrical_flags if isinstance(electrical_flags, dict) else {}
+    if isinstance(flags.get("diff_87"), dict):
+        return flags["diff_87"]
+    from protection.physics import _c, differential_operate_restraint
+
+    return differential_operate_restraint(
+        i_w1=_c(flags.get("i_w1")),
+        i_w2=_c(flags.get("i_w2")),
+        i_local=_c(flags.get("i_local")),
+        i_remote=_c(flags.get("i_remote")),
+        slope=float(flags.get("diff_slope") or 0.3),
+        pickup_a=float(flags.get("diff_pickup_a") or 0.2),
+    )
+
+
+def _phase_ct_sat_indicated(flags: dict[str, Any]) -> bool:
+    """True only when phase-CT saturation is indicated (ignore residual/IN-only)."""
+    if bool(flags.get("waveform_distortion")) and bool(flags.get("harmonic_evidence")):
+        return True
+    det = flags.get("detectors") if isinstance(flags.get("detectors"), dict) else {}
+    ct = det.get("ct_saturation") if isinstance(det, dict) else {}
+    if not isinstance(ct, dict) or str(ct.get("status") or "").upper() != "POSSIBLE":
+        return False
+    suspects = ct.get("suspects") if isinstance(ct.get("suspects"), list) else []
+    for s in suspects:
+        if not isinstance(s, dict):
+            continue
+        role = str(s.get("role") or "").upper().strip()
+        ch = str(s.get("channel") or "").upper().strip()
+        if role in ("IA", "IB", "IC", "I"):
+            return True
+        # Channel names like IA, IB_PRI — not IN / IN_PRI
+        base = ch.split("_")[0]
+        if base in ("IA", "IB", "IC"):
+            return True
+    return False
+
+
+def _through_fault_excluded_from_xfmr(
+    assessments: list[ProtectionAssessment],
+    electrical_flags: Optional[dict[str, Any]] = None,
+) -> bool:
+    """
+    Assert through-fault exclusion when Id/Ir supports an internal 87T/87RGF operate,
+    or (weaker) when Id/Ir is unavailable but operate is consistent without phase CT-sat / inrush.
+    """
+    flags = electrical_flags if isinstance(electrical_flags, dict) else {}
+    if flags.get("through_fault_excluded") is True:
+        return True
+
+    ct_sat_suspect = _phase_ct_sat_indicated(flags)
+
+    soft_ok = False
+    for a in assessments:
+        code = _element_code(a)
+        if code not in _FAMILY_XFMR_DIFF:
+            continue
+        if not _assessment_operated(a):
+            continue
+
+        meta = a.metadata if isinstance(a.metadata, dict) else {}
+        inrush = meta.get("inrush") if isinstance(meta.get("inrush"), dict) else {}
+        if not inrush:
+            det = flags.get("detectors") if isinstance(flags.get("detectors"), dict) else {}
+            inrush = det.get("magnetizing_inrush") if isinstance(det, dict) else {}
+        if isinstance(inrush, dict) and str(inrush.get("status") or "").upper() == "POSSIBLE":
+            continue
+
+        diff = _diff_dict_from_assessment(a, flags)
+        status = str(diff.get("status") or "").upper()
+
+        if status == "OK" and diff.get("operate_expected") is True:
+            operate = diff.get("operate_a")
+            restraint = diff.get("restraint_a")
+            threshold = diff.get("threshold_a")
+            slope = float(diff.get("slope") or 0.3)
+            try:
+                op = float(operate) if operate is not None else None
+                ir = float(restraint) if restraint is not None else None
+                thr = float(threshold) if threshold is not None else None
+            except (TypeError, ValueError):
+                continue
+            if op is None or ir is None:
+                continue
+            if thr is None:
+                pickup = float(diff.get("pickup_a") or 0.2)
+                thr = pickup + slope * ir
+            if op < thr * 1.08:
+                continue
+            id_ir = op / max(ir, 1e-9)
+            if id_ir < max(0.45, slope + 0.15):
+                continue
+            if ct_sat_suspect and id_ir < 1.0:
+                continue
+            return True
+
+        # Soft path: no winding phasors for Id/Ir — allow exclusion when operate
+        # is settings-consistent and phase CT-sat / inrush are not indicated.
+        if status in ("NOT_CALCULABLE", "NOT_AVAILABLE", ""):
+            if ct_sat_suspect:
+                continue
+            cons = str(a.consistency or "").upper()
+            expected = str(a.expected_operation or "").upper()
+            if cons == "CONSISTENT" or expected == "OPERATE" or a.trip is True:
+                soft_ok = True
+
+    return soft_ok
+
+
 def _active_protection_zones(bag: set[str]) -> frozenset[str]:
     """Infer which protection zones are active from operated-element evidence tokens."""
     zones: set[str] = set()
@@ -212,6 +330,27 @@ def _hypothesis_scheme_fit(hid: str, bag: set[str]) -> str:
             return "mismatch"
         return "pending" if zones else "open"
 
+    if hid == "COMMUNICATION_FAILURE":
+        if "scheme_pilot" in bag or "scheme_profile_pilot_pott" in bag or "scheme_id_pilot_pott" in bag:
+            if "comm_channel_evidence" in bag:
+                return "match"
+            return "pending"
+        if "line_diff_operated" in bag:
+            return "pending"
+        return "open"
+
+    if hid == "INTERTRIP_OPERATION":
+        if "intertrip_signal_observed" in bag:
+            return "match"
+        if "scheme_pilot" in bag or line_like:
+            return "pending"
+        return "open"
+
+    if hid == "SWITCHING_TRANSIENT":
+        if "switching_event_correlated" in bag:
+            return "match"
+        return "pending" if zones else "open"
+
     return "open"
 
 
@@ -310,6 +449,8 @@ class RCAResult:
     primary: Optional[HypothesisResult] = None
     limitations: list[str] = field(default_factory=list)
     forced_inconclusive: bool = False
+    enrichment: dict[str, Any] = field(default_factory=dict)
+    scheme: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -318,6 +459,8 @@ class RCAResult:
             "primary": self.primary.to_dict() if self.primary else None,
             "limitations": self.limitations,
             "forced_inconclusive": self.forced_inconclusive,
+            "enrichment": self.enrichment,
+            "scheme": self.scheme,
         }
 
 
@@ -346,6 +489,11 @@ def _title(hid: str) -> str:
         "BREAKER_FAILURE": "Breaker failure",
         "CT_SATURATION": "CT saturation",
         "VT_CVT_ABNORMALITY": "VT / CVT abnormality",
+        "LIGHTNING": "Lightning-induced fault",
+        "VEGETATION": "Vegetation / tree contact",
+        "INSULATION_FLASHOVER": "Insulation flashover",
+        "COMMUNICATION_FAILURE": "Protection communication failure",
+        "INTERTRIP_OPERATION": "Intertrip / transfer-trip operation",
         "UNKNOWN": "Cause unknown / inconclusive",
     }.get(hid, hid.replace("_", " ").title())
 
@@ -375,6 +523,9 @@ class HypothesisEngine:
         ml_supports: Optional[dict[str, float]] = None,
         similarity_available: bool = False,
         similarity_supports: Optional[dict[str, float]] = None,
+        extra_evidence: Optional[set[str] | list[str]] = None,
+        enrichment_detail: Optional[dict[str, Any]] = None,
+        scheme_detail: Optional[dict[str, Any]] = None,
     ) -> RCAResult:
         electrical_flags = dict(electrical_flags or {})
         ml_supports = ml_supports or {}
@@ -391,6 +542,10 @@ class HypothesisEngine:
                 electrical_flags.setdefault("current_increase", True)
 
         result = RCAResult(weights=dict(self.weights))
+        if enrichment_detail:
+            result.enrichment = dict(enrichment_detail)
+        if scheme_detail:
+            result.scheme = dict(scheme_detail)
         if consistency.rca_must_remain_inconclusive:
             result.forced_inconclusive = True
             result.limitations.append(
@@ -402,6 +557,8 @@ class HypothesisEngine:
         evidence_bag = self._collect_evidence(
             fault, assessments, consistency, electrical_flags
         )
+        if extra_evidence:
+            evidence_bag |= {str(t) for t in extra_evidence if t}
 
         for hyp in self.hypothesis_defs:
             hid = str(hyp.get("id", "UNKNOWN"))
@@ -616,12 +773,25 @@ class HypothesisEngine:
 
         any_trip = any(a.trip is True for a in assessments)
         any_pickup = any(a.pickup is True for a in assessments)
+        any_operated = any(
+            a.trip is True or str(a.actual_operation or "").upper() == "OPERATED"
+            for a in assessments
+        )
         if any_trip:
             bag.add("trip_observed")
         if any_pickup or any_trip:
             bag.add("protection_responded")
+        # Industry practice (e.g. NERC PRC-004 / DME review): observed operate from
+        # targets / DR / SOE is enough to evidence that protection operated.
+        # Full settings-consistency is a separate check — do not require it here.
+        if any_operated:
+            bag.add("protection_operated")
         if any(
-            a.consistency == "CONSISTENT" and a.actual_operation == "OPERATED"
+            a.consistency == "CONSISTENT"
+            and (
+                a.trip is True
+                or str(a.actual_operation or "").upper() == "OPERATED"
+            )
             for a in assessments
         ):
             bag.add("protection_operated_consistently")
@@ -644,6 +814,18 @@ class HypothesisEngine:
             bag.add("trip_command_observed")
         if electrical_flags.get("intertrip"):
             bag.add("intertrip_signal_observed")
+        if electrical_flags.get("comm_channel"):
+            bag.add("comm_channel_evidence")
+        if electrical_flags.get("switching_correlated"):
+            bag.add("switching_event_correlated")
+        if electrical_flags.get("external_event_correlated"):
+            bag.add("external_event_correlated")
+        # Scheme-library tokens passed via electrical_flags["scheme_tokens"]
+        scheme_toks = electrical_flags.get("scheme_tokens")
+        if isinstance(scheme_toks, (list, set, tuple)):
+            bag |= {str(t) for t in scheme_toks if t}
+        elif isinstance(scheme_toks, dict):
+            bag |= {str(t) for t in scheme_toks.keys() if t}
 
         if consistency.has_critical_setting_inconsistency:
             bag.add("setting_inconsistency_unverified")
@@ -654,6 +836,9 @@ class HypothesisEngine:
             bag.add("settings_partial")
 
         bag |= _scheme_tokens_from_assessments(assessments)
+
+        if _through_fault_excluded_from_xfmr(assessments, electrical_flags):
+            bag.add("through_fault_excluded")
 
         dist_info = fault.distance if isinstance(fault.distance, dict) else {}
         if dist_info.get("distance_km") is not None or dist_info.get("value_km") is not None:
@@ -686,6 +871,7 @@ class HypothesisEngine:
                 "fault_classified",
                 "fault_classified_strong",
                 "current_increase_observed",
+                "protection_operated",
                 "protection_operated_consistently",
                 "protection_responded",
                 "settings_behavior_consistent",
@@ -728,6 +914,7 @@ class HypothesisEngine:
                 "transformer_diff_operated",
                 "differential_operated",
                 "scheme_xfmr_diff",
+                "through_fault_excluded",
             ):
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
@@ -754,6 +941,19 @@ class HypothesisEngine:
                     extras.append(tok)
         if hid == "BREAKER_FAILURE":
             for tok in ("bf_logic_satisfied", "scheme_breaker_failure", "current_persists", "trip_command_observed"):
+                if tok in bag and tok not in supporting:
+                    extras.append(tok)
+        if hid == "COMMUNICATION_FAILURE":
+            for tok in (
+                "comm_channel_evidence",
+                "scheme_pilot",
+                "scheme_profile_pilot_pott",
+                "scheme_digitals_incomplete",
+            ):
+                if tok in bag and tok not in supporting:
+                    extras.append(tok)
+        if hid == "INTERTRIP_OPERATION":
+            for tok in ("intertrip_signal_observed", "scheme_pilot"):
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         if hid == "RELAY_MISOPERATION":
@@ -821,10 +1021,14 @@ class HypothesisEngine:
             score += 0.08
         if "current_increase_observed" in bag:
             score += 0.15
-        if "protection_operated_consistently" in bag:
+        if "protection_operated" in bag:
+            score += 0.15
+        elif "protection_operated_consistently" in bag:
             score += 0.15
         elif "protection_responded" in bag:
             score += 0.08
+        if "protection_operated_consistently" in bag and "protection_operated" in bag:
+            score += 0.05  # bonus when operate also matches settings
         if "settings_behavior_consistent" in bag:
             score += 0.08
         return score
@@ -918,7 +1122,10 @@ class HypothesisEngine:
 
         if hid == "TRANSFORMER_INTERNAL_FAULT":
             if "transformer_diff_operated" in bag:
-                return 0.82 if "fault_classified" in bag else 0.60
+                base = 0.82 if "fault_classified" in bag else 0.60
+                if "through_fault_excluded" in bag:
+                    base = min(base + 0.12, 0.95)
+                return base
             if "differential_operated" in bag and "bus_diff_operated" not in bag and "line_diff_operated" not in bag and "generator_diff_operated" not in bag:
                 return 0.55
             return 0.10
@@ -1117,9 +1324,11 @@ class HypothesisEngine:
                 parts.append("a location estimate is available")
             if "current_increase_observed" in bag:
                 parts.append("elevated phase/ground current observed")
+            if "protection_operated" in bag:
+                parts.append("protection trip/operate observed on DR")
             if "protection_operated_consistently" in bag:
-                parts.append("protection operated consistently with settings")
-            elif "protection_responded" in bag:
+                parts.append("operate also consistent with settings")
+            elif "protection_responded" in bag and "protection_operated" not in bag:
                 parts.append("protection pickup/trip asserted")
             statement = (
                 f"{title} is {status} based on: " + "; ".join(parts) + "."
@@ -1177,9 +1386,11 @@ class HypothesisEngine:
                 parts.append("directional element (67) operated")
             if "current_increase_observed" in bag:
                 parts.append("elevated phase/ground current observed")
+            if "protection_operated" in bag:
+                parts.append("protection trip/operate observed on DR")
             if "protection_operated_consistently" in bag:
-                parts.append("protection operated consistently with settings")
-            elif "protection_responded" in bag:
+                parts.append("operate also consistent with settings")
+            elif "protection_responded" in bag and "protection_operated" not in bag:
                 parts.append("protection pickup/trip asserted")
             statement = (
                 f"{title} is {status} based on: " + "; ".join(parts) + "."
@@ -1225,21 +1436,37 @@ class HypothesisEngine:
             }
 
         if hid == "TRANSFORMER_INTERNAL_FAULT":
+            tf_ok = "through_fault_excluded" in bag
             return {
                 "statement": (
                     f"{title} is {status}"
                     + (
-                        " based on transformer differential (87T/87RGF) operation."
+                        " based on transformer differential (87T/87RGF) operation"
+                        + (
+                            " with Id/Ir through-fault exclusion."
+                            if tf_ok
+                            else "."
+                        )
                         if "transformer_diff_operated" in bag or "differential_operated" in bag
                         else " — transformer differential evidence is incomplete."
                     )
                 ),
-                "explanation": "Requires 87T/87RGF evidence; not inferred from OC/distance alone.",
+                "explanation": (
+                    "Requires 87T/87RGF evidence; CONFIRMED needs Id/Ir through-fault exclusion. "
+                    "Not inferred from OC/distance alone."
+                ),
                 "causal_chain": supporting[:6],
-                "recommended_actions": [
-                    "Review 87T operate/restraint and through-fault exclusion",
-                    "Confirm transformer asset and winding currents",
-                ],
+                "recommended_actions": (
+                    [
+                        "Confirm transformer asset / winding inspection",
+                        "Archive Id/Ir operate–restraint evidence",
+                    ]
+                    if tf_ok
+                    else [
+                        "Supply HV/LV winding currents (or multi-end phasors) for Id/Ir",
+                        "Review 87T operate/restraint and exclude through-fault / CT sat",
+                    ]
+                ),
             }
 
         if hid == "BUS_ZONE_FAULT":
@@ -1325,25 +1552,146 @@ class HypothesisEngine:
                 ],
             }
 
-        if hid in ("CABLE_FAULT",) or (
-            hid in FAULT_SIDE_HYPOTHESES
-            and hid
-            not in (
-                "EXTERNAL_LINE_FAULT",
-                "INTERNAL_FEEDER_FAULT",
-                "TRANSFORMER_INTERNAL_FAULT",
-                "BUS_ZONE_FAULT",
-                "GENERATOR_INTERNAL_FAULT",
-                "EXTERNAL_GRID_DISTURBANCE",
-                "SWITCHING_TRANSIENT",
-            )
+        if hid == "LIGHTNING":
+            has = "lightning_evidence" in bag
+            return {
+                "statement": (
+                    f"{title} is {status}"
+                    + (
+                        " — strike / storm evidence is present for this circuit disturbance."
+                        if has
+                        else " — awaiting lightning CSV or engineer field confirmation (not inferred from waveform alone)."
+                    )
+                ),
+                "explanation": (
+                    "Physical cause for line/feeder zones only; requires structured lightning evidence."
+                ),
+                "causal_chain": supporting[:6] or (
+                    ["cause_specific_evidence_absent"] if not has else []
+                ),
+                "recommended_actions": [
+                    "Attach lightning strike correlation or mark lightning evidence on RCA",
+                    "Confirm overhead circuit exposure / storm report",
+                    "Re-run analysis after enrichment",
+                ],
+            }
+
+        if hid == "VEGETATION":
+            has = "field_report_vegetation" in bag
+            return {
+                "statement": (
+                    f"{title} is {status}"
+                    + (
+                        " — field report confirms vegetation / tree contact."
+                        if has
+                        else " — awaiting field confirmation (not inferred from COMTRADE alone)."
+                    )
+                ),
+                "explanation": "Line/feeder cause; requires field_report_vegetation token.",
+                "causal_chain": supporting[:6] or (
+                    ["cause_specific_evidence_absent"] if not has else []
+                ),
+                "recommended_actions": [
+                    "Confirm vegetation contact from patrol / LiDAR / field notes",
+                    "Mark vegetation evidence on RCA and re-run analysis",
+                ],
+            }
+
+        if hid == "INSULATION_FLASHOVER":
+            has = "insulation_evidence" in bag
+            return {
+                "statement": (
+                    f"{title} is {status}"
+                    + (
+                        " — insulation / pollution flashover evidence is recorded."
+                        if has
+                        else " — awaiting insulation inspection evidence."
+                    )
+                ),
+                "explanation": "Requires insulation_evidence; not invented from fault type alone.",
+                "causal_chain": supporting[:6],
+                "recommended_actions": [
+                    "Record insulator / bushing inspection findings",
+                    "Mark insulation evidence on RCA and re-run analysis",
+                ],
+            }
+
+        if hid == "CABLE_FAULT":
+            has = "cable_asset_confirmed" in bag
+            return {
+                "statement": (
+                    f"{title} is {status}"
+                    + (
+                        " — cable / underground asset is confirmed for this circuit."
+                        if has
+                        else " — awaiting cable asset confirmation from registry or engineer tag."
+                    )
+                ),
+                "explanation": "Requires cable_asset_confirmed (asset type CABLE or engineer tag).",
+                "causal_chain": supporting[:6],
+                "recommended_actions": [
+                    "Confirm UG cable section in asset registry",
+                    "Tag cable asset on RCA if plant data is missing",
+                ],
+            }
+
+        if hid == "COMMUNICATION_FAILURE":
+            return {
+                "statement": (
+                    f"{title} is {status}"
+                    + (
+                        " — pilot/COMM channel evidence is present."
+                        if "comm_channel_evidence" in bag
+                        else " — pilot scheme suspected but COMM digital evidence incomplete."
+                    )
+                ),
+                "explanation": "Relevant for POTT/pilot / 87L schemes; evidence-gated.",
+                "causal_chain": supporting[:6],
+                "recommended_actions": [
+                    "Verify carrier / fibre / GOOSE channel status at the event time",
+                    "Map COMM digitals on DR targets and re-run analysis",
+                ],
+            }
+
+        if hid == "INTERTRIP_OPERATION":
+            return {
+                "statement": (
+                    f"{title} is {status}"
+                    + (
+                        " — intertrip / transfer-trip digital observed."
+                        if "intertrip_signal_observed" in bag
+                        else " — awaiting intertrip digital evidence."
+                    )
+                ),
+                "explanation": "Requires intertrip_signal_observed from DR / SOE.",
+                "causal_chain": supporting[:6],
+                "recommended_actions": [
+                    "Confirm TT / intertrip channel mapping on DR targets",
+                    "Correlate remote-end trip timing",
+                ],
+            }
+
+        if hid in FAULT_SIDE_HYPOTHESES and hid not in (
+            "EXTERNAL_LINE_FAULT",
+            "INTERNAL_FEEDER_FAULT",
+            "TRANSFORMER_INTERNAL_FAULT",
+            "BUS_ZONE_FAULT",
+            "GENERATOR_INTERNAL_FAULT",
+            "LIGHTNING",
+            "VEGETATION",
+            "INSULATION_FLASHOVER",
+            "CABLE_FAULT",
+            "EXTERNAL_GRID_DISTURBANCE",
+            "SWITCHING_TRANSIENT",
         ):
             parts = []
             if "fault_classified" in bag:
                 parts.append(f"COMTRADE indicates a {fault_bit}")
+            if "protection_operated" in bag:
+                parts.append("protection trip/operate observed on DR")
             if "protection_operated_consistently" in bag:
-                parts.append("protection operated consistently with settings")
-            elif "protection_responded" in bag:
+                parts.append("operate also consistent with settings")
+            elif "protection_responded" in bag and "protection_operated" not in bag:
                 parts.append("protection pickup/trip asserted")
             statement = (
                 f"{title} is {status} based on: " + "; ".join(parts) + "."
@@ -1360,9 +1708,13 @@ class HypothesisEngine:
                     c
                     for c in (
                         f"Fault classification: {fault.status} ({ft or 'UNKNOWN'})",
-                        "Protection response observed"
-                        if "protection_responded" in bag
-                        else None,
+                        "Protection operate observed"
+                        if "protection_operated" in bag
+                        else (
+                            "Protection response observed"
+                            if "protection_responded" in bag
+                            else None
+                        ),
                         f"Consistency summary: {consistency.summary_status}",
                     )
                     if c

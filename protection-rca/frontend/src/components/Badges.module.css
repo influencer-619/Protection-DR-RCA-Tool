@@ -1,6 +1,7 @@
 .badge {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   padding: 2px 8px;
   border-radius: 2px;
   font-family: var(--font-mono);
@@ -11,6 +12,12 @@
   white-space: nowrap;
   border: 1px solid transparent;
   line-height: 1.4;
+}
+
+.shape {
+  font-size: 0.65rem;
+  opacity: 0.9;
+  line-height: 1;
 }
 
 .ok {

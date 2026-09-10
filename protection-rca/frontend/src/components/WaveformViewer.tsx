@@ -8,9 +8,39 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import type { WaveformChannelData, WaveformMarker } from '@/types';
+import { unitLabel } from '@/utils/formatElectrical';
+import { classifyChannelSide } from '@/utils/quantitySide';
 import styles from './WaveformViewer.module.css';
 
-const ANALOG_COLORS = ['#e07a3d', '#6bbf8a', '#5b9fd4', '#d4a017', '#3dbeb0', '#c47ac0'];
+/** Warm tones — secondary (A / V) */
+const SECONDARY_COLORS = ['#e07a3d', '#6bbf8a', '#5b9fd4', '#d4a017', '#3dbeb0', '#c47ac0'];
+/** Cool tones — primary (kA / kV) so Both mode is visually distinct */
+const PRIMARY_COLORS = ['#c084fc', '#22d3ee', '#60a5fa', '#f472b6', '#a3e635', '#fb923c'];
+
+function phaseColorIndex(name: string): number {
+  const n = name.toUpperCase().replace(/[\s-]/g, '_');
+  if (/(^|_)(IA|VA|IL1|UL1|I1|V1|A)(_|$)/.test(n) || n.endsWith('_A') || n === 'A') return 0;
+  if (/(^|_)(IB|VB|IL2|UL2|I2|V2|B)(_|$)/.test(n) || n.endsWith('_B') || n === 'B') return 1;
+  if (/(^|_)(IC|VC|IL3|UL3|I3|V3|C)(_|$)/.test(n) || n.endsWith('_C') || n === 'C') return 2;
+  if (/(^|_)(IN|VN|IG|IO|IR|N)(_|$)/.test(n) || n.includes('_PRI') && /N/.test(n)) return 3;
+  return -1;
+}
+
+function analogColor(ch: WaveformChannelData, fallbackIdx: number): string {
+  const side = classifyChannelSide(ch.channel.name, ch.channel.units, ch.channel.ps);
+  const palette = side === 'primary' ? PRIMARY_COLORS : SECONDARY_COLORS;
+  const pi = phaseColorIndex(ch.channel.name);
+  if (pi >= 0) return palette[pi % palette.length];
+  return palette[fallbackIdx % palette.length];
+}
+
+function sideBadge(ch: WaveformChannelData): string | null {
+  if (ch.channel.channel_type === 'DIGITAL') return null;
+  const side = classifyChannelSide(ch.channel.name, ch.channel.units, ch.channel.ps);
+  if (side === 'primary') return 'PRI';
+  if (side === 'secondary') return 'SEC';
+  return null;
+}
 
 function channelGroup(ch: WaveformChannelData): 'current' | 'voltage' | 'digital' | 'other' {
   if (ch.channel.channel_type === 'DIGITAL') return 'digital';
@@ -39,14 +69,46 @@ interface Props {
   height?: number;
   /** Stretch to fill parent (pop-out / full-screen). */
   fill?: boolean;
+  /** Controlled cursors (µs). */
+  cursorAUs?: number | null;
+  cursorBUs?: number | null;
+  onCursorsChange?: (a: number | null, b: number | null) => void;
+  onMarkerActivate?: (marker: WaveformMarker) => void;
+  /** Hide built-in bottom readout when parent shows CursorReadout. */
+  hideReadout?: boolean;
 }
 
-export function WaveformViewer({ channels, markers = [], height = 420, fill = false }: Props) {
+export function WaveformViewer({
+  channels,
+  markers = [],
+  height = 420,
+  fill = false,
+  cursorAUs,
+  cursorBUs,
+  onCursorsChange,
+  onMarkerActivate,
+  hideReadout = false,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [viewStart, setViewStart] = useState(0);
   const [viewEnd, setViewEnd] = useState(1);
-  const [cursorT, setCursorT] = useState<number | null>(null);
+  const [cursorAInner, setCursorAInner] = useState<number | null>(null);
+  const [cursorBInner, setCursorBInner] = useState<number | null>(null);
+  const cursorA = cursorAUs !== undefined ? cursorAUs : cursorAInner;
+  const cursorB = cursorBUs !== undefined ? cursorBUs : cursorBInner;
+  const setCursorA = (t: number | null) => {
+    if (cursorAUs === undefined) setCursorAInner(t);
+    const b = cursorBUs !== undefined ? cursorBUs : cursorBInner;
+    onCursorsChange?.(t, b);
+  };
+  const setCursorB = (t: number | null) => {
+    if (cursorBUs === undefined) setCursorBInner(t);
+    const a = cursorAUs !== undefined ? cursorAUs : cursorAInner;
+    onCursorsChange?.(a, t);
+  };
+  const [activeCursor, setActiveCursor] = useState<'A' | 'B'>('A');
+  const [showRms, setShowRms] = useState(false);
   const [showAnalog, setShowAnalog] = useState(true);
   const [showDigital, setShowDigital] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -197,7 +259,7 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
       const ly = y0 + 13;
       chans.forEach((ch, idx) => {
         const name = displayName(ch);
-        const color = ANALOG_COLORS[idx % ANALOG_COLORS.length];
+        const color = analogColor(ch, idx);
         const tw = ctx.measureText(name).width;
         if (lx + tw + 14 > padL + plotW - 4) {
           return; // skip overflow rather than overlap
@@ -231,7 +293,8 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
         const half = Math.max((ymax - ymin) / 2, 1e-6) * 1.1;
         const yOf = (v: number) => waveTop + waveH / 2 - ((v - mid) / half) * (waveH / 2) * 0.85;
 
-        ctx.strokeStyle = ANALOG_COLORS[idx % ANALOG_COLORS.length];
+        const stroke = analogColor(ch, idx);
+        ctx.strokeStyle = stroke;
         ctx.lineWidth = 1.25;
         ctx.beginPath();
         let started = false;
@@ -248,6 +311,35 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
           }
         }
         ctx.stroke();
+
+        // Optional 1-cycle RMS envelope (approx, sliding window ~1/50 of span samples)
+        if (showRms && samples.length > 8) {
+          const winN = Math.max(4, Math.floor(samples.length / 40));
+          ctx.strokeStyle = stroke;
+          ctx.globalAlpha = 0.45;
+          ctx.setLineDash([3, 3]);
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          let startedR = false;
+          for (let i = winN; i < samples.length; i++) {
+            const t = Number(times[i]);
+            if (t < winStart - winSpan * 0.01 || t > winEnd + winSpan * 0.01) continue;
+            let acc = 0;
+            for (let j = i - winN; j <= i; j++) acc += Number(samples[j]) ** 2;
+            const rms = Math.sqrt(acc / (winN + 1));
+            const x = xOf(t);
+            const y = yOf(rms);
+            if (!startedR) {
+              ctx.moveTo(x, y);
+              startedR = true;
+            } else {
+              ctx.lineTo(x, y);
+            }
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 1;
+        }
       });
     };
 
@@ -389,23 +481,26 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
       usedLabelBoxes.push({ x: labelX - 2, y: labelY, w: tw });
     });
 
-    // cursor
-    if (cursorT != null && cursorT >= winStart && cursorT <= winEnd) {
-      const x = xOf(cursorT);
-      ctx.strokeStyle = '#e8c547';
+    // cursors A / B
+    const drawCursor = (t: number | null, color: string, tag: string) => {
+      if (t == null || t < winStart || t > winEnd) return;
+      const x = xOf(t);
+      ctx.strokeStyle = color;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x, padT);
       ctx.lineTo(x, padT + plotH);
       ctx.stroke();
-      ctx.fillStyle = '#e8c547';
+      ctx.fillStyle = color;
       ctx.font = '10px Consolas, Courier New, monospace';
-      const ct = `${((cursorT - tMin) / 1000).toFixed(2)} ms`;
+      const ct = `${tag} ${((t - tMin) / 1000).toFixed(2)} ms`;
       const tw = ctx.measureText(ct).width;
       let cx = x + 4;
       if (cx + tw > padL + plotW - 4) cx = x - tw - 4;
-      ctx.fillText(ct, cx, padT + 12);
-    }
+      ctx.fillText(ct, cx, padT + (tag === 'A' ? 12 : 24));
+    };
+    drawCursor(cursorA, '#e8c547', 'A');
+    drawCursor(cursorB, '#7ec8e3', 'B');
 
     // time axis
     ctx.fillStyle = '#7a8a9c';
@@ -416,7 +511,7 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
       ctx.fillText(`${((t - tMin) / 1000).toFixed(0)}`, x - 8, padT + plotH + 16);
     }
     ctx.fillText('ms', w - 28, h - 8);
-  }, [visible, winStart, winEnd, markers, cursorT, tMin, canvasHeight]);
+  }, [visible, winStart, winEnd, markers, cursorA, cursorB, tMin, canvasHeight, showRms]);
 
   useEffect(() => {
     draw();
@@ -456,6 +551,21 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
     if (e.button === 1 || e.shiftKey) {
       dragRef.current = { x: e.clientX, start: viewStart, end: viewEnd };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
+    // Click near a marker → snap active cursor
+    if (markers.length && canvasRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const padL = 118;
+      const padR = 12;
+      const plotW = rect.width - padL - padR;
+      const rel = (e.clientX - rect.left - padL) / plotW;
+      const t = winStart + Math.max(0, Math.min(1, rel)) * (winEnd - winStart);
+      const hit = markers.find((m) => Math.abs(m.t_us - t) < (winEnd - winStart) * 0.012);
+      if (hit) {
+        snapCursorToMarker(hit);
+        return;
+      }
     }
   };
 
@@ -468,7 +578,8 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
     const plotW = rect.width - padL - padR;
     const rel = (e.clientX - rect.left - padL) / plotW;
     const t = winStart + Math.max(0, Math.min(1, rel)) * (winEnd - winStart);
-    setCursorT(t);
+    if (activeCursor === 'A') setCursorA(t);
+    else setCursorB(t);
 
     if (dragRef.current) {
       const dx = e.clientX - dragRef.current.x;
@@ -488,6 +599,24 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
   const resetZoom = () => {
     setViewStart(0);
     setViewEnd(1);
+  };
+
+  const zoomToCursors = () => {
+    if (cursorA == null || cursorB == null) return;
+    const lo = Math.min(cursorA, cursorB);
+    const hi = Math.max(cursorA, cursorB);
+    const pad = Math.max((hi - lo) * 0.08, span * 0.002);
+    const a = Math.max(tMin, lo - pad);
+    const b = Math.min(tMax, hi + pad);
+    const s = tMax - tMin || 1;
+    setViewStart((a - tMin) / s);
+    setViewEnd((b - tMin) / s);
+  };
+
+  const snapCursorToMarker = (m: WaveformMarker) => {
+    if (activeCursor === 'A') setCursorA(m.t_us);
+    else setCursorB(m.t_us);
+    onMarkerActivate?.(m);
   };
 
   const zoomed = viewEnd - viewStart < 0.999;
@@ -543,9 +672,85 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
   };
 
   const zoomPct = Math.round((1 - (viewSpan - 0.002) / (1 - 0.002)) * 100);
+  const deltaUs =
+    cursorA != null && cursorB != null ? Math.abs(cursorB - cursorA) : null;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const stepFrac = e.shiftKey ? 0.02 : 0.005;
+      const spanWin = winEnd - winStart || 1;
+      if (e.key === 'a' || e.key === 'A') {
+        setActiveCursor('A');
+        e.preventDefault();
+      } else if (e.key === 'b' || e.key === 'B') {
+        setActiveCursor('B');
+        e.preventDefault();
+      } else if (e.key === 'z' || e.key === 'Z') {
+        zoomToCursors();
+        e.preventDefault();
+      } else if (e.key === 'r' || e.key === 'R') {
+        resetZoom();
+        e.preventDefault();
+      } else if (e.key === 'm' || e.key === 'M') {
+        if (!markers.length) return;
+        let best = markers[0];
+        let bestD = Infinity;
+        const ref = activeCursor === 'A' ? cursorA : cursorB;
+        for (const m of markers) {
+          const d = ref == null ? 0 : Math.abs(m.t_us - ref);
+          if (d < bestD) {
+            bestD = d;
+            best = m;
+          }
+        }
+        if (activeCursor === 'A') setCursorA(best.t_us);
+        else setCursorB(best.t_us);
+        onMarkerActivate?.(best);
+        e.preventDefault();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const dir = e.key === 'ArrowLeft' ? -1 : 1;
+        const cur = activeCursor === 'A' ? cursorA : cursorB;
+        const base = cur ?? (winStart + winEnd) / 2;
+        const next = Math.max(tMin, Math.min(tMax, base + dir * stepFrac * spanWin));
+        if (activeCursor === 'A') setCursorA(next);
+        else setCursorB(next);
+        e.preventDefault();
+      } else if (e.key === '[' || e.key === ']') {
+        const dir = e.key === '[' ? -1 : 1;
+        panTo(viewStart + dir * stepFrac);
+        e.preventDefault();
+      } else if (e.key === '1' || e.key === '2' || e.key === '3') {
+        const n = Number(e.key);
+        const analogs = channels.filter((c) => c.channel.channel_type === 'ANALOG');
+        if (analogs[n - 1]) {
+          setSelected(new Set([analogs[n - 1].channel.id]));
+          e.preventDefault();
+        }
+      } else if (e.key === '0') {
+        setSelected(new Set(channels.map((c) => c.channel.id)));
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    activeCursor,
+    cursorA,
+    cursorB,
+    markers,
+    winStart,
+    winEnd,
+    viewStart,
+    tMin,
+    tMax,
+    channels,
+    onMarkerActivate,
+  ]);
 
   return (
-    <div className={`${styles.viewer}${fill ? ` ${styles.fill}` : ''}`}>
+    <div className={`${styles.viewer}${fill ? ` ${styles.fill}` : ''}`} tabIndex={0}>
       <div className={styles.toolbar}>
         <div className={styles.toggles}>
           <label>
@@ -556,9 +761,24 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
             <input type="checkbox" checked={showDigital} onChange={(e) => setShowDigital(e.target.checked)} />
             Digital
           </label>
+          <label>
+            <input type="checkbox" checked={showRms} onChange={(e) => setShowRms(e.target.checked)} />
+            RMS overlay
+          </label>
+          <label>
+            Cursor{' '}
+            <select
+              value={activeCursor}
+              onChange={(e) => setActiveCursor(e.target.value as 'A' | 'B')}
+              style={{ marginLeft: 4 }}
+            >
+              <option value="A">A</option>
+              <option value="B">B</option>
+            </select>
+          </label>
         </div>
         <div className={styles.hint}>
-          Scroll = zoom · Shift+drag = pan · Use sliders below when zoomed · Click plot = cursor
+          A/B cursor · ←/→ nudge · Z zoom A–B · M snap marker · [ ] pan · 1–3 solo · 0 all
         </div>
         <label className={styles.zoomLabel}>
           Zoom
@@ -573,6 +793,9 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
             title="Zoom level"
           />
         </label>
+        <button type="button" className="btn btn-sm" onClick={zoomToCursors} disabled={cursorA == null || cursorB == null}>
+          Zoom to A–B
+        </button>
         <button type="button" className="btn btn-sm" onClick={resetZoom}>
           Reset zoom
         </button>
@@ -580,19 +803,45 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
       <div className={styles.body} ref={bodyRef}>
         <aside className={styles.channels}>
           <div className={styles.chTitle}>Channels</div>
-          {channels.map((c) => (
-            <label key={c.channel.id} className={styles.chItem}>
-              <input
-                type="checkbox"
-                checked={selected.has(c.channel.id)}
-                onChange={() => toggleChannel(c.channel.id)}
-              />
-              <span className="mono">
-                {c.channel.name}
-                <span className={styles.chType}>{c.channel.channel_type[0]}</span>
-              </span>
-            </label>
-          ))}
+          <div className={styles.colorKey}>
+            <span>
+              <i className={styles.keySec} /> Secondary
+            </span>
+            <span>
+              <i className={styles.keyPri} /> Primary
+            </span>
+          </div>
+          {channels.map((c, idx) => {
+            const badge = sideBadge(c);
+            const color =
+              c.channel.channel_type === 'ANALOG' ? analogColor(c, idx) : 'var(--text-muted)';
+            return (
+              <label key={c.channel.id} className={styles.chItem}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(c.channel.id)}
+                  onChange={() => toggleChannel(c.channel.id)}
+                />
+                <span className={styles.swatch} style={{ background: color }} aria-hidden />
+                <span className="mono">
+                  {c.channel.name}
+                  {(() => {
+                    const u = unitLabel(c.channel.units, c.channel.name);
+                    return u !== '—' ? <span className={styles.chType}> {u}</span> : null;
+                  })()}
+                  {badge && (
+                    <span
+                      className={badge === 'PRI' ? styles.badgePri : styles.badgeSec}
+                      title={badge === 'PRI' ? 'Primary (kA/kV)' : 'Secondary (A/V)'}
+                    >
+                      {badge}
+                    </span>
+                  )}
+                  <span className={styles.chType}>{c.channel.channel_type[0]}</span>
+                </span>
+              </label>
+            );
+          })}
         </aside>
         <div className={styles.plotCol}>
           <canvas
@@ -626,9 +875,28 @@ export function WaveformViewer({ channels, markers = [], height = 420, fill = fa
           )}
         </div>
       </div>
-      {cursorT != null && (
+      {!hideReadout && (cursorA != null || cursorB != null) && (
         <div className={styles.readout}>
-          Cursor: <span className="mono">{(cursorT / 1000).toFixed(3)} ms</span>
+          {cursorA != null && (
+            <>
+              A: <span className="mono">{(cursorA / 1000).toFixed(3)} ms</span>
+            </>
+          )}
+          {cursorA != null && cursorB != null ? ' · ' : null}
+          {cursorB != null && (
+            <>
+              B: <span className="mono">{(cursorB / 1000).toFixed(3)} ms</span>
+            </>
+          )}
+          {deltaUs != null && (
+            <>
+              {' · '}
+              Δt: <span className="mono">{(deltaUs / 1000).toFixed(3)} ms</span>
+              {' ('}
+              <span className="mono">{deltaUs.toFixed(0)} µs</span>
+              {')'}
+            </>
+          )}
           {' · '}
           Window:{' '}
           <span className="mono">

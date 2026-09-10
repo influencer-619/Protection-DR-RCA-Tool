@@ -1,0 +1,14 @@
+id: gen_unit
+label: Generator differential (87G)
+description: Generator / unit zone differential.
+zone: gen
+distance_applicable: false
+primary_elements: [87G]
+supporting_elements: [32R, 40, 46, 86]
+required_digitals: []
+evidence_tokens:
+  - scheme_profile_gen_unit
+  - scheme_gen_diff_present
+rca_hypotheses:
+  - GENERATOR_INTERNAL_FAULT
+  - CT_SATURATION

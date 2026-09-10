@@ -25,7 +25,7 @@ export function FaultLocationPage() {
       .getFaultCharacteristics(id)
       .then((r) => {
         setMeta(r);
-        setRows(r.location_algorithms ?? []);
+        setRows(r.distance_applicable === true ? (r.location_algorithms ?? []) : []);
       })
       .catch(() => {
         setMeta(null);
@@ -46,6 +46,32 @@ export function FaultLocationPage() {
     );
   }
 
+  const applicable = meta.distance_applicable === true;
+
+  if (!applicable) {
+    return (
+      <div className="stack-md">
+        <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
+          <div>
+            <h1 style={{ fontSize: '1.1rem' }}>Location (optional)</h1>
+            <p className="subtitle">Not used for this protection scheme</p>
+          </div>
+          <Link className="btn btn-sm" to={`/events/${id}/fault-characteristics`}>
+            Fault characteristics
+          </Link>
+        </div>
+        <EmptyState
+          title="Fault distance not applicable"
+          description="This event is not a distance (21) case — e.g. differential (87), overcurrent, or earth fault. No km estimate is shown. Continue with Protection → Consistency → RCA."
+          actions={[
+            { label: 'Fault characteristics', to: `/events/${id}/fault-characteristics`, primary: true },
+            { label: 'Protection', to: `/events/${id}/protection` },
+          ]}
+        />
+      </div>
+    );
+  }
+
   const hasRows = rows.length > 0 || meta.distance_km != null;
 
   return (
@@ -54,7 +80,7 @@ export function FaultLocationPage() {
         <div>
           <h1 style={{ fontSize: '1.1rem' }}>Location (optional)</h1>
           <p className="subtitle">
-            Single-ended estimates when line data exists — not required for every relay scheme
+            Single-ended estimates when line data exists — distance (21) scheme only
           </p>
         </div>
         <Link className="btn btn-sm" to={`/events/${id}/fault-characteristics`}>
@@ -64,9 +90,8 @@ export function FaultLocationPage() {
 
       {!hasRows && (
         <div className="alert alert-info">
-          No location estimate for this event. That is normal when the case is not a line/distance
-          disturbance or line parameters were not provided. Continue with Protection → Consistency →
-          RCA.
+          Distance scheme applies but no km was calculable (need validated line Z1 / CT-VT). Continue
+          with Protection → Consistency → RCA.
         </div>
       )}
 
@@ -87,8 +112,8 @@ export function FaultLocationPage() {
         <div className="panel-body" style={{ padding: 0 }}>
           {rows.length === 0 ? (
             <div className="empty-state" style={{ padding: 24 }}>
-              No km estimate stored — expected when line parameters / distance context are absent.
-              Re-run analysis only if you need an optional location for a line/distance case.
+              No km estimate stored — expected when line parameters are missing. Re-run analysis after
+              adding line Z1 if a location estimate is required.
             </div>
           ) : (
             <table className="data-table">
@@ -106,7 +131,9 @@ export function FaultLocationPage() {
                 {rows.map((r) => (
                   <tr key={r.algorithm}>
                     <td>{r.algorithm}</td>
-                    <td className="mono">{fmt(r.distance_km)}</td>
+                    <td className="mono">
+                      {r.distance_km != null ? `${fmt(r.distance_km)} ${r.unit || 'km'}` : '—'}
+                    </td>
                     <td className="mono">
                       {r.distance_pct != null ? `${fmt(r.distance_pct, 1)}%` : '—'}
                     </td>

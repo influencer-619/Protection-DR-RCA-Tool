@@ -53,25 +53,24 @@ def _conf_label(v: Any) -> str:
 
 def _format_fault_distance(fault: dict[str, Any]) -> str | None:
     """Return a location string when calculable; None when not applicable / not attempted."""
+    evidence = fault.get("evidence") if isinstance(fault.get("evidence"), dict) else {}
+    if evidence.get("distance_applicable") is False:
+        return None
     dist = fault.get("distance")
     if isinstance(dist, dict):
-        if dist.get("value_km") is not None:
+        if str(dist.get("status") or "").upper() in ("NOT_APPLICABLE", "N/A", "NA"):
+            return None
+        if dist.get("value_km") is not None and evidence.get("distance_applicable") is not False:
             unit = dist.get("unit") or "km"
             method = dist.get("method") or ""
             suffix = f" ({method})" if method else ""
             return f"{dist['value_km']} {unit}{suffix}"
-        # Explicit attempt failed → NOT CALCULABLE; silent / N/A → omit from report
         status = str(dist.get("status") or "").upper()
-        if status in ("NOT_APPLICABLE", "N/A", "NA"):
-            return None
         if status in ("NOT_CALCULABLE", "INCONCLUSIVE") or dist.get("reason"):
-            reason = dist.get("reason") or "insufficient validated inputs"
-            return f"FAULT DISTANCE: NOT CALCULABLE — {reason}"
+            if evidence.get("distance_applicable") is True:
+                reason = dist.get("reason") or "insufficient validated inputs"
+                return f"FAULT DISTANCE: NOT CALCULABLE — {reason}"
         return None
-    if fault.get("distance_km") is not None:
-        return f"{fault['distance_km']} km"
-    if isinstance(dist, (int, float)):
-        return f"{dist} km"
     return None
 
 
@@ -210,17 +209,12 @@ def _rebuild_analysis_from_db(
         dist_detail = feat.get("distance_detail") if isinstance(feat.get("distance_detail"), dict) else {}
         distance_applicable = feat.get("distance_applicable")
         if distance_applicable is None:
-            distance_applicable = str(dist_detail.get("status") or "").upper() not in (
-                "NOT_APPLICABLE",
-                "N/A",
-                "NA",
-            ) and bool(
-                primary_fault.distance_km is not None
-                or primary_fault.location_method
-                or (dist_detail.get("algorithms") and dist_detail.get("status") != "NOT_APPLICABLE")
-            )
+            # Legacy rows without the flag: never unlock km from stored distance alone
+            distance_applicable = False
         else:
             distance_applicable = bool(distance_applicable)
+        if str(dist_detail.get("status") or "").upper() == "NOT_APPLICABLE":
+            distance_applicable = False
         location_attempted = bool(
             distance_applicable
             and (
@@ -231,10 +225,10 @@ def _rebuild_analysis_from_db(
                 in ("OK", "NOT_CALCULABLE", "INCONCLUSIVE")
             )
         )
-        if primary_fault.distance_km is not None:
-            dist_status = "OK"
-        elif not distance_applicable:
+        if not distance_applicable:
             dist_status = "NOT_APPLICABLE"
+        elif primary_fault.distance_km is not None:
+            dist_status = "OK"
         elif location_attempted:
             dist_status = str(dist_detail.get("status") or "NOT_CALCULABLE")
         else:
@@ -458,7 +452,7 @@ def _rebuild_analysis_from_db(
     # Drop legacy Z1 / FAULT DISTANCE noise when distance is out of scope
     if primary_fault is not None:
         feat = primary_fault.features if isinstance(primary_fault.features, dict) else {}
-        dist_ok = bool(feat.get("distance_applicable")) or primary_fault.distance_km is not None
+        dist_ok = feat.get("distance_applicable") is True
         if not dist_ok:
             limitations = [
                 lim

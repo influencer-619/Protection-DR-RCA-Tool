@@ -85,6 +85,160 @@ def test_distance_not_applicable_without_distance_scheme():
     assert not any("FAULT DISTANCE" in x or "Z1" in x for x in r.limitations)
 
 
+def test_distance_not_applicable_for_87_even_with_line_z():
+    """Bus/transformer differential must not show km even if line Z1 exists."""
+    from protection.models import ProtectionAssessment
+
+    elec = _elec_from_currents(1000, 1000, 1000, i0=50)
+    assessments = [
+        ProtectionAssessment(
+            element="87B",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            confidence="MEDIUM",
+        )
+    ]
+    line = {
+        "positive_sequence_impedance_ohm_per_km": {"R": 0.1, "X": 0.4},
+        "length_km": 50.0,
+    }
+    r = classify_fault(elec, assessments=assessments, line_params=line)
+    assert r.evidence.get("distance_applicable") is False
+    assert r.distance["status"] == "NOT_APPLICABLE"
+    assert r.distance.get("value_km") is None
+
+
+def test_87l_with_line_z_distance_applicable():
+    """Line differential + Z1: location in scope (typical 87L / 87L21 plants)."""
+    from protection.models import ProtectionAssessment
+
+    elec = _elec_from_currents(1000, 1000, 1000, i0=50)
+    assessments = [
+        ProtectionAssessment(
+            element="87L",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            confidence="MEDIUM",
+        )
+    ]
+    line = {
+        "positive_sequence_impedance_ohm_per_km": {"R": 0.1, "X": 0.4},
+        "length_km": 50.0,
+    }
+    r = classify_fault(elec, assessments=assessments, line_params=line)
+    assert r.evidence.get("distance_applicable") is True
+
+
+def test_87_with_21_backup_enabled_distance_applicable():
+    """87 primary trip + 21 enabled as backup (may not have operated) → km in scope."""
+    from protection.models import ProtectionAssessment
+
+    elec = _elec_from_currents(800, 80, 80, i0=200)
+    assessments = [
+        ProtectionAssessment(
+            element="87L",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            confidence="MEDIUM",
+        ),
+        ProtectionAssessment(
+            element="21",
+            enabled=True,
+            pickup=False,
+            trip=False,
+            expected_operation="OPERATE",
+            actual_operation="NOT_OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            confidence="MEDIUM",
+        ),
+    ]
+    r = classify_fault(elec, assessments=assessments)
+    assert r.evidence.get("distance_applicable") is True
+
+
+def test_87b_with_21_backup_enabled_distance_applicable():
+    """If distance backup is enabled alongside bus diff, location stays in scope."""
+    from protection.models import ProtectionAssessment
+
+    elec = _elec_from_currents(1000, 1000, 1000, i0=50)
+    assessments = [
+        ProtectionAssessment(
+            element="87B",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            confidence="MEDIUM",
+        ),
+        ProtectionAssessment(
+            element="21",
+            enabled=True,
+            pickup=False,
+            trip=False,
+            expected_operation="UNKNOWN",
+            actual_operation="NOT_OPERATED",
+            timing=None,
+            consistency="UNVERIFIABLE",
+            setting_reference={},
+            confidence="LOW",
+        ),
+    ]
+    r = classify_fault(elec, assessments=assessments)
+    assert r.evidence.get("distance_applicable") is True
+
+
+def test_oc_with_line_z_still_not_applicable():
+    """Pure overcurrent + line Z1 must not unlock fault km."""
+    from protection.models import ProtectionAssessment
+
+    elec = _elec_from_currents(1000, 50, 50, i0=300)
+    assessments = [
+        ProtectionAssessment(
+            element="51",
+            enabled=True,
+            pickup=True,
+            trip=True,
+            expected_operation="OPERATE",
+            actual_operation="OPERATED",
+            timing=None,
+            consistency="CONSISTENT",
+            setting_reference={},
+            confidence="MEDIUM",
+        )
+    ]
+    line = {
+        "positive_sequence_impedance_ohm_per_km": {"R": 0.1, "X": 0.4},
+        "length_km": 20.0,
+    }
+    r = classify_fault(elec, assessments=assessments, line_params=line)
+    assert r.evidence.get("distance_applicable") is False
+    assert r.distance["status"] == "NOT_APPLICABLE"
+
+
 def test_distance_not_calculable_when_21_operated_without_line_z():
     from protection.models import ProtectionAssessment
 

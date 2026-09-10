@@ -112,8 +112,8 @@ export function VerifyActiveSettingsCard({
       <div className={`alert alert-warn ${styles.card}`} role="status">
         <strong>Settings not loaded</strong>
         <p>
-          Upload a relay settings package first, then approve the file and confirm which group was
-          active when the fault occurred.
+          Upload a relay settings package first. Uploaded files are treated as APPROVED
+          automatically after analysis.
         </p>
       </div>
     );
@@ -135,10 +135,9 @@ export function VerifyActiveSettingsCard({
     <div className={`alert alert-warn ${styles.card}`} role="status">
       <strong>Settings need engineer action</strong>
       <p>
-        Approve the uploaded settings file for use in analysis
-        {!groupVerified ? ', and confirm the active group on the relay at fault time' : ''}. Or
-        upload a file named <span className="mono">APPROVED_RELAY_BASE_SETTINGS</span> to
-        auto-approve.
+        If this event was analysed before auto-approve, click Approve once (or re-run analysis).
+        New uploads are APPROVED automatically.
+        {!groupVerified ? ' Confirm the active group if it is still NOT VERIFIED.' : ''}
       </p>
       {fileNote && <p className={styles.note}>File note: {fileNote}</p>}
       <div className={styles.statusRow}>

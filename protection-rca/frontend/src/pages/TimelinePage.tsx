@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
 import type { TimelineEntry } from '@/types';
 import { EmptyState } from '@/components/EmptyState';
+import { SettingsObservedStrip } from '@/components/SettingsObservedStrip';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 import styles from './TimelinePage.module.css';
 
@@ -54,6 +55,31 @@ export function TimelinePage() {
     [entries],
   );
 
+  const observed = useMemo(() => {
+    const find = (types: string[]) => {
+      const hit = entries.find((t) => types.includes(String(t.event_type || '').toLowerCase()));
+      return hit?.t_us != null ? Number(hit.t_us) / 1e6 : null;
+    };
+    return {
+      pickup_s: find(['protection_pickup']),
+      trip_s: find(['protection_trip', 'breaker_trip_command']),
+      breaker_s: find(['52a_change', '52b_change']),
+      interrupt_s: find(['current_interruption']),
+    };
+  }, [entries]);
+
+  const expected = useMemo(() => {
+    const extra = (event?.extra || {}) as Record<string, unknown>;
+    const rs = (extra.relay_settings || {}) as Record<string, Record<string, unknown>>;
+    const bf = rs['50BF'] || {};
+    return {
+      pickup_s: null as number | null,
+      trip_s: null as number | null,
+      bf_timer_s: typeof bf.bf_timer_s === 'number' ? Number(bf.bf_timer_s) : null,
+      source: (extra.setting_source as string) || null,
+    };
+  }, [event]);
+
   if (loading) return <div className="empty-state">Loading sequence of operation…</div>;
 
   if (!entries.length) {
@@ -100,6 +126,8 @@ export function TimelinePage() {
           </button>
         </div>
       </div>
+
+      <SettingsObservedStrip expected={expected} observed={observed} />
 
       {view === 'table' ? (
         <div className="panel">

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 from consistency.checker import (
     check_element_family,
@@ -13,6 +13,7 @@ from consistency.checker import (
     check_protection_sequence,
 )
 from consistency.findings import ConsistencyFinding
+from consistency.severity import adjust_finding_severity
 from protection.models import ProtectionAssessment
 
 
@@ -54,6 +55,8 @@ class ConsistencyEngine:
         event_id: str,
         assessments: list[ProtectionAssessment],
         timeline: list[dict[str, Any]] | None = None,
+        fault_type: Optional[str] = None,
+        fault_status: Optional[str] = None,
     ) -> ConsistencyResult:
         timeline = timeline or []
         findings: list[ConsistencyFinding] = []
@@ -101,6 +104,25 @@ class ConsistencyEngine:
             if finding.status == "UNVERIFIABLE":
                 continue
             findings.append(finding)
+
+        # Fault-aware severity (NERC MIDAS-inspired factors)
+        for f in findings:
+            base = f.severity
+            f.severity = adjust_finding_severity(
+                base,
+                status=f.status,
+                element=f.element,
+                check_type=f.check_type,
+                fault_type=fault_type,
+                fault_status=fault_status,
+            )
+            if f.severity != base:
+                note = (
+                    f" Severity adjusted {base}→{f.severity} for fault "
+                    f"{fault_type or 'UNKNOWN'} ({fault_status or 'UNKNOWN'})."
+                )
+                if note.strip() not in (f.explanation or ""):
+                    f.explanation = (f.explanation or "").rstrip() + note
 
         critical = False
         for f in findings:

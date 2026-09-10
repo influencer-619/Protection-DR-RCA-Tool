@@ -1,0 +1,15 @@
+id: bus_unit
+label: Bus differential (87B)
+description: Bus-zone unit protection.
+zone: bus
+distance_applicable: false
+primary_elements: [87B]
+supporting_elements: [50BF, 86]
+required_digitals: []
+evidence_tokens:
+  - scheme_profile_bus_unit
+  - scheme_bus_diff_present
+rca_hypotheses:
+  - BUS_ZONE_FAULT
+  - CT_SATURATION
+  - BREAKER_FAILURE

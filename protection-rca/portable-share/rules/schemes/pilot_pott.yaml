@@ -1,0 +1,15 @@
+id: pilot_pott
+label: Pilot POTT / permissive overreaching
+description: Distance + carrier/pilot; COMM digital expected for scheme completeness.
+zone: line
+distance_applicable: true
+primary_elements: [21, 21G, 21P]
+supporting_elements: [67, 67N, 85]
+required_digitals: [COMM, PICKUP, TRIP]
+evidence_tokens:
+  - scheme_profile_pilot_pott
+  - scheme_pilot
+rca_hypotheses:
+  - EXTERNAL_LINE_FAULT
+  - COMMUNICATION_FAILURE
+  - INTERTRIP_OPERATION

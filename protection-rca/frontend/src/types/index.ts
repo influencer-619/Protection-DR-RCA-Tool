@@ -205,6 +205,10 @@ export interface EventFile {
   upload_timestamp: string;
   immutable: boolean;
   status?: string;
+  file_metadata?: {
+    end_label?: string;
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface ComtradeFile {
@@ -237,6 +241,10 @@ export interface ComtradeChannel {
   phase?: string | null;
   units?: string | null;
   mapped_signal?: string | null;
+  /** COMTRADE CFG PS field when available (P / S). */
+  ps?: string | null;
+  primary?: number | null;
+  secondary_ratio?: number | null;
 }
 
 export interface WaveformChannelData {
@@ -350,12 +358,14 @@ export interface FaultCharacteristics {
   ground_involved?: boolean | null;
   distance_km?: number | null;
   location_method?: string | null;
+  distance_applicable?: boolean | null;
   inception_t_us?: number | null;
   pickup_t_us?: number | null;
   trip_t_us?: number | null;
   clearing_t_us?: number | null;
   currents?: Record<string, unknown> | null;
   sequences?: Record<string, unknown> | null;
+  current_unit?: string | null;
   impedance?: Record<string, unknown> | null;
   location_algorithms: FaultLocationRow[];
   line_impedance_estimate?: Record<string, unknown> | null;

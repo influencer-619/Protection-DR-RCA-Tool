@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import delete, select
@@ -33,6 +34,27 @@ _CONF_MAP = {
     "LOW": 0.35,
     "INCONCLUSIVE": 0.15,
 }
+
+
+def _json_safe(obj: Any) -> Any:
+    """Make values safe for SQLAlchemy JSON columns (no datetime/bytes/custom)."""
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (bytes, bytearray)):
+        return obj.decode("utf-8", errors="replace")
+    try:
+        json.dumps(obj)
+        return obj
+    except (TypeError, ValueError):
+        return str(obj)
 
 
 def _conf_float(level: Any) -> float:
@@ -147,12 +169,57 @@ async def persist_engineering_analysis(
     )
     meta = relay_settings.get("_meta") if isinstance(relay_settings.get("_meta"), dict) else {}
 
+    # Merge vendor settings previously saved via settings-ingest API into analysis inputs
+    extra_pre = event.extra if isinstance(event.extra, dict) else {}
+    if not setting_candidates and isinstance(extra_pre.get("relay_settings"), dict):
+        from app.services.settings_ingest import setting_records_from_ingested
+
+        synthetic = {
+            "vendor": (extra_pre.get("settings_ingest") or {}).get("vendor") or "GENERIC",
+            "filename": (extra_pre.get("settings_ingest") or {}).get("filename") or "event.extra",
+            "mapped": {
+                "protection": extra_pre.get("relay_settings") or {},
+                "line": extra_pre.get("line_params") or {},
+                "ct_vt": extra_pre.get("ct_vt") or {},
+            },
+            "status": "OK",
+        }
+        flat_extra, recs_extra = setting_records_from_ingested(synthetic)
+        if recs_extra:
+            relay_settings = {**flat_extra, **relay_settings}
+            setting_candidates = recs_extra
+            meta = relay_settings.get("_meta") if isinstance(relay_settings.get("_meta"), dict) else meta
+
+    # RIO / XRIO trip-zone geometry for R–X (after settings merge so scalar fallback works)
+    rio_texts: list[tuple[str, str]] = []
+    for ef in files:
+        name = ef.original_filename or ""
+        low = name.lower()
+        if not (low.endswith((".rio", ".xrio", ".xml")) or "rio" in low):
+            continue
+        try:
+            raw = storage.get_bytes(ef.storage_key)
+            rio_texts.append((name, raw.decode("utf-8", errors="replace")))
+        except Exception:  # noqa: BLE001
+            continue
+    from settings.rio_zones import extract_distance_zones
+
+    distance_zones = extract_distance_zones(
+        file_texts=rio_texts,
+        relay_settings=relay_settings if isinstance(relay_settings, dict) else None,
+    )
+
     from app.services.side_files import (
         load_side_timeline_from_files,
     )
 
     line_params: dict[str, Any] = {}
     ct_vt_ratios: dict[str, Any] = {}
+    # Prefer engineer/vendor-ingest line & CT/VT already on the event
+    if isinstance(extra_pre.get("line_params"), dict):
+        line_params = dict(extra_pre["line_params"])
+    if isinstance(extra_pre.get("ct_vt"), dict):
+        ct_vt_ratios = dict(extra_pre["ct_vt"])
     param_detected_keys: dict[str, str] = {}
     # Prefer files tagged SETTINGS / named *setting* / *relay*, then any JSON with ratios
     json_files = [ef for ef in files if (ef.original_filename or "").lower().endswith(".json")]
@@ -175,14 +242,29 @@ async def persist_engineering_analysis(
                 keys = det.get("detected_keys") or {}
                 if lp and not line_params:
                     line_params = lp
+                elif lp:
+                    for k, v in lp.items():
+                        line_params.setdefault(k, v)
                 if cv and not ct_vt_ratios:
                     ct_vt_ratios = cv
+                elif cv:
+                    for k, v in cv.items():
+                        ct_vt_ratios.setdefault(k, v)
                 if keys:
                     param_detected_keys.update({k: v for k, v in keys.items() if k not in param_detected_keys})
                 if line_params and ct_vt_ratios:
                     break
         except Exception:  # noqa: BLE001
             continue
+
+    # Also detect plant params from flat keys on vendor-ingest / text settings
+    if (not line_params or not ct_vt_ratios) and relay_settings:
+        det = detect_plant_parameters(relay_settings)
+        if not line_params:
+            line_params = det.get("line") or {}
+        if not ct_vt_ratios:
+            ct_vt_ratios = det.get("ct_vt") or {}
+        param_detected_keys.update(det.get("detected_keys") or {})
 
     extra_timeline, side_summary = load_side_timeline_from_files(storage, list(files))
 
@@ -212,6 +294,7 @@ async def persist_engineering_analysis(
         if asset.get("substation") and current_ss in ("", "UNKNOWN"):
             extra["substation_name"] = asset["substation"]
             plant["substation_name"] = asset["substation"]
+            current_ss = str(asset["substation"]).upper()
         if asset.get("bay") and str(plant.get("bay_name") or "").upper() in ("", "NOT VERIFIED"):
             plant["bay_name"] = asset["bay"]
             extra["bay_name"] = asset["bay"]
@@ -222,15 +305,68 @@ async def persist_engineering_analysis(
                 event.nominal_voltage_kv = float(asset["nominal_voltage_kv"])
             except (TypeError, ValueError):
                 pass
-        break
+        # Do not break — scan all JSON packages for plant / voltage fields
+
+    # Fill nominal voltage from settings / VT / filename / station when missing
+    if not event.nominal_voltage_kv:
+        from app.services.param_detect import extract_nominal_voltage_kv
+
+        json_blobs: list[Any] = []
+        texts: list[str] = []
+        filenames = [ef.original_filename or "" for ef in files]
+        for ef in files:
+            name = (ef.original_filename or "").lower()
+            try:
+                raw = storage.get_bytes(ef.storage_key)
+            except Exception:  # noqa: BLE001
+                continue
+            if name.endswith(".json"):
+                try:
+                    data = json.loads(raw.decode("utf-8"))
+                    if isinstance(data, dict):
+                        json_blobs.append(data)
+                except Exception:  # noqa: BLE001
+                    pass
+            elif name.endswith((".txt", ".csv", ".cfg", ".set", ".rio", ".xrio", ".xml")):
+                texts.append(raw.decode("utf-8", errors="replace")[:20000])
+        station = (
+            record.station
+            or plant.get("substation_name")
+            or extra.get("substation_name")
+            or ""
+        )
+        kv, kv_src = extract_nominal_voltage_kv(
+            json_blobs=json_blobs,
+            texts=texts,
+            filenames=filenames,
+            station=str(station) if station else None,
+        )
+        if kv is not None:
+            event.nominal_voltage_kv = kv
+            extra["nominal_voltage_source"] = kv_src
 
     if plant:
         extra["plant_labels"] = plant
+
+    # Asset registry → cause enrichment (e.g. CABLE → cable_asset_confirmed)
+    if event.asset_id and not extra.get("asset_type"):
+        from app.models import Asset
+
+        asset_row = await db.get(Asset, event.asset_id)
+        if asset_row is not None:
+            extra["asset_type"] = asset_row.asset_type
+            extra["asset_name"] = asset_row.name or asset_row.asset_tag
+
     if setting_candidates:
+        from app.core.config import get_settings as _gs
+        from app.services.settings_package import apply_upload_auto_approval
+
+        meta = apply_upload_auto_approval(meta if isinstance(meta, dict) else {})
+        auto = bool(_gs().auto_approve_uploaded_settings)
         extra["setting_source"] = str(
             meta.get("source")
             or relay_settings.get("setting_source")
-            or "RELAY_CONFIGURATION"
+            or "APPROVED_RELAY_BASE"
         )
         extra["setting_version"] = str(
             meta.get("version")
@@ -245,18 +381,26 @@ async def persist_engineering_analysis(
         engineer_approved = bool(extra.get("settings_engineer_approved")) or str(
             extra.get("setting_approval") or ""
         ).upper() == "APPROVED"
-        verified = file_verified or engineer_verified or engineer_approved
-        if engineer_verified or engineer_approved:
+        if auto:
+            engineer_approved = True
+            engineer_verified = True
+            extra["settings_engineer_approved"] = True
+            extra["engineer_verified_active_group"] = True
+            extra["settings_approval_note"] = (
+                extra.get("settings_approval_note")
+                or "Auto-approved on upload (auto_approve_uploaded_settings)"
+            )
+        verified = file_verified or engineer_verified or engineer_approved or auto
+        if verified:
             for rec in setting_candidates:
                 try:
-                    if engineer_verified or engineer_approved:
-                        rec.verified = True
-                    if engineer_approved:
+                    rec.verified = True
+                    if engineer_approved or auto:
                         rec.approval_status = "APPROVED"
                 except Exception:  # noqa: BLE001
                     pass
         extra["active_group_status"] = "VERIFIED" if verified else "NOT VERIFIED"
-        if engineer_approved:
+        if engineer_approved or auto:
             extra["setting_approval"] = "APPROVED"
         else:
             extra["setting_approval"] = str(
@@ -282,7 +426,7 @@ async def persist_engineering_analysis(
         "ct_vt": "OK" if ct_vt_ratios else "NOT LOADED",
         "param_keys_detected": param_detected_keys or None,
     }
-    event.extra = extra
+    event.extra = _json_safe(extra)
 
     plant_ss = (
         plant.get("substation_name")
@@ -317,6 +461,7 @@ async def persist_engineering_analysis(
         if p
     )
     pipeline = AnalysisPipeline()
+    extra_ev = event.extra if isinstance(event.extra, dict) else {}
     result = pipeline.run(
         record,
         event_meta={
@@ -329,6 +474,31 @@ async def persist_engineering_analysis(
             "nominal_voltage_kv": event.nominal_voltage_kv,
             "asset": asset_line or None,
             "relay": relay_line or plant_relay,
+            # Pass only needed slices — never nest full event.extra (circular JSON).
+            "channel_map": extra_ev.get("channel_map"),
+            "digital_map": extra_ev.get("digital_map"),
+            "cause_evidence": extra_ev.get("cause_evidence"),
+            "multi_end": extra_ev.get("multi_end"),
+            "asset_type": extra_ev.get("asset_type"),
+            "asset_name": extra_ev.get("asset_name"),
+            "lightning_csv": extra_ev.get("lightning_csv"),
+            "event_datetime": (
+                event.event_datetime.isoformat()
+                if isinstance(event.event_datetime, datetime)
+                else event.event_datetime
+            ),
+            "extra": {
+                k: extra_ev.get(k)
+                for k in (
+                    "cause_evidence",
+                    "asset_type",
+                    "asset_name",
+                    "lightning_csv",
+                    "digital_map",
+                    "channel_map",
+                )
+                if extra_ev.get(k) is not None
+            },
         },
         setting_candidates=setting_candidates or None,
         relay_settings=relay_settings or None,
@@ -350,25 +520,146 @@ async def persist_engineering_analysis(
         await db.execute(delete(model).where(model.event_id == event.id))
     await db.flush()
 
-    # Electrical / RMS measurements
+    # Electrical / RMS + phasor measurements (units normalized)
+    from common.units import infer_unit_from_quantity, normalize_unit
+
     elec = result.electrical_analysis or {}
+    roles = elec.get("channel_roles") or {}
     rms = elec.get("rms") or {}
     for name, payload in list(rms.items())[:24]:
         if not isinstance(payload, dict):
             continue
+        role = str(roles.get(name) or "")
+        unit = normalize_unit(payload.get("unit"), role=role) or infer_unit_from_quantity(
+            f"{name}_rms", ""
+        )
         db.add(
             Measurement(
                 event_id=event.id,
                 quantity=f"{name}_rms",
-                phase=None,
+                phase=role[-1] if role in ("IA", "IB", "IC", "VA", "VB", "VC") else None,
                 value=payload.get("value") if payload.get("status") == "OK" else None,
-                unit=payload.get("unit") or "A",
+                unit=unit or None,
                 algorithm="electrical_analysis",
                 algorithm_version=settings.signal_algorithm_version,
                 quality=payload.get("status") or "NOT_VALIDATED",
                 extra=payload,
             )
         )
+
+    phasors = elec.get("phasors") or {}
+    for name, payload in list(phasors.items())[:24]:
+        if not isinstance(payload, dict) or payload.get("status") != "OK":
+            continue
+        val = payload.get("value") if isinstance(payload.get("value"), dict) else {}
+        role = str(roles.get(name) or "")
+        unit = normalize_unit(payload.get("unit"), role=role) or infer_unit_from_quantity(name, "")
+        mag = val.get("magnitude")
+        ang = val.get("angle_deg")
+        db.add(
+            Measurement(
+                event_id=event.id,
+                quantity=f"{name}_phasor",
+                phase=role[-1] if role in ("IA", "IB", "IC", "VA", "VB", "VC") else None,
+                value=float(mag) if mag is not None else None,
+                unit=unit or None,
+                algorithm="electrical_analysis",
+                algorithm_version=settings.signal_algorithm_version,
+                quality=payload.get("status") or "NOT_VALIDATED",
+                vector={"mag": mag, "angle_deg": ang, "real": val.get("real"), "imag": val.get("imag")},
+                extra=payload,
+            )
+        )
+
+    for key, label_prefix, default_unit in (
+        ("current_sequences", "I", "A"),
+        ("voltage_sequences", "V", "V"),
+    ):
+        seq = (elec.get("sequences") or {}).get(key)
+        if not isinstance(seq, dict) or seq.get("status") != "OK":
+            continue
+        sval = seq.get("value") if isinstance(seq.get("value"), dict) else {}
+        unit = normalize_unit(seq.get("unit"), role=label_prefix) or default_unit
+        for comp, qname in (("positive", f"{label_prefix}1"), ("negative", f"{label_prefix}2"), ("zero", f"{label_prefix}0")):
+            cval = sval.get(comp) if isinstance(sval.get(comp), dict) else {}
+            mag = cval.get("magnitude")
+            ang = cval.get("angle_deg")
+            if mag is None and "real" in cval and "imag" in cval:
+                try:
+                    mag = (float(cval["real"]) ** 2 + float(cval["imag"]) ** 2) ** 0.5
+                except (TypeError, ValueError):
+                    mag = None
+            db.add(
+                Measurement(
+                    event_id=event.id,
+                    quantity=qname,
+                    phase=comp[:3].upper(),
+                    value=float(mag) if mag is not None else None,
+                    unit=unit,
+                    algorithm="electrical_analysis",
+                    algorithm_version=settings.signal_algorithm_version,
+                    quality=seq.get("status") or "NOT_VALIDATED",
+                    vector={"mag": mag, "angle_deg": ang},
+                    extra={"component": comp, "source": key},
+                )
+            )
+
+    for phase_key, zpay in list((elec.get("impedance") or {}).items())[:12]:
+        if not isinstance(zpay, dict) or zpay.get("status") != "OK":
+            continue
+        zval = zpay.get("value") if isinstance(zpay.get("value"), dict) else {}
+        mag = zval.get("magnitude")
+        ang = zval.get("angle_deg")
+        if str(phase_key).startswith("loop_"):
+            loop = str(phase_key).replace("loop_", "").upper()
+            quantity = f"Z_{loop}"
+            phase = loop
+        else:
+            phase = str(phase_key).replace("phase_", "").upper()
+            quantity = f"Z_{phase}"
+        db.add(
+            Measurement(
+                event_id=event.id,
+                quantity=quantity,
+                phase=phase,
+                value=float(mag) if mag is not None else None,
+                unit="Ω",
+                algorithm="electrical_analysis",
+                algorithm_version=settings.signal_algorithm_version,
+                quality=zpay.get("status") or "NOT_VALIDATED",
+                vector={"mag": mag, "angle_deg": ang, "R": zval.get("R"), "X": zval.get("X")},
+                extra=zpay,
+            )
+        )
+
+    # Power (SIGRA calculates P/Q/S from recorded fault data)
+    for phase_key, ppay in list((elec.get("power") or {}).items())[:6]:
+        if not isinstance(ppay, dict) or ppay.get("status") != "OK":
+            continue
+        pval = ppay.get("value") if isinstance(ppay.get("value"), dict) else {}
+        phase = phase_key.replace("phase_", "").upper()
+        unit = str(ppay.get("unit") or "VA")
+        for qty, key in (("P", "P"), ("Q", "Q"), ("S", "S")):
+            if pval.get(key) is None and pval.get(qty) is None:
+                continue
+            raw = pval.get(key, pval.get(qty))
+            try:
+                num = float(raw)
+            except (TypeError, ValueError):
+                continue
+            db.add(
+                Measurement(
+                    event_id=event.id,
+                    quantity=f"{qty}_{phase}",
+                    phase=phase,
+                    value=num,
+                    unit="W" if qty == "P" else ("var" if qty == "Q" else unit),
+                    algorithm="electrical_analysis",
+                    algorithm_version=settings.signal_algorithm_version,
+                    quality=ppay.get("status") or "NOT_VALIDATED",
+                    extra=ppay,
+                )
+            )
 
     # Timeline
     for i, te in enumerate(result.timeline or []):
@@ -380,8 +671,6 @@ async def persist_engineering_analysis(
         abs_dt = None
         if abs_t:
             try:
-                from datetime import datetime
-
                 s = str(abs_t).replace("Z", "+00:00")
                 abs_dt = datetime.fromisoformat(s)
             except ValueError:
@@ -417,6 +706,19 @@ async def persist_engineering_analysis(
             op_type = "PICKUP"
         else:
             op_type = "ASSESSMENT"
+        timing = a.get("timing") if isinstance(a.get("timing"), dict) else {}
+        t_pickup_us = None
+        t_trip_us = None
+        try:
+            if timing.get("pickup_time_s") is not None:
+                t_pickup_us = int(round(float(timing["pickup_time_s"]) * 1e6))
+        except (TypeError, ValueError):
+            t_pickup_us = None
+        try:
+            if timing.get("trip_time_s") is not None:
+                t_trip_us = int(round(float(timing["trip_time_s"]) * 1e6))
+        except (TypeError, ValueError):
+            t_trip_us = None
         db.add(
             ProtectionOperation(
                 event_id=event.id,
@@ -426,6 +728,8 @@ async def persist_engineering_analysis(
                 asserted=bool(trip or pickup),
                 expected=a.get("expected_operation") == "OPERATE",
                 confidence=_conf_float(a.get("confidence")),
+                t_pickup_us=t_pickup_us,
+                t_trip_us=t_trip_us,
                 details=a,
             )
         )
@@ -613,14 +917,21 @@ async def persist_engineering_analysis(
     event.decision_state = str(
         decision.get("state") or decision.get("status") or "ENGINEER_REVIEW_REQUIRED"
     )
-    # Summary fields for event header / list
+    # Summary fields for event header / list — fault-aware (not flat HIGH for every fault)
+    from consistency.severity import event_severity_summary
+
     ft = str(fault.get("fault_type") or "UNKNOWN")
     extra["fault_type"] = ft
-    if ft in ("AG", "BG", "CG", "AB", "BC", "CA", "ABG", "BCG", "CAG", "ABC", "ABCG"):
-        extra["severity_summary"] = "HIGH" if fault.get("status") == "CLASSIFIED" else "MEDIUM"
-    elif fault.get("status") in ("CLASSIFIED", "PROBABLE"):
-        extra["severity_summary"] = "MEDIUM"
-
+    sevs = [
+        str(f.get("severity") or "")
+        for f in (result.consistency_findings or [])
+        if isinstance(f, dict) and f.get("severity")
+    ]
+    extra["severity_summary"] = event_severity_summary(
+        finding_severities=sevs,
+        fault_type=ft,
+        fault_status=str(fault.get("status") or ""),
+    )
     # Event datetime from COMTRADE trigger / start when wizard left it empty
     if event.event_datetime is None:
         ts = record.trigger_time or record.start_time
@@ -629,8 +940,6 @@ async def persist_engineering_analysis(
                 if hasattr(ts, "tzinfo"):
                     event.event_datetime = ts
                 else:
-                    from datetime import datetime, timezone
-
                     event.event_datetime = datetime.fromtimestamp(float(ts), tz=timezone.utc)
             except Exception:  # noqa: BLE001
                 pass
@@ -645,6 +954,9 @@ async def persist_engineering_analysis(
             ]
         extra["analysis_limitations"] = lims
 
+    if distance_zones:
+        extra["distance_zones"] = distance_zones
+
     # Slim electrical summary for reports (avoid storing full phasor payloads)
     elec_full = result.electrical_analysis or {}
     rms_summary: dict[str, Any] = {}
@@ -654,6 +966,27 @@ async def persist_engineering_analysis(
                 "value": payload.get("value"),
                 "unit": payload.get("unit"),
                 "status": payload.get("status"),
+            }
+    # Cap heatmap storage (time × order for ≤3 channels)
+    heatmap_raw = elec_full.get("harmonics_heatmap") or {}
+    heatmap_slim: dict[str, Any] = {}
+    if isinstance(heatmap_raw, dict):
+        for i, (ch, payload) in enumerate(heatmap_raw.items()):
+            if i >= 3 or not isinstance(payload, dict):
+                continue
+            if payload.get("status") != "OK":
+                continue
+            heatmap_slim[ch] = {
+                "status": "OK",
+                "channel": ch,
+                "unit": payload.get("unit"),
+                "times_s": list(payload.get("times_s") or [])[:48],
+                "harmonics_rms": {
+                    str(k): list(v)[:48]
+                    for k, v in (payload.get("harmonics_rms") or {}).items()
+                    if str(k).isdigit() and int(k) <= 7
+                },
+                "method": payload.get("method"),
             }
     setting_ref = dict(result.setting_reference or {})
     setting_ref.update(
@@ -680,7 +1013,19 @@ async def persist_engineering_analysis(
     if extra.get("settings_file_verification_note") and not setting_ref.get("explanation"):
         setting_ref["explanation"] = extra["settings_file_verification_note"]
     # Full analysis dict for HTML report export (matches ReportGenerator template)
-    event_for_report = dict(result.event or {})
+    # Copy only scalar-ish event fields — never nest event.extra (circular JSON on flush).
+    src_ev = result.event if isinstance(result.event, dict) else {}
+    event_for_report = {
+        k: v
+        for k, v in src_ev.items()
+        if k not in ("extra", "report_analysis") and not isinstance(v, (dict, list))
+    }
+    # Allow a few known nested-safe keys if present as plain values already filtered
+    for k in ("event_id", "description", "substation", "bay", "feeder", "asset", "relay", "nominal_voltage_kv"):
+        if k in src_ev and k not in event_for_report:
+            val = src_ev[k]
+            if not isinstance(val, (dict, list)):
+                event_for_report[k] = val
     event_for_report.setdefault("event_id", event.event_id)
     event_for_report.setdefault("description", event.description)
     event_for_report["asset"] = asset_line or event_for_report.get("asset")
@@ -694,6 +1039,11 @@ async def persist_engineering_analysis(
             "nominal_frequency_hz": elec_full.get("nominal_frequency_hz"),
             "channel_roles": elec_full.get("channel_roles") or {},
             "rms": rms_summary,
+            "harmonics": elec_full.get("harmonics") or {},
+            "harmonics_heatmap": heatmap_slim,
+            "detectors": elec_full.get("detectors") or {},
+            "impedance": elec_full.get("impedance") or {},
+            "phasors": elec_full.get("phasors") or {},
         },
         "timeline": list(result.timeline or []),
         "protection_assessment": list(result.protection_assessment or []),
@@ -701,6 +1051,9 @@ async def persist_engineering_analysis(
         "fault_classification": result.fault_classification or {},
         "breaker_analysis": result.breaker_analysis or {},
         "rca_hypotheses": result.rca_hypotheses or {},
+        "enrichment": (result.rca_hypotheses or {}).get("enrichment") or {},
+        "scheme": (result.rca_hypotheses or {}).get("scheme") or {},
+        "distance_zones": distance_zones,
         "evidence": list(result.evidence or [])[:50],
         "similar_events": result.similar_events
         or {"message": "SIMILARITY RESULT: NOT AVAILABLE"},
@@ -709,7 +1062,7 @@ async def persist_engineering_analysis(
         "setting_reference": setting_ref,
         "engineer_review": "PENDING",
     }
-    event.extra = extra
+    event.extra = _json_safe(extra)
     try:
         from sqlalchemy.orm.attributes import flag_modified
 

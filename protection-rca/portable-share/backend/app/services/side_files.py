@@ -1,6 +1,11 @@
 """Load SOE CSV and relay event-report text into timeline contributions.
 
 Never invents events — only parses what is present in uploaded side files.
+
+Industry coverage (deterministic):
+  - Generic / openXDA-style SOE CSV
+  - SER / sequential-events CSV (SEL, station RTU exports)
+  - Relay event reports (label: N s) and SEL-ish FID/DATE/TIME text
 """
 
 from __future__ import annotations
@@ -18,19 +23,54 @@ logger = logging.getLogger(__name__)
 
 _SIGNAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"INCEPTION|FAULT\s*START|FAULT\s*INCEPT", re.I), "fault_inception"),
-    (re.compile(r"PICK\s*UP|PICKUP|_PU\b|Z\d.*PU", re.I), "protection_pickup"),
-    (re.compile(r"TRIP|_TR\b|OPERATE|Z\d.*TRIP", re.I), "protection_trip"),
+    (re.compile(r"PICK\s*UP|PICKUP|_PU\b|Z\d.*PU|START", re.I), "protection_pickup"),
+    (re.compile(r"TRIP|_TR\b|OPERATE|Z\d.*TRIP|(?<![A-Z0-9])OP\b", re.I), "protection_trip"),
     (re.compile(r"52A|52_A|BREAKER.*OPEN|CB\s*OPEN|52A_CLOSED", re.I), "52a_change"),
     (re.compile(r"52B|52_B", re.I), "52b_change"),
-    (re.compile(r"RECLOSE|79\b", re.I), "reclose"),
+    (re.compile(r"RECLOSE|79\b|AR\b", re.I), "reclose"),
     (re.compile(r"LOCKOUT|86\b", re.I), "lockout"),
-    (re.compile(r"INTERTRIP|TRANSFER", re.I), "intertrip"),
-    (re.compile(r"50BF|BREAKER.?FAIL", re.I), "breaker_trip_command"),
+    (re.compile(r"INTERTRIP|TRANSFER|TT\b", re.I), "intertrip"),
+    (re.compile(r"50BF|BREAKER.?FAIL|BF\b", re.I), "breaker_trip_command"),
+    (re.compile(r"COMM|CARRIER|PILOT|POTT|DUTT", re.I), "communication_signal"),
 ]
 
 _REPORT_LINE = re.compile(
-    r"^(?P<label>.+?):\s*(?P<t>[\d.]+)\s*s\s*$",
+    r"^(?P<label>.+?):\s*(?P<t>[\d.]+)\s*(?:s|sec|seconds)?\s*$",
     re.I,
+)
+
+# SEL / vendor: "21 Z1 Pickup at 0.410 cycles" or "TRIP  12.5 cycles"
+_REPORT_AT = re.compile(
+    r"^(?P<label>.+?)\s+(?:at|=)\s*(?P<t>[\d.]+)\s*(?P<unit>s|sec|ms|cycles?)?\s*$",
+    re.I,
+)
+_REPORT_TAB = re.compile(
+    r"^(?P<label>[A-Za-z0-9_ /\-]+)\s{2,}(?P<t>[\d.]+)\s*(?P<unit>s|ms|cycles?)?\s*$",
+    re.I,
+)
+
+_SOE_NAME_HINTS = (
+    "soe",
+    "ser",
+    "sequential",
+    "sequence_of_event",
+    "eventlog",
+    "event_log",
+    "evtlog",
+    "alarm_log",
+    "status_log",
+)
+
+_REPORT_NAME_HINTS = (
+    "event_report",
+    "event-report",
+    "relay_event",
+    "ser_report",
+    "history",
+    "_eve",
+    "eve.",
+    "fault_report",
+    "disturbance_report",
 )
 
 
@@ -53,7 +93,24 @@ def _parse_ts(raw: str) -> Optional[datetime]:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt
     except ValueError:
-        return None
+        pass
+    # Common vendor: MM/DD/YYYY HH:MM:SS.mmm or DD-MM-YYYY ...
+    for fmt in (
+        "%m/%d/%Y %H:%M:%S.%f",
+        "%m/%d/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S.%f",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+        "%d-%b-%Y %H:%M:%S.%f",
+        "%d-%b-%Y %H:%M:%S",
+    ):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
 
 
 def _element_from_label(label: str) -> Optional[str]:
@@ -65,29 +122,98 @@ def _element_from_label(label: str) -> Optional[str]:
     return m.group(1).upper() if m else None
 
 
+def looks_like_soe_csv(text: str) -> bool:
+    """Content sniff: CSV with time + signal/description columns."""
+    sample = (text or "")[:4000]
+    try:
+        reader = csv.reader(io.StringIO(sample))
+        header = next(reader, None)
+    except Exception:  # noqa: BLE001
+        return False
+    if not header or len(header) < 2:
+        return False
+    joined = " ".join(h.strip().lower() for h in header)
+    has_time = any(
+        t in joined
+        for t in ("time", "timestamp", "date", "datetime", "occurred")
+    )
+    has_sig = any(
+        t in joined
+        for t in (
+            "signal",
+            "event",
+            "point",
+            "description",
+            "message",
+            "channel",
+            "status",
+            "tag",
+            "bit",
+        )
+    )
+    return has_time and has_sig
+
+
 def parse_soe_csv(
     text: str,
     *,
     source_name: str = "soe.csv",
     t0: Optional[datetime] = None,
 ) -> list[TimelineEvent]:
-    """Parse SOE CSV (timestamp_utc,signal,value,source) → TimelineEvent list."""
+    """Parse SOE / SER CSV → TimelineEvent list."""
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         return []
-    # Normalize headers
-    fields = { (h or "").strip().lower(): h for h in reader.fieldnames }
-    ts_key = fields.get("timestamp_utc") or fields.get("timestamp") or fields.get("time")
-    sig_key = fields.get("signal") or fields.get("event") or fields.get("point")
-    val_key = fields.get("value") or fields.get("state")
-    src_key = fields.get("source") or fields.get("device")
-    if not ts_key or not sig_key:
-        logger.warning("SOE CSV %s missing timestamp/signal columns", source_name)
+    fields = {(h or "").strip().lower(): h for h in reader.fieldnames}
+
+    def _pick(*names: str) -> Optional[str]:
+        for n in names:
+            if n in fields:
+                return fields[n]
+        return None
+
+    ts_key = _pick(
+        "timestamp_utc",
+        "timestamp",
+        "datetime",
+        "date_time",
+        "event_time",
+        "occurred",
+    )
+    date_key = _pick("date", "event_date")
+    time_key = _pick("time", "time_only", "tod", "t")
+    # Prefer Date+Time pair when both present (common SER export)
+    if date_key and time_key:
+        ts_key = None
+    elif not ts_key:
+        ts_key = _pick("time", "t")
+    sig_key = _pick(
+        "signal",
+        "event",
+        "point",
+        "description",
+        "message",
+        "channel",
+        "tag",
+        "bit",
+        "name",
+        "status_text",
+    )
+    val_key = _pick("value", "state", "status", "new_state", "val")
+    src_key = _pick("source", "device", "relay", "ied", "bay")
+    if not sig_key:
+        logger.warning("SOE CSV %s missing signal/description column", source_name)
+        return []
+    if not ts_key and not (date_key and time_key):
+        logger.warning("SOE CSV %s missing timestamp columns", source_name)
         return []
 
     rows: list[tuple[datetime, str, str, Any]] = []
     for row in reader:
-        dt = _parse_ts(str(row.get(ts_key) or ""))
+        if ts_key:
+            dt = _parse_ts(str(row.get(ts_key) or ""))
+        else:
+            dt = _parse_ts(f"{row.get(date_key) or ''} {row.get(time_key) or ''}".strip())
         sig = str(row.get(sig_key) or "").strip()
         if dt is None or not sig:
             continue
@@ -99,20 +225,23 @@ def parse_soe_csv(
 
     rows.sort(key=lambda r: r[0])
     if t0 is None:
-        # Align to whole second of first event so .410 → 0.410 s (package convention)
         first = rows[0][0]
         t0 = first.replace(microsecond=0)
 
     out: list[TimelineEvent] = []
     for dt, sig, src, val in rows:
-        # Skip de-assert / zero unless useful
+        # Skip de-assert / zero unless useful breaker status
+        skip = False
         try:
             if val is not None and float(val) == 0 and "CLOSED" not in sig.upper():
-                # 52A_CLOSED,0 means breaker opened — keep
                 if "52A" not in sig.upper() and "52B" not in sig.upper():
-                    continue
+                    skip = True
         except (TypeError, ValueError):
-            pass
+            if str(val).upper() in ("OFF", "FALSE", "DEASSERT", "RESET", "0"):
+                if "52A" not in sig.upper() and "52B" not in sig.upper():
+                    skip = True
+        if skip:
+            continue
         etype = _classify_signal(sig)
         if "52A" in sig.upper() and str(val) in ("0", "0.0"):
             etype = "52a_change"
@@ -138,26 +267,40 @@ def parse_soe_csv(
     return out
 
 
+def _to_seconds(t: float, unit: Optional[str]) -> float:
+    u = (unit or "s").lower()
+    if u.startswith("ms"):
+        return t / 1000.0
+    if u.startswith("cycle"):
+        return t / 50.0  # assume 50 Hz; documented in metadata
+    return t
+
+
 def parse_relay_event_report(
     text: str,
     *,
     source_name: str = "relay_event_report.txt",
 ) -> list[TimelineEvent]:
-    """Parse simple relay event report lines like '21 Z1 pickup: 0.410 s'."""
+    """Parse relay event report lines into timeline events."""
     out: list[TimelineEvent] = []
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("=") or line.upper().startswith("PROTECTION"):
             continue
-        m = _REPORT_LINE.match(line)
+        if line.upper().startswith("FID=") or line.upper().startswith("DATE"):
+            continue
+        m = _REPORT_LINE.match(line) or _REPORT_AT.match(line) or _REPORT_TAB.match(line)
         if not m:
-            # Also accept "Fault: A-G" style without time — skip
             continue
         label = m.group("label").strip()
         try:
-            t = float(m.group("t"))
-        except ValueError:
+            t_raw = float(m.group("t"))
+        except (ValueError, IndexError):
             continue
+        unit = None
+        if "unit" in m.groupdict():
+            unit = m.group("unit")
+        t = _to_seconds(t_raw, unit)
         etype = _classify_signal(label)
         if "inception" in label.lower() or label.lower().startswith("fault inception"):
             etype = "fault_inception"
@@ -174,6 +317,7 @@ def parse_relay_event_report(
                     "label": label,
                     "element": _element_from_label(label),
                     "file": source_name,
+                    "unit": unit or "s",
                 },
             )
         )
@@ -189,7 +333,6 @@ def merge_timelines(
     for block in extras:
         merged.extend(block)
     merged.sort(key=lambda e: (e.timestamp, e.event_type))
-    # Dedup: keep COMTRADE over SOE over report when nearly identical
     priority = {"COMTRADE": 0, "SOE": 1, "RELAY_EVENT_REPORT": 2}
     kept: list[TimelineEvent] = []
     for ev in merged:
@@ -224,13 +367,41 @@ def merge_timelines(
     return kept
 
 
+def _is_soe_file(name: str, source_type: Optional[str], text: str) -> bool:
+    n = (name or "").lower()
+    st = (source_type or "").upper()
+    if st == "SOE":
+        return n.endswith(".csv") or looks_like_soe_csv(text)
+    if n.endswith(".csv") and any(h in n for h in _SOE_NAME_HINTS):
+        return True
+    if n.endswith(".csv") and looks_like_soe_csv(text) and "setting" not in n:
+        return True
+    return False
+
+
+def _is_event_report_file(name: str, source_type: Optional[str]) -> bool:
+    n = (name or "").lower()
+    st = (source_type or "").upper()
+    if any(x in n for x in ("setting", "readme", "upload_order", "set_all", "license")):
+        return False
+    if st == "RELAY_EVENT_REPORT":
+        return n.endswith((".txt", ".log", ".eve", ".cev"))
+    if n.endswith((".txt", ".log", ".eve")) and any(h in n for h in _REPORT_NAME_HINTS):
+        return True
+    # Generic .txt tagged as event report by extension default — try parse later
+    if st == "RELAY_EVENT_REPORT" or (n.endswith(".txt") and "event" in n):
+        return True
+    return False
+
+
 def load_side_timeline_from_files(storage: Any, files: list[Any]) -> tuple[list[TimelineEvent], dict[str, Any]]:
     """Load SOE + event-report timeline events from uploaded EventFile rows."""
     events: list[TimelineEvent] = []
-    summary: dict[str, Any] = {"soe": None, "event_report": None}
+    summary: dict[str, Any] = {"soe": None, "event_report": None, "files_tried": []}
 
     for ef in files:
         name = (ef.original_filename or "").lower()
+        st = getattr(ef, "source_type", None)
         try:
             raw = storage.get_bytes(ef.storage_key)
             text = raw.decode("utf-8", errors="replace")
@@ -238,40 +409,44 @@ def load_side_timeline_from_files(storage: Any, files: list[Any]) -> tuple[list[
             logger.warning("Could not read side file %s: %s", name, exc)
             continue
 
-        if name.endswith(".csv") and ("soe" in name or ef.source_type == "SOE"):
+        if _is_soe_file(name, st, text):
             parsed = parse_soe_csv(text, source_name=ef.original_filename or name)
             events.extend(parsed)
             summary["soe"] = {
                 "file": ef.original_filename,
                 "events": len(parsed),
             }
-        elif (
-            name.endswith(".txt")
-            and (
-                "event_report" in name
-                or "relay_event" in name
-                or ef.source_type == "RELAY_EVENT_REPORT"
-            )
-            and "setting" not in name
-            and "readme" not in name
-            and "upload_order" not in name
-        ):
+            summary["files_tried"].append({"file": ef.original_filename, "kind": "SOE", "n": len(parsed)})
+        elif _is_event_report_file(name, st):
+            # Skip binary-ish CEV
+            if name.endswith(".cev") and "\x00" in text[:200]:
+                summary["files_tried"].append(
+                    {
+                        "file": ef.original_filename,
+                        "kind": "RELAY_EVENT_REPORT",
+                        "n": 0,
+                        "note": "Binary CEV not parsed — use COMTRADE or ASCII event report",
+                    }
+                )
+                continue
             parsed = parse_relay_event_report(text, source_name=ef.original_filename or name)
+            if not parsed and (ef.original_filename or "").lower().endswith(".txt"):
+                # Content may be settings mis-tagged — skip silently
+                continue
             events.extend(parsed)
             summary["event_report"] = {
                 "file": ef.original_filename,
                 "events": len(parsed),
             }
+            summary["files_tried"].append(
+                {"file": ef.original_filename, "kind": "RELAY_EVENT_REPORT", "n": len(parsed)}
+            )
 
     return events, summary
 
 
 def line_ct_vt_from_settings_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Extract line / CT-VT from settings JSON without requiring fixed field names.
-
-    Uses flexible synonym detection (see ``param_detect.detect_plant_parameters``).
-    Never invents values — only maps what is present under any reasonable key wording.
-    """
+    """Extract line / CT-VT from settings JSON without requiring fixed field names."""
     from app.services.param_detect import detect_plant_parameters
 
     det = detect_plant_parameters(data)

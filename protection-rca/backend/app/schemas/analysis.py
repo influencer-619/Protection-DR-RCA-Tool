@@ -132,12 +132,14 @@ class FaultCharacteristicsOut(BaseModel):
     ground_involved: Optional[bool] = None
     distance_km: Optional[float] = None
     location_method: Optional[str] = None
+    distance_applicable: Optional[bool] = None
     inception_t_us: Optional[int] = None
     pickup_t_us: Optional[int] = None
     trip_t_us: Optional[int] = None
     clearing_t_us: Optional[int] = None
     currents: Optional[dict[str, Any]] = None
     sequences: Optional[dict[str, Any]] = None
+    current_unit: Optional[str] = None
     impedance: Optional[dict[str, Any]] = None
     location_algorithms: list[FaultLocationRowOut] = Field(default_factory=list)
     line_impedance_estimate: Optional[dict[str, Any]] = None

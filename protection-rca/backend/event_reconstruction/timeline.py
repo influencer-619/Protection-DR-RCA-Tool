@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, Optional
 
 import numpy as np
 
@@ -81,8 +81,20 @@ def reconstruct_timeline(
     *,
     current_increase_ratio: float = 2.0,
     voltage_drop_ratio: float = 0.85,
+    digital_map: Optional[dict[str, Any]] = None,
 ) -> list[TimelineEvent]:
-    """Detect timeline events. Returns empty list if insufficient data."""
+    """Detect timeline events. Returns empty list if insufficient data.
+
+    ``digital_map`` (optional) remaps COMTRADE digital names to DR target roles
+    (PICKUP/TRIP/52A/…) like an analog channel map.
+    """
+    from protection.digital_targets import (
+        is_assert_transition,
+        normalize_digital_map,
+        resolve_digital_target,
+        target_to_event_type,
+    )
+
     events: list[TimelineEvent] = []
     times = _sample_times(record)
     if len(times) == 0:
@@ -90,20 +102,43 @@ def reconstruct_timeline(
 
     fs = float(record.sample_rates[0].sample_rate_hz) if record.sample_rates else 0.0
     f0 = record.nominal_frequency or 50.0
+    cleaned_map = normalize_digital_map(digital_map)
 
     for dch in record.digital_channels:
         name = dch.name
         series = record.scaled_values.get(name) or record.raw_values.get(name) or []
         transitions = _digital_transitions(series, times)
-        matched_type = None
-        for pat, etype in _DIGITAL_PATTERNS:
-            if pat.search(name):
-                matched_type = etype
-                break
+        role, mapped_el = resolve_digital_target(name, digital_map=digital_map)
+        matched_type = target_to_event_type(role)
+        if name in cleaned_map:
+            # Explicit map: IGNORE/UNKNOWN with no event → skip (no regex fallback)
+            if matched_type is None:
+                continue
+        elif matched_type is None:
+            for pat, etype in _DIGITAL_PATTERNS:
+                if pat.search(name):
+                    matched_type = etype
+                    break
         if matched_type is None:
             continue
+        normal = int(getattr(dch, "normal_state", 0) or 0)
         for t, frm, to in transitions:
+            status_edge = matched_type in (
+                "52a_change",
+                "52b_change",
+                "communication_signal",
+            )
+            if not status_edge and not is_assert_transition(frm, to, normal_state=normal):
+                continue
             eid = f"ev-{uuid.uuid4().hex[:12]}"
+            meta: dict[str, Any] = {
+                "from": frm,
+                "to": to,
+                "channel": name,
+                "target_role": role,
+            }
+            if mapped_el:
+                meta["element"] = mapped_el
             events.append(
                 TimelineEvent(
                     event_type=matched_type,
@@ -111,7 +146,7 @@ def reconstruct_timeline(
                     source=f"digital:{name}",
                     confidence=ConfidenceLevel.HIGH.value,
                     evidence_ids=[eid],
-                    metadata={"from": frm, "to": to, "channel": name},
+                    metadata=meta,
                 )
             )
 

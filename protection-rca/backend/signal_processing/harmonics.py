@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+import math
+from typing import Any, Optional, Sequence
 
 import numpy as np
 
@@ -107,3 +108,74 @@ def compute_harmonics(
         reason=None if thd is not None else "Fundamental near zero; THD not calculable",
         metadata={"cycles": n_cycles, "max_harmonic": max_harmonic},
     )
+
+
+def compute_harmonics_stft(
+    samples: Sequence[float],
+    *,
+    sample_rate_hz: float,
+    channel: str,
+    nominal_frequency_hz: float = 50.0,
+    max_harmonic: int = 7,
+    hop_cycles: int = 1,
+    max_frames: int = 64,
+    unit: str = "",
+) -> dict[str, Any]:
+    """
+    Short-time harmonic magnitudes for a SIGRA-like heatmap (time × order).
+
+    Returns NOT_CALCULABLE-style dict when inputs insufficient — never invents.
+    """
+    if samples is None or len(samples) == 0 or sample_rate_hz <= 0 or nominal_frequency_hz <= 0:
+        return {
+            "status": "NOT_CALCULABLE",
+            "channel": channel,
+            "reason": "Samples / rates NOT AVAILABLE",
+        }
+    arr = np.asarray(samples, dtype=float)
+    spc = int(round(sample_rate_hz / nominal_frequency_hz))
+    if spc < 4 or len(arr) < spc:
+        return {
+            "status": "NOT_CALCULABLE",
+            "channel": channel,
+            "reason": "Insufficient samples per cycle",
+        }
+    hop = max(1, hop_cycles) * spc
+    # Limit frames for UI / storage
+    n_possible = 1 + max(0, (len(arr) - spc) // hop)
+    step = hop
+    if n_possible > max_frames:
+        step = max(hop, int(math.ceil((len(arr) - spc) / max(1, max_frames - 1))))
+    times: list[float] = []
+    orders = {str(h): [] for h in range(1, max_harmonic + 1)}
+    i = 0
+    while i + spc <= len(arr) and len(times) < max_frames:
+        window = arr[i : i + spc]
+        if not np.all(np.isfinite(window)):
+            i += step
+            continue
+        spectrum = np.fft.rfft(window)
+        n = len(window)
+        for h in range(1, max_harmonic + 1):
+            if h >= len(spectrum):
+                orders[str(h)].append(0.0)
+                continue
+            peak = (2.0 / n) * abs(spectrum[h])
+            orders[str(h)].append(float(peak / np.sqrt(2.0)))
+        times.append(float(i / sample_rate_hz))
+        i += step
+    if not times:
+        return {
+            "status": "NOT_CALCULABLE",
+            "channel": channel,
+            "reason": "No valid STFT frames",
+        }
+    return {
+        "status": "OK",
+        "channel": channel,
+        "unit": unit,
+        "times_s": times,
+        "harmonics_rms": orders,
+        "method": "short_time_dft_harmonics",
+        "max_harmonic": max_harmonic,
+    }

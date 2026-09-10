@@ -5,10 +5,10 @@
   gap: 16px;
   margin: 0 16px;
   padding: 10px 12px;
-  background: var(--accent-soft);
-  border: 1px solid var(--border-focus);
-  border-bottom: none;
-  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: 2px;
 }
 
 .text {
@@ -21,7 +21,7 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-weight: 700;
-  color: var(--accent-bright);
+  color: var(--text-muted);
   margin-bottom: 2px;
 }
 

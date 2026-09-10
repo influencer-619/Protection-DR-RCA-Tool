@@ -7,6 +7,8 @@ export type PipelineLamp = {
   state: 'ok' | 'warn' | 'error' | 'pending' | 'na';
   /** Event-relative tab path, e.g. "comtrade" or "waveforms" */
   to?: string;
+  /** Hover detail (e.g. DQ level / warning note) */
+  title?: string;
 };
 
 interface Props {
@@ -36,7 +38,7 @@ export function EventStatusBar({ lamps, eventBase }: Props) {
               className={({ isActive }) =>
                 `${className} ${styles.link} ${isActive ? styles.linkActive : ''}`
               }
-              title={`Open ${l.label}`}
+              title={l.title || `Open ${l.label}`}
             >
               <span className={styles.icon}>{ICON[l.state]}</span>
               <span className={styles.label}>{l.label}</span>
@@ -44,7 +46,7 @@ export function EventStatusBar({ lamps, eventBase }: Props) {
           );
         }
         return (
-          <div key={l.key} className={className}>
+          <div key={l.key} className={className} title={l.title}>
             <span className={styles.icon}>{ICON[l.state]}</span>
             <span className={styles.label}>{l.label}</span>
           </div>

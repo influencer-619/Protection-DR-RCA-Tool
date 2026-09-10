@@ -1,6 +1,7 @@
 import { useState, type DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/services/api';
+import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT } from '@/utils/uploadAccept';
 
 export function UploadPage() {
   const [dragging, setDragging] = useState(false);
@@ -64,16 +65,13 @@ export function UploadPage() {
         onClick={() => document.getElementById('upload-input')?.click()}
       >
         <strong>Drop files to create a new event</strong>
-        <div className="hint">
-          Allowed: .cfg .dat .cff .hdr .inf .csv .txt .xml .json .pdf .zip
-          (ZIP auto-extracts and processes members)
-        </div>
+        <div className="hint">Allowed: {UPLOAD_ACCEPT_HINT}</div>
         <input
           id="upload-input"
           type="file"
           multiple
           hidden
-          accept=".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip"
+          accept={UPLOAD_ACCEPT}
           onChange={(e) => e.target.files && setFiles(Array.from(e.target.files))}
         />
       </div>

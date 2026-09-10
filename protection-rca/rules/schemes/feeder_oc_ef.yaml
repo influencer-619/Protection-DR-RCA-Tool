@@ -1,0 +1,17 @@
+id: feeder_oc_ef
+label: Feeder overcurrent / earth fault (50/51/67)
+description: Local feeder OC/EF scheme — distance/km not primary.
+zone: feeder
+distance_applicable: false
+primary_elements: [50, 51, 50P, 51P, 50N, 51N, 67, 67N, 67P]
+supporting_elements: [79, 86]
+required_digitals: []
+evidence_tokens:
+  - scheme_profile_feeder_oc
+  - scheme_overcurrent_present
+rca_hypotheses:
+  - INTERNAL_FEEDER_FAULT
+  - LIGHTNING
+  - VEGETATION
+  - CABLE_FAULT
+  - INSULATION_FLASHOVER

@@ -17,6 +17,20 @@ def test_canonical_aliases():
     assert canonical_param("enabled") == "enabled"
 
 
+def test_uploaded_settings_auto_approved():
+    data = {
+        "setting_source": "RELAY_CONFIGURATION",
+        "elements": {"51N": {"enabled": True, "pickup_a": 0.3}},
+    }
+    meta, rows, flat = normalize_relay_settings_package(data)
+    assert meta["approval_status"] == "APPROVED"
+    assert meta["verified"] is True
+    assert "APPROVED" in str(meta["source"]).upper()
+    assert flat["approval_status"] == "APPROVED"
+    assert flat["active_setting_group_verified"] is True
+    assert rows
+
+
 def test_flatten_elements_package():
     data = {
         "setting_source": "APPROVED_RELAY_BASE_SETTINGS",
@@ -35,6 +49,7 @@ def test_flatten_elements_package():
     assert meta["group"] == "GROUP-1"
     assert meta["verified"] is True
     assert meta["source"] == "APPROVED_RELAY_BASE_SETTINGS"
+    assert meta["approval_status"] == "APPROVED"
 
     params_51 = {(e, p): v for e, p, v in rows if e == "51"}
     assert ("51", "enabled") in params_51

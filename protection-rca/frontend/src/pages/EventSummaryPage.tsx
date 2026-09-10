@@ -13,6 +13,8 @@ import type {
 import { StatusBadge } from '@/components/StatusBadge';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
 import { EmptyState } from '@/components/EmptyState';
+import { VerdictStrip } from '@/components/VerdictStrip';
+import { SharePackButton } from '@/components/SharePackButton';
 import { isDistanceApplicable } from '@/utils/schemeContext';
 import styles from './EventSummaryPage.module.css';
 
@@ -93,7 +95,11 @@ export function EventSummaryPage() {
             Printable disturbance snapshot — only verified analysis outputs, no invented values
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {id && <SharePackButton eventId={id} eventCode={event.event_id} />}
+          <Link className="btn btn-sm" to={`/events/${id}/dr`}>
+            DR workspace
+          </Link>
           <Link className="btn btn-sm" to={`/events/${id}/overview`}>
             Overview
           </Link>
@@ -105,6 +111,23 @@ export function EventSummaryPage() {
           </button>
         </div>
       </div>
+
+      <VerdictStrip
+        faultType={fault?.fault_type ?? event.fault_type}
+        tripSummary={
+          trips.length
+            ? trips.map((t) => `${t.element} ${t.operation_type}`).join('; ')
+            : 'None asserted'
+        }
+        consistency={overallCons}
+        inconsistentCount={inconsistent.length}
+        rcaTitle={primary?.title}
+        rcaCode={primary?.hypothesis_code}
+        eventStatus={event.status}
+        decisionState={event.decision_state}
+        nextLabel="Open DR @ fault"
+        nextTo={`/events/${id}/dr`}
+      />
 
       <article className={styles.sheet}>
         <header className={styles.header}>

@@ -9,6 +9,7 @@ from app.api import (
     auth,
     comtrade,
     dashboard,
+    dr_analyser,
     events,
     files,
     models_api,
@@ -26,6 +27,7 @@ api_router.include_router(files.router)
 api_router.include_router(comtrade.router)
 api_router.include_router(settings.router)
 api_router.include_router(analysis.router)
+api_router.include_router(dr_analyser.router)
 api_router.include_router(reports.router)
 api_router.include_router(review.router)
 api_router.include_router(assets.router)

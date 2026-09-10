@@ -1,0 +1,17 @@
+id: line_distance_stepped
+label: Stepped distance (21)
+description: Primary distance protection with optional OC/EF backup — distance/km applicable.
+zone: line
+distance_applicable: true
+primary_elements: [21, 21G, 21P]
+supporting_elements: [50, 51, 50N, 51N, 67, 67N, 79]
+required_digitals: []
+evidence_tokens:
+  - scheme_profile_line_distance
+  - scheme_distance_present
+rca_hypotheses:
+  - EXTERNAL_LINE_FAULT
+  - LIGHTNING
+  - VEGETATION
+  - INSULATION_FLASHOVER
+  - CABLE_FAULT

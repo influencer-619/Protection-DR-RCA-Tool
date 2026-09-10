@@ -12,7 +12,7 @@ from signal_processing.phasor import compute_fundamental_phasor
 from signal_processing.power import compute_power
 from signal_processing.rms import compute_peak, compute_rms
 from signal_processing.sequences import compute_sequence_components
-from signal_processing.impedance import compute_apparent_impedance
+from signal_processing.impedance import compute_apparent_impedance, compute_delta_loop_impedance
 from signal_processing.harmonics import compute_harmonics
 from signal_processing.derivatives import compute_di_dt
 
@@ -113,3 +113,24 @@ def test_impedance_zero_current_not_calculable():
         v, i, sample_rate_hz=FS, voltage_channel="VA", current_channel="IA"
     )
     assert z.status == "NOT_CALCULABLE"
+
+
+def test_delta_loop_impedance_ab():
+    # Balanced line drop: VA=110∠0, VB=110∠-120, IA=10∠-30, IB=10∠-150 → ZAB ≈ 11∠30
+    va = _sine(110.0, 0)
+    vb = _sine(110.0, -120)
+    ia = _sine(10.0, -30)
+    ib = _sine(10.0, -150)
+    z = compute_delta_loop_impedance(
+        va,
+        ia,
+        vb,
+        ib,
+        sample_rate_hz=FS,
+        channels=["VA", "IA", "VB", "IB"],
+        nominal_frequency_hz=F0,
+        loop_label="AB",
+    )
+    assert z.status == "OK"
+    assert z.value["magnitude"] == pytest.approx(11.0, rel=0.08)
+    assert abs(z.value["angle_deg"] - 30.0) < 5.0

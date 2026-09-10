@@ -45,16 +45,34 @@ const STATUS_CLASS: Record<string, string> = {
   UNSUPPORTED_FORMAT: styles.error,
 };
 
+/** Shape cue so status is not color-only (industrial HMI / CVD). */
+function shapeFor(_status: string, cls: string): string {
+  if (cls === styles.error) return '■';
+  if (cls === styles.warn) return '▲';
+  if (cls === styles.ok) return '●';
+  if (cls === styles.running) return '◆';
+  if (cls === styles.pending) return '○';
+  return '–';
+}
+
 interface Props {
   status: EventStatus | ConsistencyStatus | string;
   label?: string;
+  title?: string;
 }
 
-export function StatusBadge({ status, label }: Props) {
+export function StatusBadge({ status, label, title }: Props) {
   const cls = STATUS_CLASS[status] ?? styles.neutral;
+  const text = label ?? status.replace(/_/g, ' ');
   return (
-    <span className={`${styles.badge} ${cls}`} title={explainStatus(status)}>
-      {label ?? status.replace(/_/g, ' ')}
+    <span
+      className={`${styles.badge} ${cls}`}
+      title={title || explainStatus(status)}
+    >
+      <span className={styles.shape} aria-hidden>
+        {shapeFor(status, cls)}
+      </span>
+      {text}
     </span>
   );
 }

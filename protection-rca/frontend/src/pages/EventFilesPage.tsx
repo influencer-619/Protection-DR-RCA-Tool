@@ -6,6 +6,7 @@ import type { EventFile, SettingSourceInfo } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { VerifyActiveSettingsCard } from '@/components/VerifyActiveSettingsCard';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT } from '@/utils/uploadAccept';
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -153,8 +154,8 @@ export function EventFilesPage() {
 
       {settingsHint && (
         <div className="alert alert-warn" role="status">
-          Settings file stored. Run analysis so Consistency / Protection can use the parameters.
-          After analysis, confirm the <strong>active group</strong> if the file left it NOT VERIFIED.
+          Settings file stored. Run analysis — uploaded settings are treated as{' '}
+          <strong>APPROVED</strong> automatically.
           <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -193,41 +194,64 @@ export function EventFilesPage() {
         />
       )}
 
-      <div
-        className={`dropzone ${dragging ? 'active' : ''}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-        onClick={() => document.getElementById('file-input')?.click()}
-      >
-        <strong>
-          {uploading ? 'Uploading…' : 'Drop COMTRADE / settings / SOE / PDF / ZIP here'}
-        </strong>
-        <div className="hint">
-          Settings: <span className="mono">*relay_settings*.json</span> or{' '}
-          <span className="mono">*settings*.json</span> with <span className="mono">elements</span> /{' '}
-          <span className="mono">protection_elements</span> · ZIP auto-extracts · click to browse
+      {files.length === 0 ? (
+        <div
+          className={`dropzone ${dragging ? 'active' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+          onClick={() => document.getElementById('file-input')?.click()}
+        >
+          <strong>
+            {uploading
+              ? 'Uploading…'
+              : 'Drop COMTRADE / settings / SOE / vendor package / PDF / ZIP here'}
+          </strong>
+          <div className="hint">{UPLOAD_ACCEPT_HINT}</div>
         </div>
-        <input
-          id="file-input"
-          type="file"
-          multiple
-          hidden
-          accept=".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip"
-          onChange={(e) => e.target.files && void upload(e.target.files)}
-        />
-      </div>
+      ) : null}
 
-      <div className="panel" style={{ marginTop: 16 }}>
+      <input
+        id="file-input"
+        type="file"
+        multiple
+        hidden
+        accept={UPLOAD_ACCEPT}
+        onChange={(e) => {
+          if (e.target.files) void upload(e.target.files);
+          e.target.value = '';
+        }}
+      />
+
+      <div className="panel" style={{ marginTop: files.length === 0 ? 16 : 0 }}>
+        <div
+          className="panel-header"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+        >
+          <span>Uploaded files{files.length ? ` (${files.length})` : ''}</span>
+          {files.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={uploading}
+              onClick={() => document.getElementById('file-input')?.click()}
+            >
+              {uploading ? 'Uploading…' : 'Add files'}
+            </button>
+          )}
+        </div>
         <div className="panel-body" style={{ padding: 0 }}>
           <table className="data-table">
             <thead>
               <tr>
                 <th>Filename</th>
                 <th>Source</th>
+                <th title="LOCAL or REMOTE end — applies to COMTRADE, settings, SOE, and other uploads">
+                  End
+                </th>
                 <th>Size</th>
                 <th>SHA-256</th>
                 <th>Uploaded</th>
@@ -237,8 +261,8 @@ export function EventFilesPage() {
             <tbody>
               {files.length === 0 && (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>
-                    No files yet. Drop COMTRADE CFG+DAT (or ZIP), settings export, and SOE/CSV above.
+                  <td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>
+                    No files yet. Use the drop zone above to upload COMTRADE, settings, and SOE/CSV.
                   </td>
                 </tr>
               )}
@@ -246,6 +270,21 @@ export function EventFilesPage() {
                 <tr key={f.id}>
                   <td className="mono">{f.original_filename}</td>
                   <td>{f.source_type}</td>
+                  <td>
+                    <select
+                      className="input"
+                      title="Which line end this file belongs to (LOCAL / REMOTE)"
+                      defaultValue={f.file_metadata?.end_label || 'LOCAL'}
+                      onChange={(e) => {
+                        if (!id) return;
+                        void api.setEndLabel(id, f.id, e.target.value).catch(() => {});
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <option value="LOCAL">LOCAL</option>
+                      <option value="REMOTE">REMOTE</option>
+                    </select>
+                  </td>
                   <td className="num">{formatBytes(f.file_size)}</td>
                   <td className="mono" title={f.sha256} style={{ fontSize: '0.72rem' }}>
                     {f.sha256.length > 20 ? `${f.sha256.slice(0, 20)}…` : f.sha256}

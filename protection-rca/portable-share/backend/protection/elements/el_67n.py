@@ -1,17 +1,19 @@
-"""Protection element 67N — Directional earth fault."""
+"""Protection element 67N — Directional earth fault (reuses 67 directional physics)."""
 
 from __future__ import annotations
 
-from protection.models import ElementContext, ProtectionAssessment, ProtectionElement, base_assess
+from protection.elements.el_67 import Element_67
+from protection.models import ElementContext, ProtectionAssessment, ProtectionElement
 
 
 class Element_67N(ProtectionElement):
     element_code = "67N"
 
     def assess(self, ctx: ElementContext) -> ProtectionAssessment:
-        fault_hint = bool(ctx.electrical.get("fault_indicated", False))
-        result = base_assess("67N", ctx, electrical_fault_hint=fault_hint)
+        result = Element_67().assess(ctx)
+        result.element = "67N"
         result.metadata["description"] = "Directional earth fault"
+        result.metadata["variant"] = "67N"
         return result
 
 

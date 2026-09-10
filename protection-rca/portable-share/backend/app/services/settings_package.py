@@ -125,6 +125,44 @@ def looks_like_settings_json(name: str, data: dict[str, Any]) -> bool:
     )
 
 
+def _auto_approve_uploads_enabled() -> bool:
+    try:
+        from app.core.config import get_settings
+
+        return bool(get_settings().auto_approve_uploaded_settings)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def apply_upload_auto_approval(meta: dict[str, Any]) -> dict[str, Any]:
+    """
+    Treat uploaded setting packages as APPROVED + active-group VERIFIED.
+
+    Skips only when the package explicitly marks rejection / draft / pending review.
+    """
+    out = dict(meta or {})
+    if not _auto_approve_uploads_enabled():
+        return out
+    approval = str(out.get("approval_status") or "").upper()
+    if approval in ("REJECTED", "DRAFT", "PENDING", "PENDING_REVIEW", "NOT_APPROVED"):
+        return out
+    out["approval_status"] = "APPROVED"
+    out["verified"] = True
+    src = str(out.get("source") or "")
+    if "APPROVED" not in src.upper() and src.upper() in (
+        "",
+        "RELAY_CONFIGURATION",
+        "UPLOADED",
+        "EVENT_SPECIFIC",
+        "EVENT_SPECIFIC_ACTIVE",
+    ):
+        out["source"] = "APPROVED_RELAY_BASE"
+    note = str(out.get("verification_note") or "").strip()
+    if not note:
+        out["verification_note"] = "Auto-approved on upload (auto_approve_uploaded_settings)"
+    return out
+
+
 def extract_settings_meta(data: dict[str, Any]) -> dict[str, Any]:
     ref = data.get("setting_reference") if isinstance(data.get("setting_reference"), dict) else {}
     source = (
@@ -160,7 +198,7 @@ def extract_settings_meta(data: dict[str, Any]) -> dict[str, Any]:
         or ref.get("verification_note")
         or ""
     )
-    return {
+    meta = {
         "source": str(source),
         "version": str(version),
         "group": str(group),
@@ -168,6 +206,7 @@ def extract_settings_meta(data: dict[str, Any]) -> dict[str, Any]:
         "approval_status": str(approval),
         "verification_note": str(note) if note else "",
     }
+    return apply_upload_auto_approval(meta)
 
 
 def flatten_element_params(elements: dict[str, Any]) -> list[tuple[str, str, Any]]:
@@ -321,12 +360,58 @@ def load_relay_settings_from_files(storage: Any, files: list[Any]) -> tuple[dict
         )
         return flat, records
 
-    # Text / CSV dumps
+    # Text / CSV / XML / SET dumps — prefer vendor ingest (SEL SET_ALL, XRIO, PCM600 CSV)
+    from app.services.settings_ingest import (
+        ingest_settings_bytes,
+        setting_records_from_ingested,
+    )
+
+    best: tuple[int, dict[str, Any], list[Any]] | None = None
+    for ef in files:
+        name = (ef.original_filename or "").lower()
+        st = (getattr(ef, "source_type", None) or "").upper()
+        is_settings = st == "SETTINGS" or any(
+            x in name for x in ("setting", "relay", "param", "set_all", "set_", "xrio")
+        )
+        if not is_settings and not name.endswith((".set", ".xrio")):
+            continue
+        if name.endswith((".cfg", ".dat", ".cff")) and "setting" not in name:
+            continue
+        if not name.endswith((".txt", ".csv", ".set", ".cfg", ".xml", ".xrio", ".json")):
+            continue
+        # JSON already handled above; skip unless SETTINGS-tagged and empty earlier
+        if name.endswith(".json"):
+            continue
+        try:
+            raw = storage.get_bytes(ef.storage_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read settings file %s: %s", name, exc)
+            continue
+        ingested = ingest_settings_bytes(raw, filename=ef.original_filename or name)
+        if ingested.get("status") != "OK":
+            continue
+        flat, records = setting_records_from_ingested(ingested)
+        score = len(records) + int(ingested.get("param_count") or 0)
+        if st == "SETTINGS":
+            score += 20
+        if best is None or score > best[0]:
+            best = (score, flat, records)
+
+    if best and best[2]:
+        logger.info(
+            "Loaded %d setting parameters via vendor ingest from %s",
+            len(best[2]),
+            best[1].get("_source_file"),
+        )
+        return best[1], best[2]
+
+    # Legacy KEY=VALUE text fallback
     out: dict[str, Any] = {}
     source_name = ""
     for ef in files:
         name = (ef.original_filename or "").lower()
-        if not any(x in name for x in ("setting", "relay", "param")):
+        st = (getattr(ef, "source_type", None) or "").upper()
+        if st != "SETTINGS" and not any(x in name for x in ("setting", "relay", "param")):
             continue
         if name.endswith((".cfg", ".dat", ".cff")) and "setting" not in name:
             continue
@@ -378,13 +463,15 @@ def load_relay_settings_from_files(storage: Any, files: list[Any]) -> tuple[dict
     if not out:
         return {}, []
 
-    meta = {
-        "source": "RELAY_CONFIGURATION",
-        "version": "UPLOADED",
-        "group": "Base",
-        "verified": False,
-        "approval_status": "NOT VERIFIED",
-    }
+    meta = apply_upload_auto_approval(
+        {
+            "source": "RELAY_CONFIGURATION",
+            "version": "UPLOADED",
+            "group": "Base",
+            "verified": False,
+            "approval_status": "NOT VERIFIED",
+        }
+    )
     out["_source_file"] = source_name
     out["_meta"] = meta
     records = []
@@ -399,16 +486,16 @@ def load_relay_settings_from_files(storage: Any, files: list[Any]) -> tuple[dict
         records.append(
             SettingRecord(
                 setting_id=f"upload-txt-{key}-{i}",
-                relay_id="NOT VERIFIED",
+                relay_id="UPLOADED",
                 setting_group="Base",
                 parameter=str(key),
                 value=val,
                 unit="",
                 enabled=True,
                 version="UPLOADED",
-                source=map_setting_source("RELAY_CONFIGURATION"),
-                approval_status="NOT VERIFIED",
-                verified=False,
+                source=map_setting_source(str(meta["source"])),
+                approval_status=str(meta["approval_status"]),
+                verified=bool(meta["verified"]),
                 element=element,
             )
         )

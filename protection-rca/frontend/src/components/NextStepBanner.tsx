@@ -19,8 +19,20 @@ export function deriveNextStep(opts: {
   jobStatus?: string | null;
   onAnalyse?: () => void;
   onConfirmSettings?: () => void;
+  /** True when COMTRADE exists but channel roles still UNKNOWN / incomplete. */
+  needsChannelMap?: boolean;
+  /** Prefer opening DR at inception after a successful analyse. */
+  preferDr?: boolean;
 }): NextStep | null {
-  const { eventId, lamps, analysisBusy, jobStatus, onAnalyse } = opts;
+  const {
+    eventId,
+    lamps,
+    analysisBusy,
+    jobStatus,
+    onAnalyse,
+    needsChannelMap,
+    preferDr,
+  } = opts;
   const byKey = Object.fromEntries(lamps.map((l) => [l.key, l]));
   const base = `/events/${eventId}`;
 
@@ -28,14 +40,14 @@ export function deriveNextStep(opts: {
     return {
       title: 'Analysis in progress',
       detail:
-        'Watch the progress checklist. When complete, start with Overview → Waveforms → Consistency.',
+        'Watch the progress checklist. When complete, open Summary for the verdict, then DR workspace.',
     };
   }
 
   if (jobStatus === 'FAILED') {
     return {
       title: 'Analysis failed',
-      detail: 'Check COMTRADE validation and uploaded files, then re-run analysis.',
+      detail: 'Fix COMTRADE / channel map / files, then re-run. Prior results may still be viewable.',
       to: `${base}/comtrade`,
       actionLabel: 'Re-run analysis',
       onAction: onAnalyse,
@@ -53,6 +65,15 @@ export function deriveNextStep(opts: {
     };
   }
 
+  if (needsChannelMap) {
+    return {
+      title: 'Assign channel roles',
+      detail: 'Map IA/IB/IC and VA/VB/VC so RMS, phasors, and fault typing use the right signals.',
+      to: `${base}/channel-map`,
+      actionLabel: 'Open channel map',
+    };
+  }
+
   if (jobStatus !== 'COMPLETED' && byKey.protection?.state === 'pending') {
     return {
       title: 'Run analysis',
@@ -66,9 +87,9 @@ export function deriveNextStep(opts: {
 
   if (byKey.settings?.state === 'warn') {
     return {
-      title: 'Approve settings file',
+      title: 'Settings loaded',
       detail:
-        'Settings are loaded but not APPROVED / VERIFIED. Approve the uploaded file (and confirm active group), or upload APPROVED_RELAY_BASE_SETTINGS.',
+        'Uploaded settings are treated as APPROVED automatically. Re-run analysis if consistency still looks stale.',
       to: `${base}/consistency`,
       actionLabel: 'Open Consistency',
     };
@@ -90,6 +111,15 @@ export function deriveNextStep(opts: {
       detail: 'Review which checks need settings or better data, then continue to RCA.',
       to: `${base}/consistency`,
       actionLabel: 'Open Consistency',
+    };
+  }
+
+  if (preferDr && jobStatus === 'COMPLETED') {
+    return {
+      title: 'Inspect waveforms in DR',
+      detail: 'Place cursors A/B at inception and trip, check phasors / R–X, then continue RCA.',
+      to: `${base}/dr`,
+      actionLabel: 'Open DR workspace',
     };
   }
 

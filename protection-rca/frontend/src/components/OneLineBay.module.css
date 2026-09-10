@@ -1,0 +1,84 @@
+.wrap {
+  margin-bottom: 12px;
+}
+
+.body {
+  padding-top: 8px;
+}
+
+.labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.svg {
+  width: 100%;
+  max-height: 120px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.bus {
+  stroke: var(--text-secondary);
+  stroke-width: 3;
+}
+
+.busbar {
+  fill: var(--accent);
+  opacity: 0.85;
+}
+
+.breaker {
+  fill: var(--bg-panel);
+  stroke: var(--text-primary);
+  stroke-width: 1.5;
+}
+
+.ct {
+  fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 2;
+}
+
+.relay {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.fault {
+  fill: var(--sev-critical);
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.faultLabel {
+  fill: var(--sev-critical);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.t {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-sans);
+}
+
+.tBold {
+  fill: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}

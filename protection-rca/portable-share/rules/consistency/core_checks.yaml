@@ -1,3 +1,5 @@
+# Base severities by check type. Runtime also adjusts by fault type / zone
+# (backend/consistency/severity.py — NERC MIDAS-inspired).
 version: "1.0.0"
 rules:
   - rule_id: CONS-ENABLED-PICKUP

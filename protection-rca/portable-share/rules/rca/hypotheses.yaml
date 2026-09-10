@@ -19,12 +19,12 @@ hypotheses:
   - id: EXTERNAL_LINE_FAULT
     required_for_confirmed:
       - fault_classified
-      - protection_operated_consistently
+      - protection_operated
       - current_increase_observed
   - id: INTERNAL_FEEDER_FAULT
     required_for_confirmed:
       - fault_classified
-      - protection_operated_consistently
+      - protection_operated
   - id: CABLE_FAULT
     required_for_confirmed:
       - fault_classified

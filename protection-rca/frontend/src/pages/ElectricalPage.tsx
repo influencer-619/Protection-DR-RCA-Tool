@@ -2,10 +2,29 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
 import type { Measurement } from '@/types';
+import { formatNumber, unitLabel } from '@/utils/formatElectrical';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { PhasorDiagram, type PhasorVector } from '@/components/PhasorDiagram';
+import { RXPlot } from '@/components/RXPlot';
+import { HarmonicsBars } from '@/components/HarmonicsBars';
+import { HarmonicsHeatmap } from '@/components/HarmonicsHeatmap';
+import { QuantitySideToggle } from '@/components/QuantitySideToggle';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { useQuantitySide } from '@/hooks/useQuantitySide';
+import {
+  classifyChannelSide,
+  detectAvailableSides,
+  filterMeasurementsBySide,
+  sideLabel,
+} from '@/utils/quantitySide';
+import { loadEventDistanceZones } from '@/utils/distanceZones';
+import {
+  filterImpedanceRowsForFault,
+  filterRxPointsForFault,
+  isRxLocusApplicable,
+  rxLocusEmptyHint,
+} from '@/utils/rxLocus';
 
 const PHASE_COLORS: Record<string, string> = {
   a: '#e07020',
@@ -53,7 +72,7 @@ function toPhasor(m: Measurement, idx: number): PhasorVector | null {
     label,
     mag,
     angleDeg: Number(angle),
-    unit: m.unit ?? undefined,
+    unit: unitLabel(m.unit, m.quantity) !== '—' ? unitLabel(m.unit, m.quantity) : undefined,
     color: colorFor(label, idx),
   };
 }
@@ -90,11 +109,11 @@ function MeasTable({ rows, title }: { rows: Measurement[]; title: string }) {
               <tr key={m.id}>
                 <td className="mono">{m.quantity}</td>
                 <td className="mono">{m.phase ?? '—'}</td>
-                <td className="num">{m.value?.toFixed?.(3) ?? m.value ?? '—'}</td>
+                <td className="num mono">{formatNumber(m.value)}</td>
                 <td className="num">
-                  {m.vector?.angle_deg != null ? `${m.vector.angle_deg.toFixed(1)}°` : '—'}
+                  {m.vector?.angle_deg != null ? `${Number(m.vector.angle_deg).toFixed(1)}°` : '—'}
                 </td>
-                <td>{m.unit ?? '—'}</td>
+                <td className="mono">{unitLabel(m.unit, m.quantity)}</td>
                 <td className="mono">{m.algorithm ?? '—'}</td>
                 <td>{m.quality ? <DataQualityBadge quality={m.quality} /> : '—'}</td>
               </tr>
@@ -108,7 +127,8 @@ function MeasTable({ rows, title }: { rows: Measurement[]; title: string }) {
 
 export function ElectricalPage() {
   const { id } = useParams<{ id: string }>();
-  const { analysisRevision } = useEventOrWorkspace(id);
+  const { analysisRevision, event } = useEventOrWorkspace(id);
+  const { mode: quantitySide, setMode: setQuantitySide } = useQuantitySide(id);
   const [meas, setMeas] = useState<Measurement[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -122,18 +142,62 @@ export function ElectricalPage() {
       .finally(() => setLoading(false));
   }, [id, analysisRevision]);
 
-  const rms = useMemo(
-    () => meas.filter((m) => m.quantity.includes('_rms') || m.quantity === 'freq'),
+  const sides = useMemo(
+    () =>
+      detectAvailableSides(
+        meas.map((m) => ({
+          name: m.quantity.replace(/_(rms|phasor|peak)$/i, ''),
+          units: m.unit,
+        })),
+      ),
     [meas],
   );
-  const phasors = useMemo(() => meas.filter((m) => m.quantity.includes('_phasor')), [meas]);
+  const dualSide = sides.hasPrimary && sides.hasSecondary;
+  const viewMode = dualSide ? quantitySide : 'both';
+  const filtered = useMemo(
+    () => filterMeasurementsBySide(meas, viewMode),
+    [meas, viewMode],
+  );
+
+  const rms = useMemo(
+    () => filtered.filter((m) => m.quantity.includes('_rms') || m.quantity === 'freq'),
+    [filtered],
+  );
+  const phasors = useMemo(
+    () => filtered.filter((m) => m.quantity.includes('_phasor')),
+    [filtered],
+  );
   const sequences = useMemo(
-    () => meas.filter((m) => ['I1', 'I2', 'I0', 'V1', 'V2', 'V0'].includes(m.quantity)),
-    [meas],
+    () => filtered.filter((m) => ['I1', 'I2', 'I0', 'V1', 'V2', 'V0'].includes(m.quantity)),
+    [filtered],
+  );
+
+  const faultType = useMemo(() => {
+    const extra = (event?.extra || {}) as Record<string, unknown>;
+    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
+    const fc = (ra.fault_classification || {}) as Record<string, unknown>;
+    return (
+      (typeof fc.fault_type === 'string' && fc.fault_type) ||
+      event?.fault_type ||
+      null
+    );
+  }, [event]);
+
+  const impedanceAll = useMemo(
+    () => filtered.filter((m) => m.quantity.startsWith('Z_') || m.quantity.startsWith('R_')),
+    [filtered],
   );
   const impedance = useMemo(
-    () => meas.filter((m) => m.quantity.startsWith('Z_') || m.quantity.startsWith('R_')),
-    [meas],
+    () => filterImpedanceRowsForFault(impedanceAll, faultType),
+    [impedanceAll, faultType],
+  );
+  const power = useMemo(
+    () =>
+      filtered.filter((m) =>
+        /^(P_|Q_|S_|pf_|power)/i.test(m.quantity) ||
+        ['P', 'Q', 'S', 'PF'].includes(m.quantity.toUpperCase()),
+      ),
+    [filtered],
   );
 
   const currentPhasors = useMemo(() => {
@@ -162,6 +226,121 @@ export function ElectricalPage() {
     [impedance],
   );
 
+  const rxPoints = useMemo(() => {
+    const colors = ['#e07020', '#2aaa55', '#2a8fd4', '#c47a00'];
+    return impedance
+      .map((m, idx) => {
+        const r =
+          typeof m.vector?.R === 'number'
+            ? Number(m.vector.R)
+            : m.vector?.mag != null && m.vector?.angle_deg != null
+              ? Number(m.vector.mag) * Math.cos((Number(m.vector.angle_deg) * Math.PI) / 180)
+              : null;
+        const x =
+          typeof m.vector?.X === 'number'
+            ? Number(m.vector.X)
+            : m.vector?.mag != null && m.vector?.angle_deg != null
+              ? Number(m.vector.mag) * Math.sin((Number(m.vector.angle_deg) * Math.PI) / 180)
+              : null;
+        if (r == null || x == null || Number.isNaN(r) || Number.isNaN(x)) return null;
+        const label = String(m.phase || m.quantity || '')
+          .replace(/^Z_/i, 'Z')
+          .replace(/^phase_/i, 'Z');
+        return {
+          id: String(m.quantity || m.id),
+          label: label.startsWith('Z') ? label : `Z${label}`,
+          r,
+          x,
+          color: colors[idx % colors.length],
+        };
+      })
+      .filter((p): p is NonNullable<typeof p> => !!p);
+  }, [impedance]);
+
+  const distanceApplicable = useMemo(() => {
+    const extra = (event?.extra || {}) as Record<string, unknown>;
+    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
+    const fc = (ra.fault_classification || {}) as Record<string, unknown>;
+    const ev = (fc.evidence || {}) as Record<string, unknown>;
+    const dist = (fc.distance || {}) as Record<string, unknown>;
+    return (
+      ev.distance_applicable === true &&
+      String(dist.status || '').toUpperCase() !== 'NOT_APPLICABLE'
+    );
+  }, [event]);
+
+  const rxLocusOk = isRxLocusApplicable(distanceApplicable, faultType);
+  const rxLocusPoints = useMemo(
+    () => (rxLocusOk ? filterRxPointsForFault(rxPoints, faultType) : []),
+    [rxLocusOk, rxPoints, faultType],
+  );
+
+  const zones = useMemo(() => {
+    if (!rxLocusOk) return [];
+    return loadEventDistanceZones((event?.extra || {}) as Record<string, unknown>);
+  }, [rxLocusOk, event]);
+
+  const harmonicSeries = useMemo(() => {
+    const extra = (event?.extra || {}) as Record<string, unknown>;
+    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
+    const ea = (ra.electrical_analysis || {}) as Record<string, unknown>;
+    const harms = (ea.harmonics || {}) as Record<
+      string,
+      {
+        value?: { harmonics_rms?: Record<string, number>; thd_percent?: number };
+        status?: string;
+        unit?: string;
+      }
+    >;
+    const colors = ['#e07020', '#2aaa55', '#2a8fd4', '#c47a00'];
+    return Object.entries(harms)
+      .filter(([, v]) => v && v.status === 'OK' && v.value?.harmonics_rms)
+      .filter(([ch, v]) => {
+        if (viewMode === 'both') return true;
+        const side = classifyChannelSide(ch, v.unit);
+        if (side === 'unknown') return viewMode === 'secondary';
+        return side === viewMode;
+      })
+      .slice(0, 4)
+      .map(([ch, v], i) => ({
+        channel: ch,
+        harmonics: v.value!.harmonics_rms!,
+        thdPercent: v.value?.thd_percent ?? null,
+        color: colors[i % colors.length],
+        unit: unitLabel(v.unit, ch) !== '—' ? unitLabel(v.unit, ch) : undefined,
+      }));
+  }, [event, viewMode]);
+
+  const harmonicHeatmap = useMemo(() => {
+    const extra = (event?.extra || {}) as Record<string, unknown>;
+    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
+    const ea = (ra.electrical_analysis || {}) as Record<string, unknown>;
+    const hm = (ea.harmonics_heatmap || {}) as Record<
+      string,
+      {
+        status?: string;
+        times_s?: number[];
+        harmonics_rms?: Record<string, number[]>;
+        unit?: string;
+      }
+    >;
+    return Object.entries(hm)
+      .filter(([, v]) => v?.status === 'OK' && (v.times_s?.length || 0) > 0)
+      .filter(([ch, v]) => {
+        if (viewMode === 'both') return true;
+        const side = classifyChannelSide(ch, v.unit);
+        if (side === 'unknown') return viewMode === 'secondary';
+        return side === viewMode;
+      })
+      .slice(0, 3)
+      .map(([ch, v]) => ({
+        channel: ch,
+        times_s: v.times_s || [],
+        harmonics_rms: v.harmonics_rms || {},
+        unit: unitLabel(v.unit, ch) !== '—' ? unitLabel(v.unit, ch) : undefined,
+      }));
+  }, [event, viewMode]);
+
   if (loading) return <div className="empty-state">Loading electrical quantities…</div>;
 
   if (!meas.length) {
@@ -170,12 +349,12 @@ export function ElectricalPage() {
         title="No electrical quantities yet"
         description="RMS, phasors, and sequence components from COMTRADE analogs. Impedance is shown when calculated — it is optional context, not required for every scheme."
         tips={[
-          'Confirm current/voltage channels on COMTRADE / Waveforms',
+          'Confirm current/voltage channels on Channel map / Waveforms',
           'Run analysis after a successful parse',
         ]}
         actions={[
+          { label: 'Open Channel map', to: id ? `/events/${id}/channel-map` : '/events' },
           { label: 'Open Waveforms', to: id ? `/events/${id}/waveforms` : '/events' },
-          { label: 'Open COMTRADE', to: id ? `/events/${id}/comtrade` : '/events' },
         ]}
       />
     );
@@ -193,10 +372,23 @@ export function ElectricalPage() {
         <div>
           <h1 style={{ fontSize: '1.1rem' }}>Electrical quantities</h1>
           <p className="subtitle">
-            Phasor diagrams · RMS · sequence · impedance · {meas.length} measurements
+            Phasors · R–X · harmonics · RMS · sequence · {filtered.length} measurements
+            {dualSide ? ` · ${sideLabel(quantitySide)}` : ''}
           </p>
         </div>
+        <QuantitySideToggle
+          mode={quantitySide}
+          onChange={setQuantitySide}
+          show={dualSide}
+        />
       </div>
+
+      {dualSide && quantitySide === 'primary' && (
+        <div className="alert alert-info">
+          Primary channel measurements (kA/kV / `*_PRI`). Sequence and Z from analysis stay on the
+          Secondary view — switch there for I0/I2 and impedance.
+        </div>
+      )}
 
       {hasDiagram && (
         <div className="two-col">
@@ -213,20 +405,28 @@ export function ElectricalPage() {
         </div>
       )}
 
-      {(sequencePhasors.length > 0 || impedancePhasors.length > 0) && (
+      {(sequencePhasors.length > 0 || impedancePhasors.length > 0 || rxLocusOk) && (
         <div className="two-col">
           <PhasorDiagram
             title="Sequence components"
             vectors={sequencePhasors}
             emptyHint="Sequence values present without angles — see table below."
           />
-          <PhasorDiagram
-            title="Impedance vectors"
-            vectors={impedancePhasors}
-            emptyHint="Impedance magnitude only (no angle) — see table."
+          <RXPlot
+            title={
+              rxLocusOk
+                ? `R–X locus (${faultType || 'faulted loop'})`
+                : 'R–X locus'
+            }
+            points={rxLocusPoints}
+            zones={zones}
+            emptyHint={rxLocusEmptyHint(distanceApplicable, faultType)}
           />
         </div>
       )}
+
+      <HarmonicsBars title="Harmonic bars (fault window)" series={harmonicSeries} />
+      <HarmonicsHeatmap channels={harmonicHeatmap} />
 
       {!hasDiagram && (
         <div className="alert alert-info">
@@ -238,7 +438,15 @@ export function ElectricalPage() {
       <MeasTable rows={rms} title="RMS / frequency" />
       <MeasTable rows={phasors} title="Phasors" />
       <MeasTable rows={sequences} title="Sequence components" />
-      <MeasTable rows={impedance} title="Impedance / fault resistance" />
+      <MeasTable rows={power} title="Power (P / Q / S)" />
+      <MeasTable
+        rows={impedance}
+        title={
+          faultType
+            ? `Impedance / fault resistance (${faultType} loop)`
+            : 'Impedance / fault resistance'
+        }
+      />
     </div>
   );
 }

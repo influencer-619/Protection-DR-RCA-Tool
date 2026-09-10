@@ -1,0 +1,15 @@
+id: line_diff_distance_backup
+label: Line differential with distance backup (87L + 21)
+description: 87L primary; 21 enabled as backup — location applicable when Z1/line params exist.
+zone: line
+distance_applicable: true
+primary_elements: [87L]
+supporting_elements: [21, 21G, 21P, 85]
+required_digitals: []
+evidence_tokens:
+  - scheme_profile_line_diff_backup
+  - scheme_line_diff_present
+rca_hypotheses:
+  - EXTERNAL_LINE_FAULT
+  - CT_SATURATION
+  - COMMUNICATION_FAILURE

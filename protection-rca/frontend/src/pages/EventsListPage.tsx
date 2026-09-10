@@ -3,9 +3,11 @@ import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-do
 import { format } from 'date-fns';
 import { api } from '@/services/api';
 import type { Event } from '@/types';
-import { StatusBadge } from '@/components/StatusBadge';
+import { EventStatusCell } from '@/components/EventStatusCell';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
+import { getLastEvent } from '@/utils/recentEvents';
 
 const QUEUE_LABELS: Record<string, string> = {
   awaiting_analysis: 'Awaiting analysis',
@@ -67,17 +69,17 @@ export function EventsListPage() {
   }, [events, filter]);
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Event | null>(null);
+  const last = getLastEvent();
 
-  const onDelete = async (ev: Event) => {
-    const label = ev.event_id || ev.id;
-    const ok = window.confirm(
-      `Delete event ${label}?\n\nThis removes the event and its analysis results from the database. The action is audited. Original uploaded file blobs remain in storage (immutable).`,
-    );
-    if (!ok) return;
+  const onDelete = async () => {
+    const ev = pendingDelete;
+    if (!ev) return;
     setDeletingId(ev.id);
     try {
       await api.deleteEvent(ev.id);
       setEvents((prev) => prev.filter((e) => e.id !== ev.id));
+      setPendingDelete(null);
     } catch (err) {
       window.alert(err instanceof Error ? err.message : 'Failed to delete event');
     } finally {
@@ -112,7 +114,15 @@ export function EventsListPage() {
               : 'Disturbance records pending analysis and review'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {last && (
+            <Link to={`/events/${last.id}/summary`} className="btn btn-primary">
+              Continue {last.event_id}
+            </Link>
+          )}
+          <Link to="/events/compare" className="btn">
+            Compare
+          </Link>
           {queue && (
             <button
               type="button"
@@ -227,7 +237,7 @@ export function EventsListPage() {
               {filtered.map((ev) => (
                 <tr key={ev.id}>
                   <td>
-                    <Link to={`/events/${ev.id}/overview`} className="mono">
+                    <Link to={`/events/${ev.id}/summary`} className="mono">
                       {ev.event_id}
                     </Link>
                   </td>
@@ -253,7 +263,7 @@ export function EventsListPage() {
                   </td>
                   <td className="mono">{ev.fault_type ?? '—'}</td>
                   <td>
-                    <StatusBadge status={ev.status} />
+                    <EventStatusCell event={ev} />
                   </td>
                   <td>
                     {ev.severity_summary ? (
@@ -274,7 +284,7 @@ export function EventsListPage() {
                       type="button"
                       className="btn btn-sm btn-danger"
                       disabled={deletingId === ev.id}
-                      onClick={() => void onDelete(ev)}
+                      onClick={() => setPendingDelete(ev)}
                       title="Delete event"
                     >
                       {deletingId === ev.id ? 'Deleting…' : 'Delete'}
@@ -286,6 +296,17 @@ export function EventsListPage() {
           </table>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="Delete event?"
+        message={`Delete event ${pendingDelete?.event_id}?\n\nThis removes the event and its analysis results from the database. The action is audited.`}
+        confirmLabel="Delete"
+        danger
+        busy={!!deletingId}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => void onDelete()}
+      />
 
       {showCreate && (
         <div className="modal-backdrop" onClick={() => setShowCreate(false)}>

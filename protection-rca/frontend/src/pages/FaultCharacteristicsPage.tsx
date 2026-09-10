@@ -5,6 +5,7 @@ import type { FaultCharacteristics } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { formatElectrical } from '@/utils/formatElectrical';
 
 function fmtMs(t_us: number | null | undefined): string {
   if (t_us == null) return '—';
@@ -54,9 +55,8 @@ export function FaultCharacteristicsPage() {
   }
 
   const c = data.currents || {};
-  const distApplicable =
-    (data as { distance_applicable?: boolean }).distance_applicable === true ||
-    data.distance_km != null;
+  const iUnit = data.current_unit || 'A';
+  const distApplicable = data.distance_applicable === true;
   const hasLocation =
     distApplicable &&
     (data.distance_km != null ||
@@ -100,7 +100,7 @@ export function FaultCharacteristicsPage() {
         <div className="kpi-card">
           <div className="kpi-label">Location</div>
           <div className="kpi-value mono" style={{ fontSize: hasLocation || !distApplicable ? '0.85rem' : undefined }}>
-            {data.distance_km != null
+            {distApplicable && data.distance_km != null
               ? `${fmtNum(data.distance_km)} km`
               : distApplicable
                 ? hasLocation
@@ -172,7 +172,12 @@ export function FaultCharacteristicsPage() {
               {(['Ia', 'Ib', 'Ic'] as const).map((k) => (
                 <tr key={k}>
                   <td className="mono">{k}</td>
-                  <td className="mono">{fmtNum(c[k])}</td>
+                  <td className="mono">
+                    {formatElectrical(c[k] as number | null | undefined, iUnit, {
+                      roleHint: 'I',
+                      digits: 2,
+                    })}
+                  </td>
                   <td className="mono">
                     {c[`${k}_elevated` as keyof typeof c] == null
                       ? '—'
@@ -184,12 +189,22 @@ export function FaultCharacteristicsPage() {
               ))}
               <tr>
                 <td className="mono">I0</td>
-                <td className="mono">{fmtNum(data.sequences?.I0)}</td>
+                <td className="mono">
+                  {formatElectrical(data.sequences?.I0 as number | null | undefined, iUnit, {
+                    roleHint: 'I',
+                    digits: 2,
+                  })}
+                </td>
                 <td>—</td>
               </tr>
               <tr>
                 <td className="mono">I2</td>
-                <td className="mono">{fmtNum(data.sequences?.I2)}</td>
+                <td className="mono">
+                  {formatElectrical(data.sequences?.I2 as number | null | undefined, iUnit, {
+                    roleHint: 'I',
+                    digits: 2,
+                  })}
+                </td>
                 <td>—</td>
               </tr>
             </tbody>

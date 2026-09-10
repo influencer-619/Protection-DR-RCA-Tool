@@ -98,6 +98,37 @@
   background: var(--bg-elevated);
 }
 
+.tabGroups {
+  display: flex;
+  gap: 4px;
+  padding: 8px var(--content-pad-x) 0;
+  background: var(--bg-elevated);
+}
+
+.groupBtn {
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.groupBtn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.groupActive {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
 .tabs {
   display: flex;
   gap: 2px;

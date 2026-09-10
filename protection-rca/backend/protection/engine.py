@@ -93,17 +93,26 @@ def _match_element_from_channel(name: str) -> Optional[str]:
 
 def observations_from_timeline(
     timeline: list[TimelineEvent],
+    *,
+    digital_map: Optional[dict[str, Any]] = None,
 ) -> dict[str, ElementObservation]:
-    """Infer per-element pickup/trip from timeline digital events."""
+    """Infer per-element pickup/trip from timeline digital events / DR targets."""
+    from protection.digital_targets import resolve_digital_target
+
     obs: dict[str, ElementObservation] = {}
     for ev in timeline:
         src = ev.source
         channel = ""
         if src.startswith("digital:"):
             channel = src.split(":", 1)[1]
-        code = _match_element_from_channel(channel) if channel else None
+        meta = ev.metadata if isinstance(ev.metadata, dict) else {}
+        code = str(meta.get("element") or "").upper().strip() or None
+        if not code and channel:
+            _, mapped = resolve_digital_target(channel, digital_map=digital_map)
+            code = mapped
+        if not code and channel:
+            code = _match_element_from_channel(channel)
         if code is None:
-            # Generic pickup/trip without element id → skip assignment
             continue
         o = obs.setdefault(code, ElementObservation(element=code))
         if channel and channel not in o.channel_evidence:
@@ -128,6 +137,7 @@ def elements_from_uploaded_files(
     timeline: list[TimelineEvent],
     setting_candidates: list[SettingRecord],
     digital_channel_names: Optional[list[str]] = None,
+    digital_map: Optional[dict[str, Any]] = None,
 ) -> list[str]:
     """ANSI codes to assess from uploaded files.
 
@@ -135,6 +145,8 @@ def elements_from_uploaded_files(
     exist, settings-only codes without a matching digital are skipped — those
     cannot be consistency-checked and only create UNVERIFIABLE noise.
     """
+    from protection.digital_targets import resolve_digital_target
+
     settings_codes: set[str] = set()
     for rec in setting_candidates:
         el = (rec.element or "").strip().upper()
@@ -149,12 +161,12 @@ def elements_from_uploaded_files(
 
     digital_codes: set[str] = set()
     for name in names:
-        code = _match_element_from_channel(str(name))
+        _, mapped = resolve_digital_target(str(name), digital_map=digital_map)
+        code = mapped or _match_element_from_channel(str(name))
         if code and get_element(code) is not None:
             digital_codes.add(code)
 
     if digital_codes:
-        # Digitals drive the check set; keep settings∩digitals when both exist
         overlap = settings_codes & digital_codes
         return sorted(overlap or digital_codes)
     return sorted(settings_codes)
@@ -163,16 +175,20 @@ def elements_from_uploaded_files(
 def _seed_observations_from_channels(
     obs_map: dict[str, ElementObservation],
     digital_channel_names: Optional[list[str]],
+    *,
+    digital_map: Optional[dict[str, Any]] = None,
 ) -> None:
     """If a digital channel exists for an element but never asserted, treat as not operated."""
+    from protection.digital_targets import resolve_digital_target
+
     for name in digital_channel_names or []:
-        code = _match_element_from_channel(str(name))
+        _, mapped = resolve_digital_target(str(name), digital_map=digital_map)
+        code = mapped or _match_element_from_channel(str(name))
         if not code:
             continue
         o = obs_map.setdefault(code, ElementObservation(element=code))
         if name and name not in o.channel_evidence:
             o.channel_evidence.append(str(name))
-        # Channel present in file → default False unless timeline set True
         if o.pickup is None:
             o.pickup = False
         if o.trip is None:
@@ -194,18 +210,22 @@ class ProtectionRuleEngine:
         electrical: Optional[dict[str, Any]] = None,
         elements: Optional[list[str]] = None,
         digital_channel_names: Optional[list[str]] = None,
+        digital_map: Optional[dict[str, Any]] = None,
     ) -> ProtectionEngineResult:
         electrical = electrical or {}
-        obs_map = observations_from_timeline(timeline)
-        _seed_observations_from_channels(obs_map, digital_channel_names)
-        # Also seed from timeline digital sources not in the channel list
+        obs_map = observations_from_timeline(timeline, digital_map=digital_map)
+        _seed_observations_from_channels(
+            obs_map, digital_channel_names, digital_map=digital_map
+        )
         timeline_names = [
             (getattr(ev, "source", "") or "").split(":", 1)[1]
             for ev in timeline
             if (getattr(ev, "source", "") or "").startswith("digital:")
         ]
         if timeline_names:
-            _seed_observations_from_channels(obs_map, timeline_names)
+            _seed_observations_from_channels(
+                obs_map, timeline_names, digital_map=digital_map
+            )
         result = ProtectionEngineResult()
 
         if not self.rule_configs:
@@ -214,12 +234,11 @@ class ProtectionRuleEngine:
         if elements is not None:
             codes = list(elements)
         else:
-            # Only elements present in uploaded settings / COMTRADE digitals —
-            # never the full ANSI catalog (avoids mass UNVERIFIABLE noise).
             codes = elements_from_uploaded_files(
                 timeline=timeline,
                 setting_candidates=setting_candidates,
                 digital_channel_names=digital_channel_names,
+                digital_map=digital_map,
             )
             if not codes:
                 result.limitations.append(

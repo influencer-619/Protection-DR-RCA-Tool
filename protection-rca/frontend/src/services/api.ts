@@ -208,6 +208,7 @@ export const api = {
       feeder?: string;
       nominal_voltage_kv?: number | null;
       nominal_frequency_hz?: number | null;
+      extra?: Record<string, unknown>;
     },
   ): Promise<Event> {
     try {
@@ -216,6 +217,106 @@ export const api = {
     } catch (err) {
       throw apiError(err, 'Failed to update event');
     }
+  },
+
+  async getChannelMap(eventId: string): Promise<{
+    event_id: string;
+    channel_map: Record<string, string>;
+    inferred_roles: Record<string, string>;
+    channels: Array<{
+      name: string;
+      phase?: string | null;
+      units?: string | null;
+      mapped_signal?: string | null;
+      inferred?: string;
+      assigned?: string;
+    }>;
+    valid_roles: string[];
+  }> {
+    const { data } = await apiClient.get(`/dr/events/${eventId}/channel-map`);
+    return data;
+  },
+
+  async putChannelMap(eventId: string, channel_map: Record<string, string>) {
+    const { data } = await apiClient.put(`/dr/events/${eventId}/channel-map`, { channel_map });
+    return data;
+  },
+
+  async getDigitalMap(eventId: string): Promise<{
+    event_id: string;
+    digital_map: Record<string, { role: string; element: string }>;
+    channels: Array<{
+      name: string;
+      phase?: string | null;
+      inferred_role?: string;
+      inferred_element?: string | null;
+      assigned_role?: string;
+      assigned_element?: string | null;
+    }>;
+    valid_roles: string[];
+    valid_elements: string[];
+  }> {
+    const { data } = await apiClient.get(`/dr/events/${eventId}/digital-map`);
+    return data;
+  },
+
+  async putDigitalMap(
+    eventId: string,
+    digital_map: Record<string, { role: string; element: string }>,
+  ) {
+    const { data } = await apiClient.put(`/dr/events/${eventId}/digital-map`, { digital_map });
+    return data;
+  },
+
+  async getComtradeEnds(eventId: string) {
+    const { data } = await apiClient.get(`/dr/events/${eventId}/comtrade-ends`);
+    return data as {
+      ends: Array<Record<string, unknown>>;
+      local?: Record<string, unknown>;
+      remote?: Record<string, unknown>;
+      computed_sync_offset_us?: number | null;
+      multi_end?: Record<string, unknown>;
+    };
+  },
+
+  async setEndLabel(eventId: string, event_file_id: string, end_label: string) {
+    const { data } = await apiClient.post(`/dr/events/${eventId}/end-label`, {
+      event_file_id,
+      end_label,
+    });
+    return data;
+  },
+
+  async putMultiEnd(
+    eventId: string,
+    body: {
+      local_comtrade_file_id?: string;
+      remote_comtrade_file_id?: string;
+      sync_offset_us?: number;
+    },
+  ) {
+    const { data } = await apiClient.put(`/dr/events/${eventId}/multi-end`, body);
+    return data;
+  },
+
+  async ingestSettingsFile(eventId: string, file: File) {
+    const form = new FormData();
+    form.append('file', file);
+    const { data } = await apiClient.post(`/dr/events/${eventId}/settings-ingest`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return data;
+  },
+
+  async scanWatchFolder(folder?: string) {
+    const { data } = await apiClient.get('/dr/watch/scan', {
+      params: folder ? { folder } : undefined,
+    });
+    return data as {
+      status: string;
+      candidates?: Array<{ path: string; name: string; size: number }>;
+      reason?: string;
+    };
   },
 
   async detectComtrade(files: File[]): Promise<Record<string, unknown>> {
@@ -314,10 +415,14 @@ export const api = {
     }
   },
 
-  async getWaveforms(eventId: string): Promise<{
+  async getWaveforms(
+    eventId: string,
+    opts?: { comtradeFileId?: string },
+  ): Promise<{
     channels: WaveformChannelData[];
     markers: WaveformMarker[];
     note?: string | null;
+    comtrade_file_id?: string;
   }> {
     const { data } = await apiClient.get<{
       channels?: Array<{
@@ -325,13 +430,19 @@ export const api = {
         channel_type: string;
         phase?: string | null;
         units?: string | null;
+        ps?: string | null;
+        primary?: number | null;
+        secondary?: number | null;
         sample_count?: number | null;
         samples?: number[] | null;
         timestamps_us?: number[] | null;
       }>;
       markers?: WaveformMarker[];
       note?: string | null;
-    }>(`/events/${eventId}/waveforms`);
+      comtrade_file_id?: string;
+    }>(`/events/${eventId}/waveforms`, {
+      params: opts?.comtradeFileId ? { comtrade_file_id: opts.comtradeFileId } : undefined,
+    });
 
     const channels: WaveformChannelData[] = (data.channels || [])
       .filter((c) => Array.isArray(c.samples) && c.samples.length > 0)
@@ -344,7 +455,7 @@ export const api = {
         return {
           channel: {
             id: `${c.channel_type}-${c.name}-${idx}`,
-            comtrade_file_id: '',
+            comtrade_file_id: data.comtrade_file_id || '',
             channel_index: idx,
             channel_type: (c.channel_type === 'DIGITAL' ? 'DIGITAL' : 'ANALOG') as
               | 'ANALOG'
@@ -352,6 +463,9 @@ export const api = {
             name: c.name,
             phase: c.phase,
             units: c.units,
+            ps: c.ps ?? null,
+            primary: c.primary ?? null,
+            secondary_ratio: c.secondary ?? null,
           },
           samples,
           time_us,
@@ -362,6 +476,7 @@ export const api = {
       channels,
       markers: data.markers || [],
       note: data.note,
+      comtrade_file_id: data.comtrade_file_id,
     };
   },
 
@@ -428,6 +543,26 @@ export const api = {
     );
     if (Array.isArray(data)) return data;
     return data.hypotheses ?? [];
+  },
+
+  async getCauseEvidence(eventId: string): Promise<{
+    event_id: string;
+    items: Array<{ token: string; source?: string; note?: string | null }>;
+    tag_choices: Array<{ token: string; label: string }>;
+    asset_type?: string | null;
+    enrichment?: Record<string, unknown>;
+    scheme?: Record<string, unknown>;
+  }> {
+    const { data } = await apiClient.get(`/events/${eventId}/cause-evidence`);
+    return data;
+  },
+
+  async putCauseEvidence(
+    eventId: string,
+    body: { tokens?: string[]; items?: Array<{ token: string; note?: string }>; notes?: string },
+  ) {
+    const { data } = await apiClient.put(`/events/${eventId}/cause-evidence`, body);
+    return data;
   },
 
   async getEvidence(eventId: string): Promise<EvidenceItem[]> {

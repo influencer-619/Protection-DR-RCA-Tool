@@ -2,6 +2,60 @@
   max-width: 1400px;
 }
 
+.inboxHero {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px 20px;
+  align-items: center;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-elevated);
+  border-radius: 2px;
+}
+
+.inboxLabel {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.inboxLine {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+
+.inboxMuted {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.inboxActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recentRow {
+  margin-top: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.recentRow a {
+  color: var(--accent);
+}
+
 .kpiClick {
   cursor: pointer;
   text-align: left;

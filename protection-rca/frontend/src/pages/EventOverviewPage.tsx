@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 import { api } from '@/services/api';
 import type {
@@ -14,7 +14,9 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { SettingSourceBanner } from '@/components/SettingSourceBanner';
 import { VerifyActiveSettingsCard } from '@/components/VerifyActiveSettingsCard';
 import { PlantLabelsEditor } from '@/components/PlantLabelsEditor';
+import { OneLineBay } from '@/components/OneLineBay';
 import { formatOperatedElements, filterDistanceLimitations, isDistanceApplicable } from '@/utils/schemeContext';
+import { humanizeEvidenceToken } from '@/utils/evidenceLabels';
 
 function notCalc(v: unknown, label = 'NOT CALCULABLE'): string {
   if (v == null || v === '' || v === undefined) return label;
@@ -52,6 +54,7 @@ function faultLoopZ(fault: FaultClassification | null): {
 
 export function EventOverviewPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { event, reload, applyEvent, analysisRevision } = useEventOrWorkspace(id);
   const [fault, setFault] = useState<FaultClassification | null>(null);
   const [rca, setRca] = useState<RcaHypothesis[]>([]);
@@ -173,6 +176,23 @@ export function EventOverviewPage() {
             applyEvent(updated);
             void reload();
           }}
+        />
+      )}
+
+      {event && id && (
+        <OneLineBay
+          substation={event.substation_name || (plantExtra.substation_name as string)}
+          bay={event.bay_name || (plantExtra.bay_name as string)}
+          relay={event.relay_tag || (plantExtra.relay_tag as string)}
+          feeder={event.feeder}
+          faultType={event.fault_type}
+          distanceKm={distanceContext ? fault?.distance_km : null}
+          distanceApplicable={distanceContext}
+          schemeHint={
+            protection.find((p) => p.asserted && /\b87/i.test(`${p.element} ${p.function_code}`))
+              ?.element || null
+          }
+          onOpenDr={() => navigate(`/events/${id}/dr`)}
         />
       )}
 
@@ -420,8 +440,8 @@ export function EventOverviewPage() {
                       <tr>
                         <td>Location / Z</td>
                         <td style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                          Not applicable for this case (no distance element / location inputs).
-                          See Protection and Electrical tabs for operated functions and quantities.
+                          Not applicable (no distance operate/backup or line-location inputs for this scheme).
+                          See Protection and Electrical tabs.
                         </td>
                       </tr>
                     )}
@@ -463,8 +483,9 @@ export function EventOverviewPage() {
             <h3 style={{ margin: '0 0 8px' }}>{primary.title}</h3>
             <p style={{ margin: 0, color: 'var(--text-secondary)' }}>{primary.statement}</p>
             {missingFromExtra.length > 0 && (
-              <div className="alert alert-warn" style={{ marginTop: 12 }}>
-                Missing evidence: {missingFromExtra.join('; ')}
+              <div className="alert alert-info" style={{ marginTop: 12 }}>
+                Missing evidence for full confirmation:{' '}
+                {missingFromExtra.map(humanizeEvidenceToken).join('; ')}
               </div>
             )}
           </div>

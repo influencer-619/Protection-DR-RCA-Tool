@@ -1,10 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
 import type { WaveformChannelData, WaveformMarker } from '@/types';
 import { WaveformViewer } from '@/components/WaveformViewer';
 import { EmptyState } from '@/components/EmptyState';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { QuantitySideToggle } from '@/components/QuantitySideToggle';
+import { useQuantitySide } from '@/hooks/useQuantitySide';
+import {
+  detectAvailableSides,
+  filterWaveformChannelsBySide,
+  sideLabel,
+} from '@/utils/quantitySide';
 
 interface Props {
   /** Full-window analysis mode (no app chrome). */
@@ -13,19 +20,40 @@ interface Props {
 
 export function WaveformPage({ popout = false }: Props) {
   const { id } = useParams<{ id: string }>();
+  const { mode: quantitySide, setMode: setQuantitySide } = useQuantitySide(id);
   const [channels, setChannels] = useState<WaveformChannelData[]>([]);
   const [markers, setMarkers] = useState<WaveformMarker[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [ends, setEnds] = useState<Array<{ comtrade_file_id: string; end_label?: string; station_name?: string }>>([]);
+  const [selectedEnd, setSelectedEnd] = useState<string>('');
 
-  const load = () => {
+  const sides = useMemo(
+    () =>
+      detectAvailableSides(
+        channels.map((c) => ({
+          name: c.channel.name,
+          units: c.channel.units,
+          ps: c.channel.ps,
+          channel_type: c.channel.channel_type,
+        })),
+      ),
+    [channels],
+  );
+  const dualSide = sides.hasPrimary && sides.hasSecondary;
+  const viewChannels = useMemo(
+    () => filterWaveformChannelsBySide(channels, dualSide ? quantitySide : 'both'),
+    [channels, quantitySide, dualSide],
+  );
+
+  const load = (fileId?: string) => {
     if (!id) return;
     setLoading(true);
     setError(null);
     void api
-      .getWaveforms(id)
+      .getWaveforms(id, fileId ? { comtradeFileId: fileId } : undefined)
       .then((r) => {
         setChannels(r.channels);
         setMarkers(r.markers);
@@ -40,7 +68,24 @@ export function WaveformPage({ popout = false }: Props) {
   };
 
   useEffect(() => {
-    load();
+    if (!id) return;
+    void api
+      .getComtradeEnds(id)
+      .then((r) => {
+        const list = (r.ends || []) as Array<{
+          comtrade_file_id: string;
+          end_label?: string;
+          station_name?: string;
+        }>;
+        setEnds(list);
+        const first = list[0]?.comtrade_file_id ? String(list[0].comtrade_file_id) : '';
+        setSelectedEnd(first);
+        load(first || undefined);
+      })
+      .catch(() => {
+        setEnds([]);
+        load();
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -159,6 +204,12 @@ export function WaveformPage({ popout = false }: Props) {
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <QuantitySideToggle
+              mode={quantitySide}
+              onChange={setQuantitySide}
+              show={dualSide}
+              compact
+            />
             <ThemeToggle />
             <button type="button" className="btn btn-sm" onClick={() => window.close()}>
               Close window
@@ -179,7 +230,7 @@ export function WaveformPage({ popout = false }: Props) {
           </div>
         )}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <WaveformViewer channels={channels} markers={markers} fill />
+          <WaveformViewer channels={viewChannels} markers={markers} fill />
         </div>
         {markers.length > 0 && (
           <div
@@ -223,6 +274,32 @@ export function WaveformPage({ popout = false }: Props) {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {ends.length > 1 && (
+            <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+              End
+              <select
+                className="input"
+                value={selectedEnd}
+                onChange={(e) => {
+                  setSelectedEnd(e.target.value);
+                  load(e.target.value);
+                }}
+              >
+                {ends.map((en) => (
+                  <option key={en.comtrade_file_id} value={en.comtrade_file_id}>
+                    {en.end_label || 'END'}
+                    {en.station_name ? ` · ${en.station_name}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <QuantitySideToggle
+            mode={quantitySide}
+            onChange={setQuantitySide}
+            show={dualSide}
+            compact
+          />
           <button
             type="button"
             className="btn btn-sm"
@@ -236,8 +313,14 @@ export function WaveformPage({ popout = false }: Props) {
           </button>
         </div>
       </div>
+      {dualSide && (
+        <div className="alert alert-info">
+          Viewing <strong>{sideLabel(quantitySide)}</strong> — switch to Primary for kA/kV (`*_PRI`)
+          channels, or Both to compare.
+        </div>
+      )}
       {note && <div className="alert alert-info">{note}</div>}
-      <WaveformViewer channels={channels} markers={markers} height={460} />
+      <WaveformViewer channels={viewChannels} markers={markers} height={460} />
       {markers.length > 0 && (
         <div className="panel" style={{ marginTop: 12 }}>
           <div className="panel-header">Event markers</div>

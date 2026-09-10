@@ -1,0 +1,13 @@
+id: bf_cascade
+label: Breaker failure cascade (50BF)
+description: BF logic after trip with current persist / adjacent trips.
+zone: bf
+distance_applicable: false
+primary_elements: [50BF]
+supporting_elements: [86, 50, 51]
+required_digitals: [BF, TRIP]
+evidence_tokens:
+  - scheme_profile_bf_cascade
+  - scheme_breaker_failure_present
+rca_hypotheses:
+  - BREAKER_FAILURE

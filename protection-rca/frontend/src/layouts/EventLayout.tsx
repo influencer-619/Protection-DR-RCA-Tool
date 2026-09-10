@@ -10,26 +10,67 @@ import { SeverityBadge } from '@/components/SeverityBadge';
 import { AnalysisProgress } from '@/components/AnalysisProgress';
 import { EventStatusBar, type PipelineLamp } from '@/components/EventStatusBar';
 import { NextStepBanner, deriveNextStep } from '@/components/NextStepBanner';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { SharePackButton } from '@/components/SharePackButton';
 import { api } from '@/services/api';
+import { touchRecentEvent } from '@/utils/recentEvents';
+import { wasDrVisited } from '@/utils/drSession';
 import styles from './EventLayout.module.css';
 
-const TABS = [
-  { to: 'overview', label: 'Overview' },
-  { to: 'files', label: 'Files' },
-  { to: 'comtrade', label: 'COMTRADE' },
-  { to: 'waveforms', label: 'Waveforms' },
-  { to: 'timeline', label: 'Sequence of operation' },
-  { to: 'fault-characteristics', label: 'Fault characteristics' },
-  { to: 'fault-location', label: 'Location (optional)' },
-  { to: 'electrical', label: 'Electrical' },
-  { to: 'protection', label: 'Protection' },
-  { to: 'consistency', label: 'Consistency' },
-  { to: 'rca', label: 'RCA' },
-  { to: 'evidence', label: 'Evidence' },
-  { to: 'summary', label: 'Summary' },
-  { to: 'report', label: 'Report' },
-  { to: 'review', label: 'Review' },
+type TabDef = { to: string; label: string };
+
+const TAB_GROUPS: { id: string; label: string; tabs: TabDef[] }[] = [
+  {
+    id: 'setup',
+    label: 'Setup',
+    tabs: [
+      { to: 'overview', label: 'Overview' },
+      { to: 'files', label: 'Files' },
+      { to: 'comtrade', label: 'COMTRADE' },
+      { to: 'channel-map', label: 'Channel map' },
+      { to: 'digital-map', label: 'DR targets' },
+    ],
+  },
+  {
+    id: 'analyse',
+    label: 'Analyse',
+    tabs: [
+      { to: 'dr', label: 'DR workspace' },
+      { to: 'waveforms', label: 'Waveforms' },
+      { to: 'timeline', label: 'Sequence' },
+      { to: 'electrical', label: 'Electrical' },
+      { to: 'fault-characteristics', label: 'Fault' },
+      { to: 'fault-location', label: 'Location' },
+    ],
+  },
+  {
+    id: 'protect',
+    label: 'Protect',
+    tabs: [
+      { to: 'protection', label: 'Protection' },
+      { to: 'consistency', label: 'Consistency' },
+      { to: 'rca', label: 'RCA' },
+      { to: 'evidence', label: 'Evidence' },
+    ],
+  },
+  {
+    id: 'conclude',
+    label: 'Conclude',
+    tabs: [
+      { to: 'summary', label: 'Summary' },
+      { to: 'report', label: 'Report' },
+      { to: 'review', label: 'Review' },
+    ],
+  },
 ];
+
+function groupForPath(pathname: string): string {
+  const seg = pathname.split('/').filter(Boolean).pop() || 'overview';
+  for (const g of TAB_GROUPS) {
+    if (g.tabs.some((t) => t.to === seg)) return g.id;
+  }
+  return 'setup';
+}
 
 function lampFromBool(
   ok: boolean | null | undefined,
@@ -60,24 +101,29 @@ function EventLayoutInner() {
   const [consOverall, setConsOverall] = useState<string | null>(null);
   const [hasComtrade, setHasComtrade] = useState(false);
   const [hasReport, setHasReport] = useState(false);
+  const [needsChannelMap, setNeedsChannelMap] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [analysing, setAnalysing] = useState(false);
   const [confirmingSettings, setConfirmingSettings] = useState(false);
-  const analysisBusy =
-    analysing || confirmingSettings || jobBusy;
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmSettings, setConfirmSettings] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [tabGroup, setTabGroup] = useState(() => groupForPath(location.pathname));
+  const analysisBusy = analysing || confirmingSettings || jobBusy;
+
+  useEffect(() => {
+    setTabGroup(groupForPath(location.pathname));
+  }, [location.pathname]);
 
   const onDelete = async () => {
     if (!event || !id) return;
-    const ok = window.confirm(
-      `Delete event ${event.event_id}?\n\nThis removes the event and analysis results from the database. The action is audited.`,
-    );
-    if (!ok) return;
     setDeleting(true);
+    setDialogError(null);
     try {
       await api.deleteEvent(id);
       navigate('/events', { replace: true });
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Failed to delete event');
+      setDialogError(err instanceof Error ? err.message : 'Failed to delete event');
       setDeleting(false);
     }
   };
@@ -85,11 +131,14 @@ function EventLayoutInner() {
   const onAnalyse = async () => {
     if (!id) return;
     setAnalysing(true);
+    setDialogError(null);
     try {
       await api.startAnalysis(id, true);
       await reloadJob();
+      // Land on Summary after kick-off (conclude-first)
+      navigate(`/events/${id}/summary`);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Failed to start analysis');
+      setDialogError(err instanceof Error ? err.message : 'Failed to start analysis');
     } finally {
       setAnalysing(false);
     }
@@ -97,11 +146,9 @@ function EventLayoutInner() {
 
   const onConfirmSettings = async () => {
     if (!id) return;
-    const ok = window.confirm(
-      'Confirm that the uploaded setting group was the ACTIVE group on the relay at the time of this disturbance?\n\nThis re-runs analysis so Consistency uses VERIFIED.',
-    );
-    if (!ok) return;
+    setConfirmSettings(false);
     setConfirmingSettings(true);
+    setDialogError(null);
     try {
       await api.verifyActiveSettings(id);
       await api.startAnalysis(id, true);
@@ -111,8 +158,9 @@ function EventLayoutInner() {
         .getConsistency(id)
         .then((r) => setConsOverall(r.overall_status))
         .catch(() => undefined);
+      navigate(`/events/${id}/summary`);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : 'Failed to confirm active settings');
+      setDialogError(err instanceof Error ? err.message : 'Failed to confirm active settings');
     } finally {
       setConfirmingSettings(false);
     }
@@ -132,7 +180,29 @@ function EventLayoutInner() {
       .getReport(id)
       .then(() => setHasReport(true))
       .catch(() => setHasReport(false));
+    void api
+      .getChannelMap(id)
+      .then((r) => {
+        const map = (r.channel_map || {}) as Record<string, string>;
+        const inferred = (r.inferred_roles || {}) as Record<string, string>;
+        const effective = Object.keys(map).length ? map : inferred;
+        const roles = new Set(Object.values(effective).map((v) => String(v).toUpperCase()));
+        const hasI = ['IA', 'IB', 'IC'].some((k) => roles.has(k));
+        const hasV = ['VA', 'VB', 'VC'].some((k) => roles.has(k));
+        setNeedsChannelMap(!(hasI && hasV));
+      })
+      .catch(() => setNeedsChannelMap(false));
   }, [id, job?.status, analysisRevision]);
+
+  useEffect(() => {
+    if (!event?.id) return;
+    touchRecentEvent({
+      id: event.id,
+      event_id: event.event_id,
+      feeder: event.feeder,
+      status: event.status,
+    });
+  }, [event?.id, event?.event_id, event?.feeder, event?.status]);
 
   const plant = (event?.extra as Record<string, unknown> | undefined) ?? {};
   const plantLabels =
@@ -158,12 +228,20 @@ function EventLayoutInner() {
       {
         key: 'data',
         label: 'DATA',
-        to: 'files',
-        state: lampFromBool(
-          !!dq && !['INVALID', 'POOR'].includes(dq),
-          ['WARNING', 'ACCEPTABLE'].includes(dq),
-          dq === 'INVALID' || dq === 'POOR',
-        ),
+        to: 'comtrade',
+        // Green for GOOD / ACCEPTABLE / WARNING; red only for POOR / INVALID
+        state: !dq
+          ? 'pending'
+          : ['POOR', 'INVALID'].includes(dq)
+            ? 'error'
+            : 'ok',
+        title: !dq
+          ? 'Data quality not validated yet'
+          : ['POOR', 'INVALID'].includes(dq)
+            ? `Data quality ${dq} — review COMTRADE before relying on results`
+            : ['ACCEPTABLE', 'WARNING'].includes(dq)
+              ? `Data quality ${dq} (usable) — open COMTRADE for any validation warnings`
+              : `Data quality ${dq}`,
       },
       {
         key: 'settings',
@@ -221,9 +299,11 @@ function EventLayoutInner() {
       analysisBusy,
       jobStatus: job?.status,
       onAnalyse: () => void onAnalyse(),
-      onConfirmSettings: () => void onConfirmSettings(),
+      onConfirmSettings: () => setConfirmSettings(true),
+      needsChannelMap: hasComtrade && needsChannelMap,
+      preferDr: job?.status === 'COMPLETED' && !wasDrVisited(id),
     });
-  }, [id, event, lamps, analysisBusy, job?.status]);
+  }, [id, event, lamps, analysisBusy, job?.status, hasComtrade, needsChannelMap]);
 
   const substationLabel =
     event?.substation_name ??
@@ -281,6 +361,8 @@ function EventLayoutInner() {
     return { ...job, stages };
   }, [job]);
 
+  const activeGroup = TAB_GROUPS.find((g) => g.id === tabGroup) || TAB_GROUPS[0];
+
   return (
     <div className={styles.wrap}>
       <div className={styles.header}>
@@ -295,17 +377,29 @@ function EventLayoutInner() {
             <span>{bayLabel}</span>
             <span className="mono">{relayLabel}</span>
             {event?.event_datetime && (
-              <span className="mono">{new Date(event.event_datetime).toISOString()}</span>
+              <span className="mono">{new Date(event.event_datetime).toLocaleString()}</span>
             )}
           </div>
         </div>
         <div className={styles.badges}>
           {loading && <span className={styles.loading}>Loading…</span>}
-          {event?.status && <StatusBadge status={event.status} />}
+          {event?.status && (
+            <StatusBadge
+              status={event.status}
+              title={
+                event.status === 'FAILED' && job?.error_message
+                  ? job.error_message
+                  : undefined
+              }
+            />
+          )}
           {event?.decision_state && <StatusBadge status={event.decision_state} />}
           {event?.data_quality && <DataQualityBadge quality={event.data_quality} />}
           {faultType && <span className={`mono ${styles.fault}`}>{faultType}</span>}
           {event?.severity_summary && <SeverityBadge severity={event.severity_summary} />}
+          {event && id && (
+            <SharePackButton eventId={id} eventCode={event.event_id} />
+          )}
           {event && (
             <button
               type="button"
@@ -325,13 +419,19 @@ function EventLayoutInner() {
               type="button"
               className="btn btn-sm btn-danger"
               disabled={deleting || analysisBusy}
-              onClick={() => void onDelete()}
+              onClick={() => setConfirmDelete(true)}
             >
               {deleting ? 'Deleting…' : 'Delete event'}
             </button>
           )}
         </div>
       </div>
+
+      {dialogError && (
+        <div className="alert alert-danger" style={{ margin: '8px var(--content-pad-x)' }}>
+          {dialogError}
+        </div>
+      )}
 
       <EventStatusBar lamps={lamps} eventBase={id ? `/events/${id}` : undefined} />
 
@@ -343,8 +443,25 @@ function EventLayoutInner() {
         </div>
       )}
 
+      <div className={styles.tabGroups}>
+        {TAB_GROUPS.map((g) => (
+          <button
+            key={g.id}
+            type="button"
+            className={`${styles.groupBtn} ${tabGroup === g.id ? styles.groupActive : ''}`}
+            onClick={() => {
+              setTabGroup(g.id);
+              const first = g.tabs[0];
+              if (first && id) navigate(`/events/${id}/${first.to}`);
+            }}
+          >
+            {g.label}
+          </button>
+        ))}
+      </div>
+
       <nav className={styles.tabs}>
-        {TABS.map((t) => (
+        {activeGroup.tabs.map((t) => (
           <NavLink
             key={t.to}
             to={`/events/${id}/${t.to}`}
@@ -361,6 +478,26 @@ function EventLayoutInner() {
           context={{ applyEvent, analysisRevision, reload }}
         />
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete event?"
+        message={`Delete event ${event?.event_id}?\n\nThis removes the event and analysis results from the database. The action is audited.`}
+        confirmLabel="Delete"
+        danger
+        busy={deleting}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => void onDelete()}
+      />
+      <ConfirmDialog
+        open={confirmSettings}
+        title="Confirm active settings?"
+        message="Confirm that the uploaded setting group was the ACTIVE group on the relay at the time of this disturbance?\n\nThis re-runs analysis so Consistency uses VERIFIED."
+        confirmLabel="Confirm & re-run"
+        busy={confirmingSettings}
+        onCancel={() => setConfirmSettings(false)}
+        onConfirm={() => void onConfirmSettings()}
+      />
     </div>
   );
 }

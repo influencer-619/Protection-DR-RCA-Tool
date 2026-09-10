@@ -9,7 +9,7 @@ interface Props {
 function plainActive(status: string | undefined): string {
   const s = (status || 'NOT VERIFIED').toUpperCase();
   if (s === 'VERIFIED') return 'Confirmed by engineer or file';
-  return 'Not confirmed yet — engineer must verify active group';
+  return 'Uploaded settings are treated as APPROVED automatically';
 }
 
 export function SettingSourceBanner({ source }: Props) {

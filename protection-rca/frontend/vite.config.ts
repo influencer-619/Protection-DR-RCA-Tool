@@ -9,6 +9,18 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          http: ['axios'],
+          date: ['date-fns'],
+          state: ['zustand'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     host: true,

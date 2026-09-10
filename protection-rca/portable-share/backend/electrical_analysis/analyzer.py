@@ -8,11 +8,12 @@ from typing import Any, Optional
 import numpy as np
 
 from common.results import ALGORITHM_VERSION, SignalResult
+from common.units import normalize_unit
 from comtrade.canonical.model import CanonicalDisturbanceRecord
 from signal_processing.derivatives import compute_di_dt, compute_dv_dt
 from signal_processing.frequency import estimate_frequency
-from signal_processing.harmonics import compute_harmonics
-from signal_processing.impedance import compute_apparent_impedance
+from signal_processing.harmonics import compute_harmonics, compute_harmonics_stft
+from signal_processing.impedance import compute_apparent_impedance, compute_delta_loop_impedance
 from signal_processing.phasor import compute_fundamental_phasor
 from signal_processing.power import compute_power
 from signal_processing.rms import compute_peak, compute_rms
@@ -33,9 +34,11 @@ class ElectricalAnalysisResult:
     sequences: dict[str, SignalResult] = field(default_factory=dict)
     power: dict[str, SignalResult] = field(default_factory=dict)
     harmonics: dict[str, SignalResult] = field(default_factory=dict)
+    harmonics_heatmap: dict[str, Any] = field(default_factory=dict)
     derivatives: dict[str, SignalResult] = field(default_factory=dict)
     impedance: dict[str, SignalResult] = field(default_factory=dict)
     channel_roles: dict[str, str] = field(default_factory=dict)
+    detectors: dict[str, Any] = field(default_factory=dict)
     limitations: list[str] = field(default_factory=list)
     algorithm_version: str = ALGORITHM_VERSION
 
@@ -54,9 +57,11 @@ class ElectricalAnalysisResult:
             "sequences": _sr(self.sequences),
             "power": _sr(self.power),
             "harmonics": _sr(self.harmonics),
+            "harmonics_heatmap": self.harmonics_heatmap,
             "derivatives": _sr(self.derivatives),
             "impedance": _sr(self.impedance),
             "channel_roles": self.channel_roles,
+            "detectors": self.detectors,
             "limitations": self.limitations,
             "algorithm_version": self.algorithm_version,
         }
@@ -105,6 +110,22 @@ def _infer_role(name: str, unit: str) -> str:
             return "VN"
         return "V"
     return "UNKNOWN"
+
+
+def _channel_side_rank(name: str, unit: str, ps: str = "") -> int:
+    """Lower rank = preferred for scheme analysis roles (secondary first)."""
+    n = (name or "").upper().replace(" ", "").replace("-", "_")
+    u = (unit or "").upper().replace(" ", "")
+    p = (ps or "").upper().strip()
+    if p in ("P", "PRIMARY") or "_PRI" in n or n.endswith("PRI") or "PRIMARY" in n:
+        return 2
+    if p in ("S", "SECONDARY") or "_SEC" in n or "SECONDARY" in n:
+        return 0
+    if u in ("KA", "KV"):
+        return 2
+    if u in ("A", "AMP", "AMPS", "V", "VOLT", "VOLTS"):
+        return 0
+    return 1
 
 
 def _better_role(ch_name: str, phase: str, unit: str) -> str:
@@ -232,12 +253,21 @@ def _timestamp_at(record: CanonicalDisturbanceRecord, index: int) -> Optional[fl
     return float(record.timestamps[index]) / 1e6
 
 
+_VALID_ROLES = frozenset(
+    {"IA", "IB", "IC", "IN", "VA", "VB", "VC", "VN", "I", "V", "UNKNOWN"}
+)
+
+
 def analyze_electrical(
     record: CanonicalDisturbanceRecord,
     *,
     algorithm_version: str = ALGORITHM_VERSION,
+    channel_map: Optional[dict[str, str]] = None,
 ) -> ElectricalAnalysisResult:
-    """Run core signal-processing suite on a canonical COMTRADE record."""
+    """Run core signal-processing suite on a canonical COMTRADE record.
+
+    ``channel_map`` (optional) overlays engineer-assigned roles keyed by channel name.
+    """
     fs = _primary_sample_rate(record)
     f0 = record.nominal_frequency or 50.0
     result = ElectricalAnalysisResult(
@@ -253,15 +283,27 @@ def analyze_electrical(
         )
         return result
 
+    override = {
+        str(k): str(v).upper().strip()
+        for k, v in (channel_map or {}).items()
+        if k and v and str(v).upper().strip() in _VALID_ROLES
+    }
+
     role_to_name: dict[str, str] = {}
+    role_rank: dict[str, int] = {}
     for ch in record.analog_channels:
-        role = _better_role(ch.name, ch.phase, ch.unit or record.units.get(ch.name, ""))
+        unit = ch.unit or record.units.get(ch.name, "")
+        auto = _better_role(ch.name, ch.phase, unit)
+        role = override.get(ch.name, auto)
         result.channel_roles[ch.name] = role
-        # Prefer specific IA/VA over generic I/V; first specific wins
+        # Prefer specific IA/VA over generic I/V; prefer secondary over primary twin
         if role in ("UNKNOWN", "I", "V"):
             continue
-        if role not in role_to_name:
+        ps = getattr(ch, "ps", "") or ""
+        rank = _channel_side_rank(ch.name, unit, str(ps))
+        if role not in role_to_name or rank < role_rank.get(role, 99):
             role_to_name[role] = ch.name
+            role_rank[role] = rank
 
     fault_end, window = _max_current_window_end(
         record, role_to_name, sample_rate_hz=fs, nominal_frequency_hz=f0
@@ -271,8 +313,9 @@ def analyze_electrical(
     for ch in record.analog_channels:
         series = _get_series(record, ch.name)
         fault_series = _window_slice(series, fault_end, window)
-        unit = ch.unit or record.units.get(ch.name, "")
+        raw_unit = ch.unit or record.units.get(ch.name, "")
         role = result.channel_roles.get(ch.name, "UNKNOWN")
+        unit = normalize_unit(raw_unit, role=role)
 
         result.rms[ch.name] = compute_rms(
             fault_series,
@@ -342,6 +385,27 @@ def analyze_electrical(
                 algorithm_version=algorithm_version,
             )
 
+    # SIGRA-like short-time harmonics heatmap for phase currents (full record)
+    for role in ("IA", "IB", "IC"):
+        nm = role_to_name.get(role)
+        if not nm:
+            continue
+        ch_ref = next((c for c in record.analog_channels if c.name == nm), None)
+        raw_u = (ch_ref.unit if ch_ref else "") or record.units.get(nm, "")
+        u = normalize_unit(raw_u, role=role) or "A"
+        stft = compute_harmonics_stft(
+            _get_series(record, nm),
+            sample_rate_hz=fs,
+            channel=nm,
+            nominal_frequency_hz=f0,
+            max_harmonic=7,
+            hop_cycles=1,
+            max_frames=48,
+            unit=u,
+        )
+        if stft.get("status") == "OK":
+            result.harmonics_heatmap[nm] = stft
+
     for prefix, key in (("I", "current_sequences"), ("V", "voltage_sequences")):
         names = [role_to_name.get(f"{prefix}{p}") for p in ("A", "B", "C")]
         if all(names):
@@ -349,13 +413,18 @@ def analyze_electrical(
                 _window_slice(_get_series(record, n), fault_end, window)  # type: ignore[arg-type]
                 for n in names
             ]
+            # Use phase-A channel unit (normalized) for the sequence triad
+            sample_name = names[0] or ""
+            sample_ch = next((c for c in record.analog_channels if c.name == sample_name), None)
+            raw_u = (sample_ch.unit if sample_ch else "") or record.units.get(sample_name, "")
+            seq_unit = normalize_unit(raw_u, role=f"{prefix}A") or ("A" if prefix == "I" else "V")
             result.sequences[key] = compute_sequence_components(
                 *series_abc,
                 sample_rate_hz=fs,
                 channels=list(names),  # type: ignore[arg-type]
                 nominal_frequency_hz=f0,
                 timestamp=ts_fault,
-                unit="A" if prefix == "I" else "V",
+                unit=seq_unit,
                 algorithm_version=algorithm_version,
             )
         else:
@@ -367,6 +436,16 @@ def analyze_electrical(
         vn = role_to_name.get(f"V{phase}")
         inan = role_to_name.get(f"I{phase}")
         if vn and inan:
+            v_ch = next((c for c in record.analog_channels if c.name == vn), None)
+            i_ch = next((c for c in record.analog_channels if c.name == inan), None)
+            v_unit = normalize_unit(
+                (v_ch.unit if v_ch else "") or record.units.get(vn, ""),
+                role=f"V{phase}",
+            ) or "V"
+            i_unit = normalize_unit(
+                (i_ch.unit if i_ch else "") or record.units.get(inan, ""),
+                role=f"I{phase}",
+            ) or "A"
             result.power[f"phase_{phase}"] = compute_power(
                 _window_slice(_get_series(record, vn), fault_end, window),
                 _window_slice(_get_series(record, inan), fault_end, window),
@@ -385,11 +464,70 @@ def analyze_electrical(
                 current_channel=inan,
                 nominal_frequency_hz=f0,
                 timestamp=ts_fault,
+                voltage_unit=v_unit,
+                current_unit=i_unit,
                 algorithm_version=algorithm_version,
             )
+            # Alias for R–X: phase-ground self-impedance as ZAG/ZBG/ZCG
+            result.impedance[f"loop_{phase}G"] = result.impedance[f"phase_{phase}"]
         else:
             result.limitations.append(
                 f"phase_{phase} power/impedance: NOT AVAILABLE — missing V{phase}/I{phase}"
             )
+
+    # Phase-phase loops for distance R–X (AB/BC/CA / ABG/BCG/CAG)
+    for p1, p2, lab in (("A", "B", "AB"), ("B", "C", "BC"), ("C", "A", "CA")):
+        v1n, i1n = role_to_name.get(f"V{p1}"), role_to_name.get(f"I{p1}")
+        v2n, i2n = role_to_name.get(f"V{p2}"), role_to_name.get(f"I{p2}")
+        if not (v1n and i1n and v2n and i2n):
+            result.limitations.append(
+                f"loop_{lab}: NOT AVAILABLE — missing V/I for {p1}{p2}"
+            )
+            continue
+        v_ch = next((c for c in record.analog_channels if c.name == v1n), None)
+        i_ch = next((c for c in record.analog_channels if c.name == i1n), None)
+        v_unit = normalize_unit(
+            (v_ch.unit if v_ch else "") or record.units.get(v1n, ""),
+            role=f"V{p1}",
+        ) or "V"
+        i_unit = normalize_unit(
+            (i_ch.unit if i_ch else "") or record.units.get(i1n, ""),
+            role=f"I{p1}",
+        ) or "A"
+        result.impedance[f"loop_{lab}"] = compute_delta_loop_impedance(
+            _window_slice(_get_series(record, v1n), fault_end, window),
+            _window_slice(_get_series(record, i1n), fault_end, window),
+            _window_slice(_get_series(record, v2n), fault_end, window),
+            _window_slice(_get_series(record, i2n), fault_end, window),
+            sample_rate_hz=fs,
+            channels=[v1n, i1n, v2n, i2n],
+            nominal_frequency_hz=f0,
+            timestamp=ts_fault,
+            voltage_unit=v_unit,
+            current_unit=i_unit,
+            loop_label=lab,
+            algorithm_version=algorithm_version,
+        )
+
+    # Soft detectors (CT sat / inrush) — attached for protection + UI
+    try:
+        from electrical_analysis.detectors import (
+            detect_ct_saturation,
+            detect_magnetizing_inrush,
+        )
+
+        sat = detect_ct_saturation(result)
+        inrush = detect_magnetizing_inrush(result)
+        result.detectors = {"ct_saturation": sat, "magnetizing_inrush": inrush}
+        if sat.get("status") == "POSSIBLE":
+            result.limitations.append(
+                "CT saturation POSSIBLE on some channels — verify before blaming relay"
+            )
+        if inrush.get("status") == "POSSIBLE":
+            result.limitations.append(
+                "Magnetizing inrush POSSIBLE (elevated H2) — check 87 restrain"
+            )
+    except Exception:  # noqa: BLE001
+        pass
 
     return result

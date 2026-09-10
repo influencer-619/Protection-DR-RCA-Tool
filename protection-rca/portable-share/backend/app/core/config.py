@@ -54,11 +54,18 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/1"
 
     max_upload_size_mb: int = 200
-    allowed_upload_extensions: str = ".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip"
+    allowed_upload_extensions: str = (
+        ".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip,"
+        ".set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex5,.d5z,.pcmi,.pcmp"
+    )
     storage_backend: str = "auto"  # auto | s3 | local
     local_storage_path: str = "storage"
     rate_limit_per_minute: int = 600
     run_analysis_sync: bool = False  # True = sync in-process (dev/tests)
+
+    # Uploaded settings files are treated as APPROVED / VERIFIED automatically
+    # (no manual engineer approve step). Set AUTO_APPROVE_UPLOADED_SETTINGS=false to require manual approval.
+    auto_approve_uploaded_settings: bool = True
 
     auth_mode: str = "local"
     oidc_issuer: str = ""

@@ -1,17 +1,19 @@
-"""Protection element 67P — Phase directional overcurrent."""
+"""Protection element 67P — Phase directional overcurrent (reuses 67 physics)."""
 
 from __future__ import annotations
 
-from protection.models import ElementContext, ProtectionAssessment, ProtectionElement, base_assess
+from protection.elements.el_67 import Element_67
+from protection.models import ElementContext, ProtectionAssessment, ProtectionElement
 
 
 class Element_67P(ProtectionElement):
     element_code = "67P"
 
     def assess(self, ctx: ElementContext) -> ProtectionAssessment:
-        fault_hint = bool(ctx.electrical.get("fault_indicated", False))
-        result = base_assess("67P", ctx, electrical_fault_hint=fault_hint)
+        result = Element_67().assess(ctx)
+        result.element = "67P"
         result.metadata["description"] = "Phase directional overcurrent"
+        result.metadata["variant"] = "67P"
         return result
 
 

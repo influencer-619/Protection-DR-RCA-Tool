@@ -102,7 +102,38 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.colorKey {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
   margin-bottom: 8px;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.colorKey span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.keySec,
+.keyPri {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.keySec {
+  background: #e07a3d;
+}
+
+.keyPri {
+  background: #c084fc;
 }
 
 .chItem {
@@ -113,6 +144,33 @@
   padding: 3px 0;
   cursor: pointer;
   color: var(--text-secondary);
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.badgeSec,
+.badgePri {
+  margin-left: 4px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.badgeSec {
+  color: #e07a3d;
+  background: rgba(224, 122, 61, 0.15);
+}
+
+.badgePri {
+  color: #c084fc;
+  background: rgba(192, 132, 252, 0.18);
 }
 
 .chType {

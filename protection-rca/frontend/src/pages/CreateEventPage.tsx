@@ -1,6 +1,7 @@
 import { useMemo, useState, type DragEvent, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/services/api';
+import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT } from '@/utils/uploadAccept';
 import styles from './CreateEventPage.module.css';
 
 const STEPS = [
@@ -331,15 +332,13 @@ export function CreateEventPage() {
               onClick={() => document.getElementById('create-upload')?.click()}
             >
               <strong>Drag & drop disturbance package</strong>
-              <div className="hint">
-                .cfg .dat .cff .hdr .inf .csv .txt .xml .json .pdf .zip (ZIP auto-extracts)
-              </div>
+              <div className="hint">{UPLOAD_ACCEPT_HINT}</div>
               <input
                 id="create-upload"
                 type="file"
                 multiple
                 hidden
-                accept=".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip"
+                accept={UPLOAD_ACCEPT}
                 onChange={(e) =>
                   e.target.files && setFiles((p) => [...p, ...Array.from(e.target.files!)])
                 }

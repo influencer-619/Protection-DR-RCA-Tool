@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 
 from app.core.security import Role
@@ -149,14 +151,19 @@ async def get_event_comtrade(
 
 @router.get("/events/{event_id}/waveforms", response_model=WaveformsResponse)
 async def get_waveforms(
-    event_id: str, db: DbSession, user: CurrentUser
+    event_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    comtrade_file_id: Optional[str] = Query(None),
 ) -> WaveformsResponse:
     event = await event_service.get_event(db, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
     from app.services.waveform_service import load_waveform_payload
 
-    payload = await load_waveform_payload(db, event.id)
+    payload = await load_waveform_payload(
+        db, event.id, comtrade_file_id=comtrade_file_id
+    )
     out = []
     for c in payload.get("channels") or []:
         samples = c.get("samples")
@@ -212,6 +219,8 @@ async def get_electrical(
             "unit": m.unit,
             "quality": m.quality,
             "algorithm": m.algorithm,
+            "vector": m.vector,
+            "event_id": event.id,
         }
         for m in rows
     ]
@@ -233,13 +242,17 @@ async def get_protection(
     ops = [
         {
             "id": o.id,
+            "event_id": event.id,
             "element": o.element,
             "function_code": o.function_code,
             "operation_type": o.operation_type,
             "asserted": o.asserted,
+            "t_pickup_us": o.t_pickup_us,
             "t_trip_us": o.t_trip_us,
+            "expected": o.expected,
             "confidence": o.confidence,
             "breaker_assessment": o.breaker_assessment,
+            "details": o.details,
         }
         for o in rows
     ]
@@ -405,6 +418,34 @@ async def get_fault_characteristics(
         "ground": feat.get("ground"),
     }
     z_est = feat.get("line_impedance_estimate") if isinstance(feat.get("line_impedance_estimate"), dict) else {}
+    from common.units import normalize_unit
+
+    current_unit = normalize_unit(str(feat.get("current_unit") or ""), role="I") or "A"
+
+    dist_detail = feat.get("distance_detail") if isinstance(feat.get("distance_detail"), dict) else {}
+    raw_applicable = feat.get("distance_applicable")
+    dist_status = str(dist_detail.get("status") or "").upper()
+    if raw_applicable is False or dist_status == "NOT_APPLICABLE":
+        distance_applicable = False
+    elif raw_applicable is True:
+        distance_applicable = True
+    else:
+        # Missing flag on legacy rows: do not unlock km from a stored distance_km alone
+        distance_applicable = False
+
+    # Harden response for differential / OC cases
+    out_km = fault.distance_km if fault and distance_applicable else None
+    out_method = fault.location_method if fault and distance_applicable else None
+    out_algs = algorithms if distance_applicable else []
+    out_z = z_est if distance_applicable else None
+    if not distance_applicable:
+        limitations = [
+            lim
+            for lim in limitations
+            if "FAULT DISTANCE" not in lim.upper()
+            and "Z1/KM" not in lim.upper()
+            and "LINE Z1" not in lim.upper()
+        ]
 
     return FaultCharacteristicsOut(
         event_id=event.id,
@@ -413,17 +454,19 @@ async def get_fault_characteristics(
         confidence_level=fault.confidence_level if fault else None,
         involved_phases=fault.involved_phases if fault else None,
         ground_involved=fault.ground_involved if fault else None,
-        distance_km=fault.distance_km if fault else None,
-        location_method=fault.location_method if fault else None,
+        distance_km=out_km,
+        location_method=out_method,
+        distance_applicable=bool(distance_applicable),
         inception_t_us=_first_t("INCEPTION", "FAULT") or (fault.inception_t_us if fault else None),
         pickup_t_us=_first_t("PICKUP"),
         trip_t_us=_first_t("TRIP"),
         clearing_t_us=_first_t("52A", "BREAKER", "CLEAR") or (fault.clearing_t_us if fault else None),
         currents=currents or None,
         sequences=sequences,
-        impedance=feat.get("distance_detail") if isinstance(feat.get("distance_detail"), dict) else None,
-        location_algorithms=algorithms,
-        line_impedance_estimate=z_est or None,
+        current_unit=current_unit,
+        impedance=dist_detail if distance_applicable else None,
+        location_algorithms=out_algs,
+        line_impedance_estimate=out_z or None,
         limitations=limitations,
         explanation=fault.explanation if fault else None,
     )
@@ -446,6 +489,56 @@ async def get_rca(event_id: str, db: DbSession, user: CurrentUser) -> RcaRespons
         hypotheses=[RcaHypothesisOut.model_validate(r) for r in rows],
         decision_state=event.decision_state,
     )
+
+
+@router.get("/events/{event_id}/cause-evidence")
+async def get_cause_evidence(event_id: str, db: DbSession, user: CurrentUser):
+    """Engineer / asset cause enrichment tags for RCA (deterministic)."""
+    from rca.enrichment import TAG_CHOICES, normalize_cause_evidence
+
+    event = await event_service.get_event(db, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    extra = event.extra if isinstance(event.extra, dict) else {}
+    items = normalize_cause_evidence(extra.get("cause_evidence"))
+    ra = extra.get("report_analysis") if isinstance(extra.get("report_analysis"), dict) else {}
+    return {
+        "event_id": event_id,
+        "items": items,
+        "tag_choices": TAG_CHOICES,
+        "asset_type": extra.get("asset_type"),
+        "enrichment": ra.get("enrichment") or (ra.get("rca_hypotheses") or {}).get("enrichment"),
+        "scheme": ra.get("scheme") or (ra.get("rca_hypotheses") or {}).get("scheme"),
+    }
+
+
+@router.put("/events/{event_id}/cause-evidence")
+async def put_cause_evidence(
+    event_id: str,
+    body: dict,
+    db: DbSession,
+    user: User = Depends(require_role(Role.ANALYST)),
+):
+    from sqlalchemy.orm.attributes import flag_modified
+    from rca.enrichment import normalize_cause_evidence
+
+    event = await event_service.get_event(db, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    cleaned = normalize_cause_evidence(body.get("items") or body.get("tokens") or body)
+    extra = dict(event.extra) if isinstance(event.extra, dict) else {}
+    extra["cause_evidence"] = cleaned
+    if body.get("notes"):
+        extra["cause_evidence_notes"] = str(body["notes"])[:2000]
+    event.extra = extra
+    flag_modified(event, "extra")
+    await db.commit()
+    return {
+        "event_id": event_id,
+        "items": cleaned,
+        "saved": True,
+        "message": "Cause evidence saved. Re-run analysis to re-score RCA hypotheses.",
+    }
 
 
 @router.get("/events/{event_id}/evidence", response_model=EvidenceListResponse)
