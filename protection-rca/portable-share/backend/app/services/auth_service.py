@@ -1,4 +1,4 @@
-"""Authentication service — local JWT login against seeded users."""
+"""Authentication service — local JWT login against auth DB users."""
 
 from __future__ import annotations
 
@@ -19,14 +19,15 @@ class AuthError(Exception):
 
 
 async def authenticate(
-    db: AsyncSession,
+    auth_db: AsyncSession,
     username: str,
     password: str,
     *,
+    audit_db: Optional[AsyncSession] = None,
     ip_address: Optional[str] = None,
     request_id: Optional[str] = None,
 ) -> dict:
-    result = await db.execute(
+    result = await auth_db.execute(
         select(User).where(
             (User.username == username) | (User.email == username)
         )
@@ -40,16 +41,17 @@ async def authenticate(
     settings = get_settings()
     token = create_access_token(subject=user.id, role=user.role, extra={"username": user.username})
     user.last_login_at = datetime.now(timezone.utc)
-    await db.flush()
-    await write_audit(
-        db,
-        action="LOGIN",
-        user_id=user.id,
-        object_type="User",
-        object_id=user.id,
-        ip_address=ip_address,
-        request_id=request_id,
-    )
+    await auth_db.flush()
+    if audit_db is not None:
+        await write_audit(
+            audit_db,
+            action="LOGIN",
+            user_id=user.id,
+            object_type="User",
+            object_id=user.id,
+            ip_address=ip_address,
+            request_id=request_id,
+        )
     return {
         "access_token": token,
         "token_type": "bearer",

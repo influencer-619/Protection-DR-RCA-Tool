@@ -1,33 +1,49 @@
+/* Full-width operational dashboard — fills main content area (sidebar → edge) */
 .dash {
-  max-width: 1400px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-sizing: border-box;
 }
 
+.headerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+/* Work inbox — primary triage zone */
 .inboxHero {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 12px 20px;
+  gap: 12px 24px;
   align-items: center;
-  padding: 12px 14px;
-  margin-bottom: 14px;
+  padding: 14px 18px;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--border-strong);
+  border-left: 4px solid var(--accent);
   background: var(--bg-elevated);
-  border-radius: 2px;
+  border-radius: var(--radius);
 }
 
 .inboxLabel {
   font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--text-muted);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .inboxLine {
-  font-size: 0.95rem;
+  font-size: 1rem;
   color: var(--text-primary);
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .inboxMuted {
@@ -39,11 +55,11 @@
 .inboxActions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
 }
 
 .recentRow {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 0.8rem;
   color: var(--text-secondary);
   display: flex;
@@ -56,6 +72,56 @@
   color: var(--accent);
 }
 
+/* KPI sections — 4 equal scorecards per row, full width */
+.kpiStrip {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.kpiSectionTitle {
+  margin: 0 0 8px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 0;
+}
+
+@media (max-width: 1100px) {
+  .kpiGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .kpiGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.kpiGrid :global(.kpi-card) {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 92px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+}
+
+.kpiGrid :global(.kpi-value) {
+  font-size: 1.85rem;
+  margin: 4px 0;
+}
+
 .kpiClick {
   cursor: pointer;
   text-align: left;
@@ -63,17 +129,70 @@
   font: inherit;
   color: inherit;
   appearance: none;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
 }
 
 .kpiClick:hover {
   border-color: var(--accent-dim);
   background: var(--bg-hover);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 6%);
 }
 
 .kpiClick:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Charts row — trend dominates, side stack for queue + DQ */
+.midGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 16px;
+  align-items: stretch;
+}
+
+@media (max-width: 1024px) {
+  .midGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sideStack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.sideStack .panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sideStack :global(.panel-body) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.trendPanel {
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+}
+
+.trendPanel :global(.panel-body) {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+}
+
+.trendPanel :global(.panel-header) {
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .trendControls {
@@ -85,7 +204,7 @@
 .dayBtn {
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text-muted);
@@ -99,61 +218,10 @@
   background: var(--accent-soft);
 }
 
-.emptyActions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: flex-start;
-}
-
-.workflowList {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-}
-
-
-.emptyBanner {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: center;
-  padding: 16px 18px;
-  margin-bottom: 16px;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  background: var(--bg-elevated);
-  border-radius: var(--radius);
-}
-
-.emptyBanner p {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  max-width: 64ch;
-}
-
-.midGrid {
-  display: grid;
-  grid-template-columns: 1.4fr 0.9fr 1fr;
-  gap: 14px;
-  margin: 16px 0;
-}
-
-@media (max-width: 1100px) {
-  .midGrid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.trendPanel .panel-body,
-.dqPanel .panel-body {
-  min-height: 220px;
-}
-
 .chartSvg {
   width: 100%;
-  height: auto;
+  height: 100%;
+  min-height: 240px;
   display: block;
 }
 
@@ -183,7 +251,8 @@
 
 .legendInline {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
   font-size: 0.75rem;
   color: var(--text-muted);
 }
@@ -214,10 +283,14 @@
 }
 
 .chartEmpty {
-  padding: 28px 16px;
+  padding: 32px 16px;
   text-align: center;
   color: var(--text-muted);
   font-size: 0.9rem;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .donutWrap {
@@ -226,11 +299,14 @@
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
+  flex: 1;
+  min-height: 200px;
 }
 
 .donutSvg {
   width: 140px;
   height: 140px;
+  flex-shrink: 0;
 }
 
 .donutTrack {
@@ -298,13 +374,14 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 280px;
+  flex: 1;
   overflow: auto;
+  max-height: 280px;
 }
 
 .attentionList li {
   display: grid;
-  grid-template-columns: minmax(100px, 1.1fr) 1.6fr auto;
+  grid-template-columns: minmax(90px, 1fr) 1.5fr auto;
   gap: 10px;
   align-items: center;
   padding: 10px 14px;
@@ -320,8 +397,69 @@
   font-size: 0.82rem;
 }
 
+/* Recent events — full-width table, natural column sizing */
 .tableScroll {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+}
+
+.recentTable {
+  width: 100%;
+  min-width: 960px;
+}
+
+.recentTable th,
+.recentTable td {
+  padding: 8px 12px;
+  vertical-align: middle;
+}
+
+.recentTable th:nth-child(1),
+.recentTable td:nth-child(1) {
+  min-width: 140px;
+}
+
+.recentTable th:nth-child(3),
+.recentTable td:nth-child(3) {
+  min-width: 120px;
+}
+
+.recentTable :global(.badge) {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+}
+
+.emptyActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.workflowList {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.emptyBanner {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  background: var(--bg-elevated);
+  border-radius: var(--radius);
+}
+
+.emptyBanner p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  max-width: 64ch;
 }
 
 .consOk {

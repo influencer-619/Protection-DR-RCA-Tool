@@ -1,4 +1,4 @@
-"""Pydantic v2 schemas — asset hierarchy."""
+"""Pydantic v2 schemas — plant hierarchy (Substation → VL → Bay → Feeder → IED)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SubstationCreate(BaseModel):
-    code: str
     name: str
+    code: Optional[str] = None
     region: Optional[str] = None
     voltage_levels_kv: Optional[list[Any]] = None
     latitude: Optional[float] = None
@@ -34,13 +34,34 @@ class SubstationOut(BaseModel):
     created_at: datetime
 
 
-class BayCreate(BaseModel):
+class VoltageLevelCreate(BaseModel):
+    substation_id: str
+    name: str
+    code: Optional[str] = None
+    nominal_voltage_kv: Optional[float] = None
+
+
+class VoltageLevelOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
     substation_id: str
     code: str
     name: str
+    nominal_voltage_kv: Optional[float] = None
+    is_active: bool
+    created_at: datetime
+
+
+class BayCreate(BaseModel):
+    voltage_level_id: str
+    name: str
+    code: Optional[str] = None
+    bay_type: Optional[str] = None
+    # Legacy optional fields
+    substation_id: Optional[str] = None
     feeder_name: Optional[str] = None
     voltage_kv: Optional[float] = None
-    bay_type: Optional[str] = None
 
 
 class BayOut(BaseModel):
@@ -48,6 +69,7 @@ class BayOut(BaseModel):
 
     id: str
     substation_id: str
+    voltage_level_id: Optional[str] = None
     code: str
     name: str
     feeder_name: Optional[str] = None
@@ -57,15 +79,34 @@ class BayOut(BaseModel):
     created_at: datetime
 
 
-class RelayCreate(BaseModel):
-    relay_tag: str
+class FeederCreate(BaseModel):
+    bay_id: str
     name: str
-    substation_id: Optional[str] = None
-    bay_id: Optional[str] = None
+    code: Optional[str] = None
+
+
+class FeederOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    bay_id: str
+    code: str
+    name: str
+    is_active: bool
+    created_at: datetime
+
+
+class RelayCreate(BaseModel):
+    feeder_id: str
+    name: str
+    relay_tag: Optional[str] = None
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     firmware_version: Optional[str] = None
     protection_functions: Optional[list[Any]] = None
+    # Optional legacy
+    substation_id: Optional[str] = None
+    bay_id: Optional[str] = None
 
 
 class RelayOut(BaseModel):
@@ -76,6 +117,7 @@ class RelayOut(BaseModel):
     name: str
     substation_id: Optional[str] = None
     bay_id: Optional[str] = None
+    feeder_id: Optional[str] = None
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     firmware_version: Optional[str] = None
@@ -135,3 +177,63 @@ class AssetOut(BaseModel):
     nominal_frequency_hz: Optional[float] = None
     is_active: bool
     created_at: datetime
+
+
+# --- Nested plant tree ---
+
+
+class PlantIedNode(BaseModel):
+    id: str
+    name: str
+    relay_tag: str
+    feeder_id: Optional[str] = None
+    event_count: int = 0
+
+
+class PlantFeederNode(BaseModel):
+    id: str
+    name: str
+    code: str
+    ieds: list[PlantIedNode] = Field(default_factory=list)
+
+
+class PlantBayNode(BaseModel):
+    id: str
+    name: str
+    code: str
+    voltage_level_id: Optional[str] = None
+    feeders: list[PlantFeederNode] = Field(default_factory=list)
+
+
+class PlantVoltageLevelNode(BaseModel):
+    id: str
+    name: str
+    code: str
+    nominal_voltage_kv: Optional[float] = None
+    bays: list[PlantBayNode] = Field(default_factory=list)
+
+
+class PlantSubstationNode(BaseModel):
+    id: str
+    name: str
+    code: str
+    voltage_levels: list[PlantVoltageLevelNode] = Field(default_factory=list)
+
+
+class PlantTreeOut(BaseModel):
+    substations: list[PlantSubstationNode]
+
+
+class IedContextOut(BaseModel):
+    """Breadcrumb + IED details for the IED workspace."""
+
+    ied: RelayOut
+    feeder: FeederOut
+    bay: BayOut
+    voltage_level: Optional[VoltageLevelOut] = None
+    substation: SubstationOut
+    path_label: str
+
+
+class MapEventToIedRequest(BaseModel):
+    relay_id: str = Field(..., description="Target IED (relay) id")

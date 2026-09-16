@@ -24,7 +24,7 @@ export function useAuth() {
       await storeLogin(username, password);
       // Replace so browser Back does not return to /login (which auto-bounces
       // to dashboard and looks like Back/Forward is broken).
-      navigate('/dashboard', { replace: true });
+      navigate('/plant', { replace: true });
     },
     [storeLogin, navigate],
   );

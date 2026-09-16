@@ -28,7 +28,7 @@ export function LoginPage() {
   }, []);
 
   if (isAuthenticated || localStorage.getItem('protection_rca_token')) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/plant" replace />;
   }
 
   const onSubmit = async (e: FormEvent) => {

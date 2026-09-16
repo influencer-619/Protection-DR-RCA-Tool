@@ -13,16 +13,17 @@ const DQ_CLASS: Record<DataQuality, string> = {
 
 interface Props {
   quality: DataQuality;
+  label?: string;
 }
 
-export function DataQualityBadge({ quality }: Props) {
+export function DataQualityBadge({ quality, label }: Props) {
   const tip =
     quality === 'ACCEPTABLE' || quality === 'WARNING'
       ? `${explainDq(quality)} See COMTRADE tab for validation warnings if listed.`
       : explainDq(quality);
   return (
     <span className={`${styles.badge} ${DQ_CLASS[quality]}`} title={tip}>
-      DQ: {quality}
+      {label ?? `DQ: ${quality}`}
     </span>
   );
 }

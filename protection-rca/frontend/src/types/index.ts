@@ -118,17 +118,39 @@ export interface Substation {
   region?: string | null;
   voltage_levels_kv?: number[] | null;
   is_active: boolean;
+  created_at?: string;
+}
+
+export interface VoltageLevel {
+  id: string;
+  substation_id: string;
+  code: string;
+  name: string;
+  nominal_voltage_kv?: number | null;
+  is_active: boolean;
+  created_at?: string;
 }
 
 export interface Bay {
   id: string;
   substation_id: string;
+  voltage_level_id?: string | null;
   code: string;
   name: string;
   feeder_name?: string | null;
   voltage_kv?: number | null;
   bay_type?: string | null;
   is_active: boolean;
+  created_at?: string;
+}
+
+export interface Feeder {
+  id: string;
+  bay_id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at?: string;
 }
 
 export interface Asset {
@@ -146,6 +168,7 @@ export interface Relay {
   id: string;
   substation_id?: string | null;
   bay_id?: string | null;
+  feeder_id?: string | null;
   relay_tag: string;
   name: string;
   manufacturer?: string | null;
@@ -153,6 +176,58 @@ export interface Relay {
   firmware_version?: string | null;
   protection_functions?: string[] | null;
   is_active: boolean;
+  created_at?: string;
+}
+
+export interface PlantIedNode {
+  id: string;
+  name: string;
+  relay_tag: string;
+  feeder_id?: string | null;
+  event_count: number;
+}
+
+export interface PlantFeederNode {
+  id: string;
+  name: string;
+  code: string;
+  ieds: PlantIedNode[];
+}
+
+export interface PlantBayNode {
+  id: string;
+  name: string;
+  code: string;
+  voltage_level_id?: string | null;
+  feeders: PlantFeederNode[];
+}
+
+export interface PlantVoltageLevelNode {
+  id: string;
+  name: string;
+  code: string;
+  nominal_voltage_kv?: number | null;
+  bays: PlantBayNode[];
+}
+
+export interface PlantSubstationNode {
+  id: string;
+  name: string;
+  code: string;
+  voltage_levels: PlantVoltageLevelNode[];
+}
+
+export interface PlantTree {
+  substations: PlantSubstationNode[];
+}
+
+export interface IedContext {
+  ied: Relay;
+  feeder: Feeder;
+  bay: Bay;
+  voltage_level?: VoltageLevel | null;
+  substation: Substation;
+  path_label: string;
 }
 
 export interface Breaker {
@@ -191,6 +266,10 @@ export interface Event {
   relay_tag?: string | null;
   fault_type?: FaultType | null;
   severity_summary?: Severity | null;
+  /** Operated protection elements, e.g. "87T, 21" */
+  protection_summary?: string | null;
+  created_at: string;
+  updated_at?: string;
 }
 
 export interface EventFile {

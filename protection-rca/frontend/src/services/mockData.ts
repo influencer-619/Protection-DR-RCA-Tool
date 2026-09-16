@@ -67,6 +67,7 @@ export const DEMO_EVENTS: Event[] = [
     fault_type: 'AG',
     severity_summary: 'HIGH',
     tags: ['line', '220kV', 'ground'],
+    created_at: '2026-09-02T14:25:00.000Z',
   },
   {
     id: 'ev-002',
@@ -83,6 +84,7 @@ export const DEMO_EVENTS: Event[] = [
     data_quality: 'WARNING',
     fault_type: 'UNKNOWN',
     severity_summary: 'MEDIUM',
+    created_at: '2026-08-28T09:15:00.000Z',
   },
   {
     id: 'ev-003',
@@ -100,6 +102,7 @@ export const DEMO_EVENTS: Event[] = [
     data_quality: 'GOOD',
     fault_type: 'BC',
     severity_summary: 'LOW',
+    created_at: '2026-08-15T18:50:00.000Z',
   },
   {
     id: 'ev-004',
@@ -114,6 +117,7 @@ export const DEMO_EVENTS: Event[] = [
     fault_type: 'UNKNOWN',
     severity_summary: 'CRITICAL',
     description: 'COMTRADE parse failure — incomplete DAT',
+    created_at: '2026-08-10T03:05:00.000Z',
   },
   {
     id: 'ev-005',
@@ -128,6 +132,7 @@ export const DEMO_EVENTS: Event[] = [
     fault_type: 'ABG',
     severity_summary: 'HIGH',
     description: 'Zone 2 trip — RCA inconclusive pending settings verification',
+    created_at: '2026-08-05T11:35:00.000Z',
   },
 ];
 

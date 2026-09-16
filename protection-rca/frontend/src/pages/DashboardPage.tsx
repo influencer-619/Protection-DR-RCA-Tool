@@ -6,16 +6,49 @@ import type { DashboardStats } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
-import { getLastEvent, loadRecentEvents } from '@/utils/recentEvents';
+import { getLastEvent, loadRecentEvents, pruneRecentEvents, clearRecentEvents } from '@/utils/recentEvents';
 import styles from './DashboardPage.module.css';
 
 type TrendDays = 7 | 30 | 90;
+
+const RCA_LABELS: Record<string, string> = {
+  ANALYSIS_COMPLETE: 'Complete',
+  ANALYSIS_COMPLETE_WITH_WARNINGS: 'Complete*',
+  ENGINEER_REVIEW_REQUIRED: 'Review req',
+  DATA_INSUFFICIENT: 'No data',
+  INCONCLUSIVE: 'Inconclusive',
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  AWAITING_REVIEW: 'Review',
+  REVIEW: 'Review',
+  UPLOADED: 'Uploaded',
+  ANALYZING: 'Analysing',
+  CLOSED: 'Closed',
+  FAILED: 'Failed',
+};
+
+const DQ_LABELS: Record<string, string> = {
+  GOOD: 'Good',
+  ACCEPTABLE: 'Acceptable',
+  WARNING: 'Warning',
+  POOR: 'Poor',
+  INVALID: 'Invalid',
+};
+
+function trimTrendPoints(points: NonNullable<DashboardStats['trend_30d']>) {
+  if (points.length <= 14) return points;
+  const first = points.findIndex((p) => p.analysed + p.review + p.issues > 0);
+  if (first <= 0) return points;
+  return points.slice(Math.max(0, first - 2));
+}
 
 function TrendChart({
   points,
 }: {
   points: NonNullable<DashboardStats['trend_30d']>;
 }) {
+  const visible = trimTrendPoints(points);
   const width = 560;
   const height = 180;
   const pad = { t: 16, r: 12, b: 28, l: 28 };
@@ -23,12 +56,12 @@ function TrendChart({
   const innerH = height - pad.t - pad.b;
   const max = Math.max(
     1,
-    ...points.map((p) => Math.max(p.events ?? 0, p.analysed + p.review + p.issues)),
+    ...visible.map((p) => Math.max(p.events ?? 0, p.analysed + p.review + p.issues)),
   );
-  const n = Math.max(points.length, 1);
+  const n = Math.max(visible.length, 1);
   const gap = 2;
   const barW = Math.max(3, innerW / n - gap);
-  const labelEvery = points.length > 60 ? 14 : points.length > 20 ? 5 : 1;
+  const labelEvery = visible.length > 60 ? 14 : visible.length > 20 ? 5 : 1;
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className={styles.chartSvg} role="img">
@@ -50,7 +83,7 @@ function TrendChart({
           </g>
         );
       })}
-      {points.map((p, i) => {
+      {visible.map((p, i) => {
         const x = pad.l + i * (barW + gap);
         const a = (p.analysed / max) * innerH;
         const r = (p.review / max) * innerH;
@@ -180,14 +213,31 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState<TrendDays>(30);
+  const [lastLocal, setLastLocal] = useState(() => getLastEvent());
+  const [recentLocal, setRecentLocal] = useState(() => loadRecentEvents().slice(0, 5));
 
   useEffect(() => {
     setLoading(true);
     void api
       .getDashboardStats(days)
-      .then((s) => {
+      .then(async (s) => {
         setStats(s);
         setError(null);
+        if ((s.total_events ?? 0) === 0) {
+          clearRecentEvents();
+          setLastLocal(null);
+          setRecentLocal([]);
+          return;
+        }
+        try {
+          const all = await api.getEvents();
+          const pruned = pruneRecentEvents(all.map((e) => e.id));
+          setLastLocal(pruned[0] ?? null);
+          setRecentLocal(pruned.slice(0, 5));
+        } catch {
+          setLastLocal(getLastEvent());
+          setRecentLocal(loadRecentEvents().slice(0, 5));
+        }
       })
       .catch((e: Error) => setError(e.message || 'Failed to load dashboard'))
       .finally(() => setLoading(false));
@@ -273,13 +323,28 @@ export function DashboardPage() {
   const attention = stats?.attention ?? [];
   const recent = stats?.recent_events ?? [];
   const empty = !loading && (stats?.total_events ?? 0) === 0;
-  const lastLocal = getLastEvent();
-  const recentLocal = loadRecentEvents().slice(0, 5);
   const inboxNeed =
     (stats?.awaiting_review ?? 0) +
     (stats?.awaiting_analysis ?? 0) +
     (stats?.consistency_issues ?? 0) +
     (stats?.high_severity_findings ?? 0);
+
+  const primaryKpis = kpis.slice(0, 4);
+  const qualityKpis = kpis.slice(4);
+
+  const renderKpi = (k: (typeof kpis)[number]) => (
+    <button
+      key={k.label}
+      type="button"
+      className={`kpi-card ${k.cls} ${styles.kpiClick}`}
+      onClick={() => openQueue(k.queue)}
+      title={`Open ${k.label}`}
+    >
+      <div className="kpi-label">{k.label}</div>
+      <div className="kpi-value">{loading ? '…' : k.value}</div>
+      <div className="kpi-hint">{k.hint}</div>
+    </button>
+  );
 
   return (
     <div className={`page ${styles.dash}`}>
@@ -306,11 +371,8 @@ export function DashboardPage() {
           <Link to="/events" className="btn">
             All events
           </Link>
-          <Link to="/events/new" className="btn btn-primary">
-            + New event
-          </Link>
-          <Link to="/upload" className="btn">
-            Upload records
+          <Link to="/plant" className="btn btn-primary">
+            Open Plant
           </Link>
         </div>
       </div>
@@ -380,8 +442,8 @@ export function DashboardPage() {
               data is seeded.
             </p>
             <ol className={styles.workflowList}>
-              <li>Create Event</li>
-              <li>Upload Records</li>
+              <li>Build Plant (SS → kV → Bay → Feeder → IED)</li>
+              <li>Upload records on IED</li>
               <li>Validate COMTRADE</li>
               <li>Run Analysis</li>
               <li>Review Consistency</li>
@@ -390,30 +452,22 @@ export function DashboardPage() {
             </ol>
           </div>
           <div className={styles.emptyActions}>
-            <Link to="/events/new" className="btn btn-primary">
-              + New event
-            </Link>
-            <Link to="/upload" className="btn">
-              Upload records
+            <Link to="/plant" className="btn btn-primary">
+              Open Plant
             </Link>
           </div>
         </div>
       )}
 
-      <div className="grid-kpis">
-        {kpis.map((k) => (
-          <button
-            key={k.label}
-            type="button"
-            className={`kpi-card ${k.cls} ${styles.kpiClick}`}
-            onClick={() => openQueue(k.queue)}
-            title={`Open ${k.label}`}
-          >
-            <div className="kpi-label">{k.label}</div>
-            <div className="kpi-value">{loading ? '…' : k.value}</div>
-            <div className="kpi-hint">{k.hint}</div>
-          </button>
-        ))}
+      <div className={styles.kpiStrip}>
+        <section aria-label="Operations metrics">
+          <h2 className={styles.kpiSectionTitle}>Operations</h2>
+          <div className={styles.kpiGrid}>{primaryKpis.map(renderKpi)}</div>
+        </section>
+        <section aria-label="Quality and findings metrics">
+          <h2 className={styles.kpiSectionTitle}>Quality &amp; findings</h2>
+          <div className={styles.kpiGrid}>{qualityKpis.map(renderKpi)}</div>
+        </section>
       </div>
 
       <div className={styles.midGrid}>
@@ -454,42 +508,44 @@ export function DashboardPage() {
           </div>
         </section>
 
-        <section className={`panel ${styles.dqPanel}`}>
-          <div className="panel-header">
-            <span>Data quality overview</span>
-          </div>
-          <div className="panel-body">
-            <DqDonut dq={dq} />
-          </div>
-        </section>
+        <div className={styles.sideStack}>
+          <section className={`panel ${styles.attentionPanel}`}>
+            <div className="panel-header">
+              <span>Attention required</span>
+              <span className={styles.badgeCount}>{attention.length}</span>
+            </div>
+            <div className="panel-body" style={{ padding: 0 }}>
+              {attention.length === 0 ? (
+                <div className={styles.chartEmpty}>Nothing urgent — queue is clear</div>
+              ) : (
+                <ul className={styles.attentionList}>
+                  {attention.map((a, idx) => (
+                    <li key={`${a.id}-${idx}`}>
+                      <Link to={`/events/${a.id}/overview`} className="mono">
+                        {a.event_id}
+                      </Link>
+                      <span className={styles.attReason}>{a.reason}</span>
+                      <SeverityBadge
+                        severity={
+                          a.severity as 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+                        }
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
 
-        <section className={`panel ${styles.attentionPanel}`}>
-          <div className="panel-header">
-            <span>Attention required</span>
-            <span className={styles.badgeCount}>{attention.length}</span>
-          </div>
-          <div className="panel-body" style={{ padding: 0 }}>
-            {attention.length === 0 ? (
-              <div className={styles.chartEmpty}>Nothing urgent — queue is clear</div>
-            ) : (
-              <ul className={styles.attentionList}>
-                {attention.map((a, idx) => (
-                  <li key={`${a.id}-${idx}`}>
-                    <Link to={`/events/${a.id}/overview`} className="mono">
-                      {a.event_id}
-                    </Link>
-                    <span className={styles.attReason}>{a.reason}</span>
-                    <SeverityBadge
-                      severity={
-                        a.severity as 'INFO' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
-                      }
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
+          <section className={`panel ${styles.dqPanel}`}>
+            <div className="panel-header">
+              <span>Data quality overview</span>
+            </div>
+            <div className="panel-body">
+              <DqDonut dq={dq} />
+            </div>
+          </section>
+        </div>
       </div>
 
       <section className="panel">
@@ -499,7 +555,7 @@ export function DashboardPage() {
         </div>
         <div className="panel-body" style={{ padding: 0 }}>
           <div className={styles.tableScroll}>
-            <table className="data-table">
+            <table className={`data-table ${styles.recentTable}`}>
               <thead>
                 <tr>
                   <th>Event ID</th>
@@ -553,10 +609,16 @@ export function DashboardPage() {
                       </span>
                     </td>
                     <td>
-                      <StatusBadge status={ev.rca_status} />
+                      <StatusBadge
+                        status={ev.rca_status}
+                        label={RCA_LABELS[ev.rca_status] ?? ev.rca_status.replace(/_/g, ' ')}
+                      />
                     </td>
                     <td>
-                      <StatusBadge status={ev.status} />
+                      <StatusBadge
+                        status={ev.status}
+                        label={STATUS_LABELS[ev.status] ?? ev.status.replace(/_/g, ' ')}
+                      />
                     </td>
                     <td>
                       {ev.severity ? (
@@ -580,6 +642,7 @@ export function DashboardPage() {
                               | 'POOR'
                               | 'INVALID'
                           }
+                          label={DQ_LABELS[ev.data_quality] ?? ev.data_quality}
                         />
                       ) : (
                         '—'
@@ -592,11 +655,8 @@ export function DashboardPage() {
           </div>
           {recent.length === 0 && (
             <div className={styles.emptyActions} style={{ padding: 16 }}>
-              <Link to="/events/new" className="btn btn-primary">
-                + New event
-              </Link>
-              <Link to="/upload" className="btn">
-                Upload records
+              <Link to="/plant" className="btn btn-primary">
+                Open Plant
               </Link>
             </div>
           )}

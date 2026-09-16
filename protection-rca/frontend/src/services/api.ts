@@ -21,6 +21,13 @@ import type {
   User,
   WaveformChannelData,
   WaveformMarker,
+  PlantTree,
+  Substation,
+  VoltageLevel,
+  Bay,
+  Feeder,
+  Relay,
+  IedContext,
 } from '@/types';
 
 const TOKEN_KEY = 'protection_rca_token';
@@ -174,6 +181,10 @@ export const api = {
     data_quality?: string;
     date_from?: string;
     date_to?: string;
+    relay_id?: string;
+    unmapped?: boolean;
+    page?: number;
+    page_size?: number;
   }): Promise<Event[]> {
     const { data } = await apiClient.get<Event[] | { items: Event[] }>('/events', {
       params,
@@ -189,6 +200,78 @@ export const api = {
 
   async createEvent(payload: Partial<Event> & Record<string, unknown>): Promise<Event> {
     const { data } = await apiClient.post<Event>('/events', payload);
+    return data;
+  },
+
+  async getPlantTree(): Promise<PlantTree> {
+    const { data } = await apiClient.get<PlantTree>('/plant/tree');
+    return data;
+  },
+
+  async createSubstation(body: { name: string; code?: string }): Promise<Substation> {
+    const { data } = await apiClient.post('/substations', body);
+    return data;
+  },
+
+  async deleteSubstation(id: string): Promise<void> {
+    await apiClient.delete(`/substations/${id}`);
+  },
+
+  async createVoltageLevel(body: {
+    substation_id: string;
+    name: string;
+    nominal_voltage_kv?: number;
+    code?: string;
+  }): Promise<VoltageLevel> {
+    const { data } = await apiClient.post('/voltage-levels', body);
+    return data;
+  },
+
+  async deleteVoltageLevel(id: string): Promise<void> {
+    await apiClient.delete(`/voltage-levels/${id}`);
+  },
+
+  async createBay(body: {
+    voltage_level_id: string;
+    name: string;
+    code?: string;
+  }): Promise<Bay> {
+    const { data } = await apiClient.post('/bays', body);
+    return data;
+  },
+
+  async deleteBay(id: string): Promise<void> {
+    await apiClient.delete(`/bays/${id}`);
+  },
+
+  async createFeeder(body: {
+    bay_id: string;
+    name: string;
+    code?: string;
+  }): Promise<Feeder> {
+    const { data } = await apiClient.post('/feeders', body);
+    return data;
+  },
+
+  async deleteFeeder(id: string): Promise<void> {
+    await apiClient.delete(`/feeders/${id}`);
+  },
+
+  async createIed(body: {
+    feeder_id: string;
+    name: string;
+    relay_tag?: string;
+  }): Promise<Relay> {
+    const { data } = await apiClient.post('/ieds', body);
+    return data;
+  },
+
+  async deleteIed(id: string): Promise<void> {
+    await apiClient.delete(`/ieds/${id}`);
+  },
+
+  async getIedContext(iedId: string): Promise<IedContext> {
+    const { data } = await apiClient.get<IedContext>(`/ieds/${iedId}`);
     return data;
   },
 

@@ -922,6 +922,26 @@ async def persist_engineering_analysis(
 
     ft = str(fault.get("fault_type") or "UNKNOWN")
     extra["fault_type"] = ft
+    operated_codes: list[str] = []
+    seen: set[str] = set()
+    for a in result.protection_assessment or []:
+        if not isinstance(a, dict):
+            continue
+        if not (a.get("trip") or a.get("pickup")):
+            continue
+        code = str(a.get("element") or a.get("function_code") or "").strip()
+        if not code or code.upper() == "UNKNOWN":
+            continue
+        key = code.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        operated_codes.append(code)
+    # Prefer ANSI-like codes first (digits), stable order
+    operated_codes.sort(
+        key=lambda c: (0 if any(ch.isdigit() for ch in c) else 1, c.upper())
+    )
+    extra["protection_summary"] = ", ".join(operated_codes) if operated_codes else None
     sevs = [
         str(f.get("severity") or "")
         for f in (result.consistency_findings or [])

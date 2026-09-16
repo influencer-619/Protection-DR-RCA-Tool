@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.security import create_access_token, hash_password
-from app.dependencies.auth import DbSession
+from app.dependencies.auth import AuthDbSession, DbSession
 from app.models import User
 from app.schemas.auth import LoginRequest, TokenResponse
 from app.services import auth_service, oidc_service
@@ -51,12 +51,18 @@ async def auth_mode(redirect_uri: Optional[str] = Query(None)) -> AuthModeOut:
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, request: Request, db: DbSession) -> TokenResponse:
+async def login(
+    body: LoginRequest,
+    request: Request,
+    auth_db: AuthDbSession,
+    db: DbSession,
+) -> TokenResponse:
     try:
         result = await auth_service.authenticate(
-            db,
+            auth_db,
             body.username,
             body.password,
+            audit_db=db,
             ip_address=request.client.host if request.client else None,
             request_id=getattr(request.state, "request_id", None),
         )
@@ -69,7 +75,10 @@ async def login(body: LoginRequest, request: Request, db: DbSession) -> TokenRes
 
 @router.post("/oidc/callback", response_model=TokenResponse)
 async def oidc_callback(
-    body: OidcCallbackRequest, request: Request, db: DbSession
+    body: OidcCallbackRequest,
+    request: Request,
+    auth_db: AuthDbSession,
+    db: DbSession,
 ) -> TokenResponse:
     if not oidc_service.oidc_enabled():
         raise HTTPException(status_code=400, detail="OIDC auth mode is not enabled")
@@ -87,10 +96,10 @@ async def oidc_callback(
         or claims.get("sub")
         or "oidc_user"
     )
-    result = await db.execute(select(User).where(User.username == username))
+    result = await auth_db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
     if user is None and email:
-        result = await db.execute(select(User).where(User.email == email))
+        result = await auth_db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
     if user is None:
         user = User(
@@ -101,8 +110,8 @@ async def oidc_callback(
             role="VIEWER",
             is_active=True,
         )
-        db.add(user)
-        await db.flush()
+        auth_db.add(user)
+        await auth_db.flush()
 
     user.last_login_at = datetime.now(timezone.utc)
     token = create_access_token(
@@ -118,7 +127,7 @@ async def oidc_callback(
         request_id=getattr(request.state, "request_id", None),
         new_value={"method": "oidc"},
     )
-    await db.flush()
+    await auth_db.flush()
     return TokenResponse(
         access_token=token,
         token_type="bearer",

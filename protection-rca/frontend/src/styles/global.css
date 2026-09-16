@@ -254,6 +254,9 @@ code,
 .page {
   padding: 14px var(--content-pad-x);
   max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .form-label {

@@ -2,61 +2,43 @@
 
 **Audience:** Protection engineers, analysts, approvers, and administrators  
 **Product:** Protection Disturbance Record (DR) / COMTRADE analysis and Root Cause Analysis (RCA) platform  
-**Document version:** 0.5.0  
+**Document version:** 0.6.0  
 **Application:** Protection RCA web application (React + FastAPI)
 
-This guide explains how to launch the application, create and analyse disturbance events, interpret results, generate reports, and complete engineer review. It reflects the **current implemented behaviour** of the platform.
+This guide explains how to launch the application, build the plant hierarchy, upload and analyse disturbance events under each IED, interpret results, generate reports, and complete engineer review. It reflects the **current implemented behaviour** of the platform.
 
 ---
 
 ## Document revision — what is covered in this edition
 
-This edition (**0.5.0**) documents platform upgrades since 0.4.0, including:
+This edition (**0.6.0**) documents the **plant-first** workflow and related UI/ops upgrades:
 
 | Area | What changed |
 |------|----------------|
-| **R–X locus** | Shows the **faulted loop only** (e.g. AG → ZAG; ABG → ZAB). Not all phase self-impedances for every fault |
-| **Trip zones on R–X** | Real **RIO / XRIO** (and scalar `21` reach) zone geometry — mho circles and polygons — when settings files provide them |
-| **Impedance table** | Electrical → Impedance lists **faulted-loop** rows only (title shows e.g. `AG loop`) |
-| **Harmonics heatmap** | Time × harmonic-order heatmap (short-time DFT) on Electrical and DR workspace, alongside harmonic bars |
-| **Id / Ir (87)** | Differential operate/restraint plot and physics when both-side / winding currents exist |
-| **87T through-fault** | `through_fault_excluded` for CONFIRMED transformer internal RCA when Id/Ir supports internal operate, or soft path when Id/Ir unavailable and phase CT-sat / inrush are not indicated |
-| **CT saturation detector** | Soft indicators use **phase currents (IA/IB/IC) only** — residual/IN high H2 during earth faults is not treated as phase CT sat |
-| **Decision badges** | **CONFIRMED** primary → `ANALYSIS_COMPLETE` unless **material** warnings (e.g. phase CT sat). Informational notes (SOE merge, unused loops) do **not** force WITH_WARNINGS. **PROBABLE** still → WITH_WARNINGS |
-| **Nominal voltage** | Auto-filled from settings text (`Nominal System Voltage`), VT ratio (e.g. `132000/110`), filename / station `…132kV…` when the event field was empty |
-| **Settings auto-approve** | Uploaded settings files are treated as **APPROVED** and active group **VERIFIED** automatically (`AUTO_APPROVE_UPLOADED_SETTINGS`, default on). Explicit DRAFT/REJECTED/PENDING packages are left alone |
-| **`.rio` upload** | Classic RIO trip-zone files accepted with settings / XRIO |
-| **Portable build** | `build-all-latest.bat` stops a running `ProtectionRCA.exe` before rebuild and fails if PyInstaller errors (avoids false “EXE OK” when Access denied) |
+| **Plant-first workflow** | **No direct Create event / Upload** entry points. Build **Substation → Voltage level → Bay → Feeder → IED**, then open the IED to upload COMTRADE / packages |
+| **Plant hierarchy UI** | Full-width Plant page: step strip, count tiles, expandable tree with **+ Voltage / + Bay / + Feeder / + IED**, **Open** on each IED, Delete at every level |
+| **IED workspace** | Per-IED page: upload disturbance records, list events for that relay, open analysis |
+| **All events** | Global list with live **Search** (ID, station, bay, relay, fault/protection, status, DQ) and **From / To** date filters; shows “X of Y events”; **Clear filters** |
+| **Protection column** | Events / Dashboard show operated elements (e.g. **51N, 87T, 21**) plus fault type where known |
+| **Dashboard layout** | Full-width operations console: Work inbox, **Operations** + **Quality & findings** KPI rows (4×2), trend chart + Attention queue + DQ donut, Recent events with compact badges |
+| **Navigation** | Sidebar: **Plant** · **Analysis** (Dashboard, All events) · **Administration** (Users, Audit) · **Help** |
+| **Dual SQLite DBs** | **Users/passwords** in `backend\protection_rca_auth.db`; **plant + events** in `backend\protection_rca_local.db`. Clearing plant/events does **not** wipe logins |
+| **Default bootstrap admin** | Fresh install: **`admin` / `admin123`** (change in production) |
+| **Continue last event** | Dashboard / All events **Continue** uses local recent-event memory; pruned when events are deleted or the DB is empty |
 
-Earlier **0.4.0** coverage (still valid):
+Earlier **0.5.0** coverage (still valid — engineering analysis features):
 
 | Area | What changed |
 |------|----------------|
-| **Portable package** | `scripts\build-portable-share.bat` builds a shareable folder (exe + backend venv + built UI) — no Python/Node install on the other PC |
-| **LAN access** | Launcher binds API/UI for network use; control window shows LAN URLs (e.g. `http://192.168.x.x:8001/`) |
-| **Portable run mode** | When `frontend\dist` exists, exe serves UI+API on **port 8001** (single process); otherwise Vite UI on **5173** |
-| **Dashboard** | Clickable KPI tiles, 7/30/90-day trend, data-quality donut, Attention Required, richer Recent Events, empty-state workflow |
-| **Navigation** | Grouped sidebar: Operations · Plant · Engineering · Administration · Help |
-| **Create Event wizard** | Multi-step page at `/events/new`: Info → Upload → Detect → Validate → Analyse |
-| **Event workspace** | Tab groups **Setup · Analyse · Protect · Conclude**; pipeline lamps (COMTRADE / DATA / SETTINGS / PROTECTION / CONSISTENCY / RCA / REPORT) |
-| **Channel map** | Setup → **Channel map** — assign analog roles (Ia/Ib/Ic/In, Va/Vb/Vc, …) before trusting electrical / distance results |
-| **DR targets** | Setup → **DR targets** — map digital channels to Pickup / Trip / 52A / 52B / Reclose / Lockout (+ element) for timeline and protection |
-| **Vendor packages** | SEL `.rdb` / `.cev`, DIGSI/PCM600 packages (`.dz5` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp`), `.set` / `.xrio` / `.eve` / `.log` where extractable |
-| **Background analysis** | Analyse returns immediately; job runs in the background. Failures show the real error (hover FAILED badge / Details). Re-run after maps or settings change |
-| **Scheme library** | Scheme-aware RCA context (stepped 21, 87L+21, POTT, feeder OC/EF, transformer/bus/gen unit, BF cascade) from operated/enabled elements |
-| **Cause enrichment** | Protect → **RCA** — engineer checkboxes for lightning / vegetation / cable (etc.); physical causes stay INCONCLUSIVE until structured evidence is saved, then **re-run analysis** |
-| **Protection breadth** | Inverse-time **51 / 51N / 51P**; directional **67 / 67N / 67P**; differential **87L / 87T / 87B**; **50BF**; distance **21** |
-| **Overview** | What happened · Why · Which setting · What is uncertain · What should I verify |
-| **Waveforms** | Real sample streaming from parsed COMTRADE (cached samples, not metadata-only) |
-| **RCA hypotheses** | Zone/scheme-aware ranking; lightning/vegetation/cable only when field/asset evidence tokens exist |
-| **Reports** | Deterministic HTML + **PDF download** (ReportLab); JSON machine-readable companion |
-| **Upload attachments** | **`.pdf`** and **`.zip`** allowed; ZIP packages **auto-extract**; vendor binaries expanded when supported |
-| **Delete event** | Events list Actions → Delete; also Delete on event workspace header (ANALYST+) |
-| **Similarity** | Classical cosine historical similarity (supporting evidence only — never proof) |
-| **COMTRADE matrix** | Fixtures for IEEE 1991, BINARY, BINARY32, FLOAT32, CFF + golden expectations |
-| **Authentication** | Local JWT login; optional **OIDC / SSO** when `AUTH_MODE=oidc` |
-| **Database** | Alembic initial schema migration; PostgreSQL (Compose) / SQLite (local scripts) |
-| **Safety** | Still **no generative AI**, **no OT control**, no invented measurements/distance |
+| **R–X locus** | Faulted loop only; RIO/XRIO trip zones when settings provide them |
+| **Impedance / harmonics / Id–Ir** | Faulted-loop Z table; harmonics heatmap; 87 operate/restraint when both-side currents exist |
+| **87T through-fault / CT sat** | Through-fault exclusion paths; phase-current-only soft CT-sat cues |
+| **Decision badges** | CONFIRMED → `ANALYSIS_COMPLETE` unless material warnings; PROBABLE → WITH_WARNINGS |
+| **Settings auto-approve** | Uploaded settings APPROVED / active group VERIFIED by default |
+| **Portable build / LAN** | `build-portable-share.bat`, single-port **8001** portable mode, LAN URLs in launcher |
+| **Event workspace** | Tab groups Setup · Analyse · Protect · Conclude; Channel map; DR targets; background analysis |
+| **Scheme library / cause enrichment** | Scheme-aware RCA; field/asset cause checkboxes on RCA page |
+| **Reports / safety** | HTML + PDF + JSON; no generative AI; no OT control |
 
 ---
 
@@ -69,25 +51,26 @@ Earlier **0.4.0** coverage (still valid):
 5. [Main navigation](#5-main-navigation)
 6. [Dashboard (operations console)](#6-dashboard-operations-console)
 7. [Recommended workflow (end-to-end)](#7-recommended-workflow-end-to-end)
-8. [Create Event wizard (guided)](#8-create-event-wizard-guided)
-9. [Uploading files](#9-uploading-files)
-10. [COMTRADE detection and validation](#10-comtrade-detection-and-validation)
-11. [Running analysis](#11-running-analysis)
-12. [Event analysis workspace (detailed)](#12-event-analysis-workspace-detailed)
-13. [Protection physics and schemes](#13-protection-physics-and-schemes)
-14. [Understanding status badges and quality labels](#14-understanding-status-badges-and-quality-labels)
-15. [Settings and setting hierarchy](#15-settings-and-setting-hierarchy)
-16. [Assets (substations, bays, relays, breakers)](#16-assets-substations-bays-relays-breakers)
-17. [Rules, models, and historical similarity](#17-rules-models-and-historical-similarity)
-18. [Reports (HTML, PDF, JSON)](#18-reports-html-pdf-json)
-19. [Users, SSO, and audit](#19-users-sso-and-audit)
-20. [Supported file types and COMTRADE matrix](#20-supported-file-types-and-comtrade-matrix)
-21. [Sample / test / golden data](#21-sample--test--golden-data)
-22. [Engineering language used in reports](#22-engineering-language-used-in-reports)
-23. [Frequently asked questions](#23-frequently-asked-questions)
-24. [Troubleshooting](#24-troubleshooting)
-25. [Where to find more documentation](#25-where-to-find-more-documentation)
-26. [Quick reference card](#26-quick-reference-card)
+8. [Plant hierarchy (create structure + upload on IED)](#8-plant-hierarchy-create-structure--upload-on-ied)
+9. [All events (list and filters)](#9-all-events-list-and-filters)
+10. [Uploading files](#10-uploading-files)
+11. [COMTRADE detection and validation](#11-comtrade-detection-and-validation)
+12. [Running analysis](#12-running-analysis)
+13. [Event analysis workspace (detailed)](#13-event-analysis-workspace-detailed)
+14. [Protection physics and schemes](#14-protection-physics-and-schemes)
+15. [Understanding status badges and quality labels](#15-understanding-status-badges-and-quality-labels)
+16. [Settings and setting hierarchy](#16-settings-and-setting-hierarchy)
+17. [Databases (auth vs plant/events)](#17-databases-auth-vs-plantevents)
+18. [Rules, models, and historical similarity](#18-rules-models-and-historical-similarity)
+19. [Reports (HTML, PDF, JSON)](#19-reports-html-pdf-json)
+20. [Users, SSO, and audit](#20-users-sso-and-audit)
+21. [Supported file types and COMTRADE matrix](#21-supported-file-types-and-comtrade-matrix)
+22. [Sample / test / golden data](#22-sample--test--golden-data)
+23. [Engineering language used in reports](#23-engineering-language-used-in-reports)
+24. [Frequently asked questions](#24-frequently-asked-questions)
+25. [Troubleshooting](#25-troubleshooting)
+26. [Where to find more documentation](#26-where-to-find-more-documentation)
+27. [Quick reference card](#27-quick-reference-card)
 
 ---
 
@@ -97,7 +80,7 @@ Earlier **0.4.0** coverage (still valid):
 
 An **engineering decision-support web application** that helps you:
 
-- Create disturbance events and upload COMTRADE / ZIP / vendor packages / PDF attachments
+- Build a **plant hierarchy** (Substation → Voltage → Bay → Feeder → IED) and upload COMTRADE / ZIP / vendor packages / PDF **on each IED**
 - Detect and validate COMTRADE format, revision, container, encoding
 - Map analog channels and digital DR targets (pickup/trip/52a/…)
 - Stream and inspect waveforms (raw/scaled samples)
@@ -189,7 +172,9 @@ Important:
 
 - Other PCs must **not** use `http://127.0.0.1:...` — that only works on the host.
 - Use a **trusted LAN only** (not the public internet).
-- Event data stays on the host PC (`backend\protection_rca_local.db` for local/portable runs).
+- Event data stays on the host PC:
+  - Plant + events: `backend\protection_rca_local.db`
+  - Users / passwords: `backend\protection_rca_auth.db`
 
 ### Option D — Scripts (developers)
 
@@ -229,7 +214,7 @@ docker compose up --build
 
 Services typically include: frontend, backend, PostgreSQL, Redis/Celery worker, MinIO object storage.
 
-Database migrations: Alembic revision `0001_initial_schema` creates the application schema. Local scripted runs may use SQLite (`protection_rca_local.db`); Compose uses PostgreSQL.
+Database migrations: Alembic revision `0001_initial_schema` creates the application schema. Local scripted / portable runs use **two SQLite files** (see [§17](#17-databases-auth-vs-plantevents)); Compose uses PostgreSQL for application data.
 
 See `README.md` and `docs/DEPLOYMENT.md`.
 
@@ -257,7 +242,14 @@ scripts\build-launcher-exe.bat
 2. Enter **Username** and **Password**.
 3. Click **Sign in**.
 
-There are **no demo events or demo assets** by default.
+**Default bootstrap account** (empty auth database / first launch):
+
+| Field | Value |
+|-------|--------|
+| Username | `admin` |
+| Password | `admin123` |
+
+Change this password in production. There are **no demo events or demo plant assets** by default.
 
 ### Optional SSO (OIDC)
 
@@ -269,7 +261,9 @@ If the server is configured with `AUTH_MODE=oidc` and a valid issuer / client:
 
 If OIDC is not configured, only local login is shown.
 
-### First-time admin (empty database)
+### First-time admin (custom bootstrap)
+
+Override defaults before first launch:
 
 ```bat
 set BOOTSTRAP_ADMIN_USERNAME=admin
@@ -277,7 +271,7 @@ set BOOTSTRAP_ADMIN_PASSWORD=your-strong-password
 set BOOTSTRAP_ADMIN_EMAIL=admin@example.com
 ```
 
-Then launch the backend/exe again. This creates **only** an admin user — no sample substations or events.
+Then launch the backend/exe again. This creates **only** an admin user in the **auth** database — no sample substations or events.
 
 ### Sign out
 
@@ -290,7 +284,7 @@ Use **Sign out** in the top bar (user area).
 | Role | Typical use |
 |------|-------------|
 | **VIEWER** | Read dashboards, events, reports |
-| **ANALYST** | Create events, upload files, start analysis |
+| **ANALYST** | Build plant, upload on IED, start analysis |
 | **PROTECTION_ENGINEER** | Settings, consistency interpretation, review actions |
 | **APPROVER** | Approvals, audit access |
 | **ADMIN** | Users, rules/models administration |
@@ -301,30 +295,20 @@ Authorization is enforced on the server. If a button fails with “forbidden”,
 
 ## 5. Main navigation
 
-Left sidebar is grouped:
-
-### Operations
-
-| Menu | Purpose |
-|------|---------|
-| **Dashboard** | KPI overview, trends, attention queue |
-| **Events** | List / filter disturbance events |
-| **Create event** | Guided multi-step wizard |
-| **Upload** | Upload-centric entry for records |
+Left sidebar (plant-first):
 
 ### Plant
 
 | Menu | Purpose |
 |------|---------|
-| **Assets / Substations / Bays / Relays / Breakers** | Plant topology |
+| **Plant** | Build and browse hierarchy: Substation → Voltage → Bay → Feeder → IED; open IED to upload |
 
-### Engineering
+### Analysis
 
 | Menu | Purpose |
 |------|---------|
-| **Settings / Versions / Groups** | Setting hierarchy |
-| **Rules** | Protection / consistency / RCA rule packages |
-| **Models** | Classical ML model registry |
+| **Dashboard** | Work inbox, KPIs, trend, attention queue, recent events |
+| **All events** | Global list with search + date filters; Compare; Continue last event |
 
 ### Administration
 
@@ -337,15 +321,31 @@ Left sidebar is grouped:
 
 In-app help and this user guide.
 
+> **Removed from the sidebar (by design):** standalone **Create event** and **Upload** pages. Creating records always goes through **Plant → IED → upload**. Old `/events/new` and upload-only routes redirect to **Plant**.
+
 ---
 
 ## 6. Dashboard (operations console)
 
-The dashboard is the engineering operations console. It uses **live database values** — never fabricated demo events.
+The dashboard is the engineering operations console. It uses **live database values** — never fabricated demo events. Layout is **full width** of the main content area (sidebar to right edge).
 
-### Clickable KPI tiles
+### Work inbox
 
-Each tile opens the Events list with the matching filter (`?queue=…`):
+Top banner summarises items needing attention (analyse · review · consistency · high severity) with quick buttons:
+
+- **Review queue**
+- **Consistency**
+- **Analyse**
+
+Recent locally opened events appear as quick links. **Continue \<event id\>** jumps back into the last worked event (stored in browser memory; cleared when that event is deleted or the events DB is empty).
+
+Header actions: **Continue** · **Compare** · **All events** · **Open Plant**.
+
+### Clickable KPI tiles (two groups)
+
+Each tile opens **All events** with the matching filter (`?queue=…`):
+
+**Operations**
 
 | KPI | Filter meaning |
 |-----|----------------|
@@ -353,6 +353,11 @@ Each tile opens the Events list with the matching filter (`?queue=…`):
 | Awaiting Analysis | Uploaded / queued / analysing |
 | Awaiting Review | Analysed / review states |
 | Completed Reports | Events with ready reports |
+
+**Quality & findings**
+
+| KPI | Filter meaning |
+|-----|----------------|
 | Consistency Issues | Events with INCONSISTENT findings |
 | High Severity Findings | HIGH / CRITICAL consistency |
 | RCA Inconclusive | Decision INCONCLUSIVE / DATA_INSUFFICIENT |
@@ -360,27 +365,22 @@ Each tile opens the Events list with the matching filter (`?queue=…`):
 
 ### Event trend (7 / 30 / 90 days)
 
-Stacked bars for **Analysed · Review · Issues**. Switch the window with the **7d / 30d / 90d** controls. Empty windows show a clear empty state.
+Stacked bars for **Analysed · Review · Issues**. Switch the window with **7d / 30d / 90d**. Leading empty days are trimmed so sparse data stays readable.
 
-### Data quality overview
+### Attention required + Data quality
 
-Donut breakdown from actual event `data_quality` values:
+Right-hand stack:
 
-- GOOD / ACCEPTABLE  
-- WARNING / POOR / INVALID  
-- UNSUPPORTED / NOT VALIDATED / Unknown  
-
-Percentages are computed from real counts.
-
-### Attention required
-
-Prioritised list of events needing action (awaiting analysis/review, inconclusive RCA, DQ issues, high-severity consistency). Each row links into the event workspace.
+1. **Attention required** — prioritised events (awaiting review/analysis, DQ, high severity, inconclusive). Each row links into the event workspace.
+2. **Data quality overview** — donut from real `data_quality` counts (GOOD / ACCEPTABLE / WARNING / POOR / INVALID / …).
 
 ### Recent events table
 
-Columns include:
+Columns:
 
-Event ID · Date/Time · Substation/Bay · Relay · Fault · Protection · Consistency · RCA · Status · Severity · DQ
+Event ID · Date/Time · Substation/Bay · Relay · Fault · **Protection** (e.g. 51N, 87T) · Consistency · RCA · Status · Severity · DQ
+
+Status badges use short labels on this table (e.g. Complete, Review) — hover for the full glossary text.
 
 ### Empty database behaviour
 
@@ -388,8 +388,8 @@ When there are zero events:
 
 - All counters show **0**
 - Banner: “No disturbance events yet”
-- Actions: **+ New event** · **Upload records**
-- Recommended workflow checklist (Create → Upload → Validate → Analyse → Consistency → RCA → Report)
+- Action: **Open Plant**
+- Checklist: Build Plant (SS → kV → Bay → Feeder → IED) → Upload on IED → Validate → Analyse → Consistency → RCA → Report
 
 No fake demo events are seeded unless you explicitly enable a demo mode (not default).
 
@@ -398,50 +398,149 @@ No fake demo events are seeded unless you explicitly enable a demo mode (not def
 ## 7. Recommended workflow (end-to-end)
 
 ```text
-1. Create Event          (/events/new wizard or Quick create)
-2. Upload disturbance package (CFG+DAT / CFF / ZIP / vendor package)
-3. Confirm COMTRADE detection / validation
-4. Setup → Channel map + DR targets (correct if auto-infer looks wrong)
-5. Start / Re-run analysis (runs in background — watch status bar)
-6. Inspect DR workspace / Waveforms / Sequence (timeline)
-7. Review Electrical + Fault + Location + Protection
-8. Study Consistency (setting source!)
-9. Study RCA + Evidence (+ cause enrichment if field evidence exists)
-10. Download Report (HTML / PDF)
-11. Complete Engineer Review
+1. Open Plant                 (/plant)
+2. Create Substation
+3. Add Voltage level (e.g. 132kV)
+4. Add Bay (e.g. Bay 1 / line1 bay)
+5. Add Feeder
+6. Add IED (relay)            → Open IED
+7. Upload disturbance package on the IED (CFG+DAT / CFF / ZIP / vendor)
+8. Confirm COMTRADE detection / validation
+9. Setup → Channel map + DR targets (correct if auto-infer looks wrong)
+10. Start / Re-run analysis (background — watch status bar)
+11. Inspect DR workspace / Waveforms / Sequence
+12. Review Electrical + Fault + Location + Protection
+13. Study Consistency (setting source!)
+14. Study RCA + Evidence (+ cause enrichment if field evidence exists)
+15. Download Report (HTML / PDF)
+16. Complete Engineer Review
 ```
 
 Do **not** skip Consistency when RCA looks “confident.” Consistency findings often explain why RCA must stay inconclusive.
 
 After changing **Channel map**, **DR targets**, settings, or **cause evidence**, always **Re-run analysis** so timeline, protection, consistency, and RCA refresh.
 
+Use **All events** for a global view and filters; use **Plant → IED** for uploads scoped to the correct relay.
+
 ---
 
-## 8. Create Event wizard (guided)
+## 8. Plant hierarchy (create structure + upload on IED)
 
-Open **Operations → Create event** (route `/events/new`).
+Open **Plant** in the sidebar (route `/plant`).
 
-### Step 1 — Event information
+### Hierarchy levels
 
-| Field | Guidance |
-|-------|----------|
-| Event ID | Optional — auto-generated if blank |
-| Substation / Bay / Feeder / Asset | Use known names; blanks stored as UNKNOWN / NOT VERIFIED |
-| Relay / Breaker | Optional; prefer NOT VERIFIED over invented tags |
-| Event Date/Time | Disturbance time if known |
-| Nominal voltage / frequency | Only if verified |
-| Description | Short factual note |
+```text
+Substation
+  └── Voltage level (e.g. 132kV)
+        └── Bay (e.g. Bay 1)
+              └── Feeder
+                    └── IED (relay)  ← upload + events live here
+```
 
-Never invent plant data.
+| Level | How to create | Notes |
+|-------|---------------|--------|
+| **Substation** | **+ Substation** (page header) | Top of the tree |
+| **Voltage** | On a substation row → **+ Voltage** | Optional nominal kV |
+| **Bay** | On a voltage row → **+ Bay** | Name the bay clearly (e.g. `line1 bay`) |
+| **Feeder** | On a bay row → **+ Feeder** | |
+| **IED** | On a feeder row → **+ IED** | Relay / IED name; becomes upload target |
 
-### Step 2 — File upload
+Each row supports **Delete** (removes children too — confirm carefully). Expand/collapse with the tree twisty.
 
-Drag-and-drop disturbance package. Supported extensions include  
+Count tiles at the top show totals: Substations · Voltage levels · Bays · Feeders · IEDs.
+
+### Open an IED (workspace)
+
+On an IED row click **Open** (or the IED name link). The **IED workspace** shows:
+
+- Plant path context (substation / voltage / bay / feeder / IED)
+- **Upload** disturbance record package for **this** IED only
+- List of events already attached to this IED
+- Links into each event’s analysis workspace
+
+Events are always created with a **relay_id** (IED). There is no “orphan” upload path in the current UI.
+
+### Naming tips
+
+- Use site names operators recognise (`Substation 2`, `132kV`, `Bay 1`, `Feeder 1`, `IED-4`)
+- Prefer verified tags over placeholders; you can still rename later by recreating or updating via admin APIs if needed
+- Never invent plant topology that does not exist on site
+
+---
+
+## 9. All events (list and filters)
+
+Open **Analysis → All events** (route `/events`).
+
+### Header actions
+
+| Control | Purpose |
+|---------|---------|
+| **Continue …** | Resume last locally remembered event |
+| **Open Plant** | Go to hierarchy / upload |
+| **Compare** | Multi-event compare |
+| **Clear filters** | Clears search, dates, and dashboard `?queue=` filter |
+
+When you arrive from a Dashboard KPI, a banner shows the active **queue filter** (e.g. Awaiting review).
+
+### Search (live)
+
+Type in **Search**. Matching is case-insensitive across:
+
+- Event ID  
+- Substation / bay / relay (IED)  
+- Feeder / description  
+- Fault type and **protection summary** (e.g. `87T`, `51N`)  
+- Status, decision state, data quality, severity  
+
+The counter shows **“X of Y events”**.
+
+### Date range (From / To)
+
+- Uses the event date/time (falls back to created time if needed)
+- Times are interpreted in **local** browser time (no accidental UTC day-shift)
+- If **To** is left at midnight (`00:00`), the filter includes the **entire calendar day**
+
+### Table columns
+
+Event ID · Date/Time · Location (substation + bay) · Relay · **Fault / element** (protection primary, fault type secondary) · Status · Sev · DQ · **Delete**
+
+### Empty / no-match states
+
+| Situation | Message |
+|-----------|---------|
+| No events in database | Prompt to open Plant and upload on an IED |
+| Events exist but filters exclude all | “No events match…” + **Clear filters** |
+
+---
+
+## 10. Uploading files
+
+### From the IED workspace (primary path)
+
+1. **Plant** → expand to the IED → **Open**
+2. Drag and drop (or file picker) the disturbance package
+3. Confirm upload — event is created under that IED
+4. Note **SHA-256** on the event **Files** tab (integrity / chain of custody)
+
+Original files are stored **immutably** (content-addressed; not overwritten).
+
+### From the event **Files** tab
+
+After the event exists:
+
+1. Open the event → **Files**
+2. Drag and drop additional members (settings, SOE, PDF, …)
+3. Confirm upload
+
+### Supported extensions
+
 `.cfg .dat .cff .hdr .inf .csv .txt .xml .json .pdf .zip`  
 plus vendor / settings packages:  
 `.set .rdb .xrio .rio .eve .cev .log .dz5 .dex5 .d5z .pcmi .pcmp`.
 
-**ZIP packages:** uploading a `.zip` **auto-extracts** the archive. Each allowed member (COMTRADE, settings, SOE, PDF, vendor extractables, etc.) is stored as its own immutable event file and used for detection, validation, and analysis. The original ZIP is kept as a **PACKAGE** attachment for evidence. Nested ZIPs are expanded (limited depth). Unsupported members are skipped (recorded in metadata). Path-traversal / zip-bomb guards apply.
+**ZIP packages:** uploading a `.zip` **auto-extracts** the archive. Each allowed member is stored as its own immutable event file. The original ZIP is kept as a **PACKAGE** attachment. Nested ZIPs expand (limited depth). Path-traversal / zip-bomb guards apply.
 
 **Vendor notes (honest):**
 
@@ -452,54 +551,22 @@ plus vendor / settings packages:
 | DIGSI / PCM600 `.dz5` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp` | Treated as ZIP-like packages when they contain nested COMTRADE / settings / CEV; proprietary non-ZIP blobs stay **NOT CALCULABLE** with export guidance |
 | `.set` / `.xrio` / `.rio` / `.eve` / `.log` / SOE CSV | Parsed when structure is recognized; RIO/XRIO supply distance trip-zone geometry for R–X when present |
 
-### Step 3 — Detection
-
-Automatic COMTRADE detection: status, revision, container, data format, encoding.  
-If you uploaded a ZIP, detection runs on the **extracted** COMTRADE members.
-
-### Step 4 — Validation
-
-Validation status and data quality. Warnings are shown explicitly.
-
-### Step 5 — Analysis
-
-Click **Start analysis**. Open the event workspace to follow progress.
-
-You can also use **Events → Quick create** for a shorter modal, or **Upload** to create an event from dropped files.
-
----
-
-## 9. Uploading files
-
-### From the event **Files** tab
-
-1. Open the event → **Files**
-2. Drag and drop, or use the file picker
-3. Confirm upload
-4. Note **SHA-256** (integrity / chain of custody)
-
-Original files are stored **immutably** (content-addressed; not overwritten).
-
-### From **Operations → Upload**
-
-Drop files to create a new event in one step. Same extension rules and ZIP auto-extract behaviour apply.
-
 ### Deleting an event
 
-On **Events** list → **Actions → Delete**, or open an event and use **Delete event** in the header. Requires **ANALYST** (or higher). Confirm the dialog — the event and related DB records are removed. Stored file blobs remain content-addressed (immutable storage); they are not rewritten.
+On **All events** → **Delete**, or open an event and use **Delete event** in the header. Requires **ANALYST** (or higher). Confirm the dialog — the event and related DB records are removed. Stored file blobs remain content-addressed (immutable storage); they are not rewritten. Browser “Continue” memory for that event is cleared.
 
 ### Good practice
 
 - Upload **CFG + DAT** together (same base name when possible)
 - For CFF, upload the `.cff`
 - Or upload a **ZIP** / vendor package containing CFG/DAT/CFF (+ settings / SOE / PDF)
-- Include settings exports / event reports / PDF attachments when available
+- Upload under the **correct IED** so location / relay columns stay accurate
 - After upload, confirm **Channel map** and **DR targets** before trusting protection timing
 - Prefer originals from relay software — do not re-save in Excel
 
 ---
 
-## 10. COMTRADE detection and validation
+## 11. COMTRADE detection and validation
 
 Open the event → **COMTRADE** tab.
 
@@ -525,9 +592,9 @@ The system does **not** silently interpolate missing samples or invent channels.
 
 ---
 
-## 11. Running analysis
+## 12. Running analysis
 
-1. After upload/validation (and preferably after Channel map / DR targets), start analysis from the wizard Step 5 or the event workspace (**Start analysis** / **Re-run analysis**)
+1. After upload/validation (and preferably after Channel map / DR targets), start analysis from the event workspace (**Start analysis** / **Re-run analysis**)
 2. The API **queues** the job and returns immediately — engineering runs in the **background** so the browser does not time out
 3. Watch **Analysis progress** and the **status bar** lamps:
 
@@ -567,7 +634,7 @@ Typical local analysis for normal records targets **under ~2 minutes**.
 
 ---
 
-## 12. Event analysis workspace (detailed)
+## 13. Event analysis workspace (detailed)
 
 Event header shows: **Event ID · Substation · Bay · Relay · Date/Time** plus status / DQ / decision badges.
 
@@ -658,7 +725,7 @@ Fault type / characteristics and distance / location views when inputs exist. Di
 
 Per-element table: Enabled · Pickup · Trip · Expected · Timing · Consistency · Setting source · Evidence.
 
-See also [§13 Protection physics and schemes](#13-protection-physics-and-schemes).
+See also [§14 Protection physics and schemes](#14-protection-physics-and-schemes).
 
 ### Consistency (critical)
 
@@ -675,7 +742,7 @@ Always read:
 | UNVERIFIABLE | Cannot decide with available inputs |
 | DATA_QUALITY_ISSUE | Record quality blocks the check |
 
-Uploaded settings are **auto-APPROVED** and the active group marked **VERIFIED** by default (see [§15](#15-settings-and-setting-hierarchy)). You can still confirm or re-approve manually if your site policy requires it.
+Uploaded settings are **auto-APPROVED** and the active group marked **VERIFIED** by default (see [§16](#16-settings-and-setting-hierarchy)). You can still confirm or re-approve manually if your site policy requires it.
 
 **Mandatory rule:** `51 Enabled = FALSE` with pickup/trip observed → **INCONSISTENT** (typically HIGH). RCA remains **INCONCLUSIVE** regarding relay malfunction until active configuration is verified.
 
@@ -701,7 +768,7 @@ RCA → Hypothesis → Finding → Calculation → Source → Raw data / file
 
 ### Summary / Report / Review
 
-Summary consolidates the event story. Report: see [§18 Reports](#18-reports-html-pdf-json).
+Summary consolidates the event story. Report: see [§19 Reports](#19-reports-html-pdf-json).
 
 | Review action | When to use |
 |--------|-------------|
@@ -715,7 +782,7 @@ Automated results are retained; overrides are audited separately.
 
 ---
 
-## 13. Protection physics and schemes
+## 14. Protection physics and schemes
 
 ### Element 51 / 51N / 51P — time overcurrent
 
@@ -761,7 +828,7 @@ Scheme context influences RCA ranking; it does **not** invent trips or measureme
 
 ---
 
-## 14. Understanding status badges and quality labels
+## 15. Understanding status badges and quality labels
 
 ### Decision states
 
@@ -801,11 +868,9 @@ INFO · LOW · MEDIUM · HIGH · CRITICAL
 
 ---
 
-## 15. Settings and setting hierarchy
+## 16. Settings and setting hierarchy
 
-Navigate: **Settings** → Overview / Versions / Groups.
-
-Priority (highest first):
+Navigate settings from the event workspace (uploaded packages) and consistency panels. Version / group priority (highest first):
 
 1. Event-specific active setting  
 2. Active setting group  
@@ -842,18 +907,38 @@ Never invents a voltage without one of these evidences.
 
 ---
 
-## 16. Assets (substations, bays, relays, breakers)
+## 17. Databases (auth vs plant/events)
 
-1. Create **Substation**  
-2. Create **Bay**  
-3. Register **Relay** and **Breaker**  
-4. Link events when known  
+Local / portable SQLite layout (under `backend\`):
 
-Unknown at event time → leave blank; update later. Wizard free-text labels are stored as plant labels (UNKNOWN / NOT VERIFIED) until assets are registered.
+| File | Contents |
+|------|----------|
+| **`protection_rca_auth.db`** | Users, passwords, auth sessions |
+| **`protection_rca_local.db`** | Plant hierarchy, events, analysis artefacts metadata |
+
+### Why two databases?
+
+Clearing plant/event data for a clean engineering trial **does not** wipe logins. You keep `admin` / other accounts while resetting events.
+
+### How to clear data safely
+
+**Events and plant only (keep logins):**
+
+1. Stop `ProtectionRCA.exe`
+2. Delete `backend\protection_rca_local.db` (and `-wal` / `-shm` if present)
+3. Optionally delete `backend\storage\` event/report blobs
+4. Optionally clear browser localStorage key `protection_rca_recent_events_v1` (Continue button)
+5. Restart the exe — plant tree and events are empty; log in as before
+
+**Full wipe including users:**
+
+Also delete `backend\protection_rca_auth.db`. Next start recreates bootstrap **`admin` / `admin123`** (or your `BOOTSTRAP_ADMIN_*` values).
+
+Docker / PostgreSQL deployments use the configured application database; auth separation above applies to the local SQLite dual-DB mode.
 
 ---
 
-## 17. Rules, models, and historical similarity
+## 18. Rules, models, and historical similarity
 
 ### Rules
 
@@ -873,7 +958,7 @@ After analysis, classical feature vectors (voltage, frequency, DQ, fault/status 
 
 ---
 
-## 18. Reports (HTML, PDF, JSON)
+## 19. Reports (HTML, PDF, JSON)
 
 Open event → **Report**.
 
@@ -894,7 +979,7 @@ Print remains available via the browser print dialog.
 
 ---
 
-## 19. Users, SSO, and audit
+## 20. Users, SSO, and audit
 
 ### Users
 
@@ -920,7 +1005,7 @@ Each entry: who / when / what / old→new where applicable.
 
 ---
 
-## 20. Supported file types and COMTRADE matrix
+## 21. Supported file types and COMTRADE matrix
 
 | Extension | Typical content |
 |-----------|-----------------|
@@ -950,7 +1035,7 @@ Supported / regression-covered COMTRADE families (see `docs/COMTRADE_SUPPORT.md`
 
 ---
 
-## 21. Sample / test / golden data
+## 22. Sample / test / golden data
 
 For training or regression (not production events):
 
@@ -973,11 +1058,11 @@ cd protection-rca
 python scripts\generate_comtrade_fixtures.py
 ```
 
-Create a **new empty event**, upload files, run analysis, and explore each tab.
+Create a plant path ending in an IED, upload test files on that IED, run analysis, and explore each tab.
 
 ---
 
-## 22. Engineering language used in reports
+## 23. Engineering language used in reports
 
 Controlled templates only. Examples:
 
@@ -990,10 +1075,25 @@ Never treat fluent wording as stronger than status badges.
 
 ---
 
-## 23. Frequently asked questions
+## 24. Frequently asked questions
+
+**Q: Where is Create event / Upload in the menu?**  
+A: Removed on purpose. Go to **Plant**, build Substation → Voltage → Bay → Feeder → IED, then **Open** the IED and upload there.
+
+**Q: How do I create my first event?**  
+A: Plant → **+ Substation** → **+ Voltage** → **+ Bay** → **+ Feeder** → **+ IED** → **Open** → drop CFG/DAT (or ZIP). Then open the new event and run analysis.
+
+**Q: Default login?**  
+A: `admin` / `admin123` on a fresh auth database. Change it for production.
+
+**Q: I deleted the local DB and cannot log in**  
+A: You deleted `protection_rca_auth.db` as well. Restart the app to recreate bootstrap admin, or keep auth DB and only delete `protection_rca_local.db` when clearing events.
 
 **Q: Why are Location / Relay / Fault columns empty?**  
-A: No analysis yet, or names not linked. Complete Files → Analysis, or fill wizard labels.
+A: Upload under an IED so plant labels attach; complete analysis for fault / protection columns. Protection shows operated elements (e.g. 87T, 51N) when available.
+
+**Q: Search on All events does nothing useful**  
+A: Type any fragment of ID, station, bay, relay, fault, or protection code (e.g. `IED-4`, `Bay 1`, `51N`). Use From/To for dates. Click **Clear filters** to reset (also clears Dashboard queue filters).
 
 **Q: Why is RCA INCONCLUSIVE?**  
 A: Consistency findings (e.g. disabled 51 operating), or missing evidence for CONFIRMED. Uploaded settings are auto-APPROVED by default — INCONCLUSIVE is no longer forced solely by “NOT VERIFIED” upload flags.
@@ -1026,7 +1126,7 @@ A: Run analysis after upload so samples are parsed and cached; check COMTRADE va
 A: Event → Report → **Download PDF**.
 
 **Q: Can I upload a ZIP of CFG/DAT?**  
-A: Yes. The ZIP is auto-extracted; COMTRADE/settings/SOE/PDF/vendor members are stored and used in detect → validate → analysis. The original ZIP remains as evidence.
+A: Yes — on the IED workspace (or event Files tab). The ZIP is auto-extracted; COMTRADE/settings/SOE/PDF/vendor members are stored and used. The original ZIP remains as evidence.
 
 **Q: Can I upload SEL `.rdb` / `.cev` or DIGSI / PCM600 packages?**  
 A: Yes where extractable. `.rdb` → settings when SET_ALL is present; `.cev` → CFG+DAT when convertible; DIGSI/PCM600 packages expand nested COMTRADE/settings when ZIP-like. Opaque proprietary blobs stay unsupported — export CFG/DAT from the vendor tool if needed.
@@ -1047,10 +1147,13 @@ A: Open Setup → **DR targets**, map the correct digitals (and element), save, 
 A: Open Setup → **Channel map**, correct Ia/Ib/Ic/Va… roles, save, re-run.
 
 **Q: Can I delete an event?**  
-A: Yes — Events list **Delete**, or event header **Delete event** (ANALYST+). Confirm first.
+A: Yes — All events **Delete**, or event header **Delete event** (ANALYST+). Confirm first. Continue memory for that ID is cleared.
 
 **Q: KPI click does nothing useful**  
-A: It filters Events by queue. Use **Clear filter** to reset.
+A: It opens All events with a queue filter. Use **Clear filters** to reset.
+
+**Q: Continue button still shows a deleted event**  
+A: Refresh the page after delete; the app prunes recent-event memory when the event is gone or the events DB is empty. You can also clear browser localStorage key `protection_rca_recent_events_v1`.
 
 **Q: SSO button missing**  
 A: OIDC not enabled on the API (`AUTH_MODE` still `local`).
@@ -1069,7 +1172,7 @@ A: **8001** = portable (built UI served with the API). **5173** = developer Vite
 
 ---
 
-## 24. Troubleshooting
+## 25. Troubleshooting
 
 | Symptom | What to check |
 |---------|----------------|
@@ -1078,8 +1181,12 @@ A: **8001** = portable (built UI served with the API). **5173** = developer Vite
 | Port in use | Portable UI+API: **8001**; Vite UI: **5173** |
 | Colleague cannot open LAN URL | Same Wi‑Fi/LAN; use host IP not 127.0.0.1; allow Windows Firewall private network for port **8001** |
 | Exe rebuild “Access denied” / false “EXE OK” | Close all `ProtectionRCA.exe` windows (Task Manager if needed). Prefer `scripts\build-all-latest.bat` — it kills locked processes and fails the build if PyInstaller cannot write the EXE |
+| Cannot log in after DB clear | Ensure `protection_rca_auth.db` exists or restart for bootstrap `admin` / `admin123` |
+| No Create event menu | Use **Plant → IED → upload** |
+| Search finds nothing unexpected | Clear filters; confirm spelling; protection codes like `87T` are searchable |
+| Date filter misses events | Leave To at 00:00 to include whole day; times are local |
 | Settings still NOT VERIFIED / Decision WITH_WARNINGS on old events | **Re-run analysis** after upgrading — approval and decision gating apply on the new run |
-| Upload rejected | Extension, size limit, or role |
+| Upload rejected | Extension, size limit, or role; must upload from IED workspace or event Files |
 | COMTRADE INVALID | Fix source export; do not force confident RCA |
 | Analysis FAILED / “background analysis failed” | Hover FAILED for `error_message`; fix Channel map / DR targets / files; **Re-run**; restart exe after backend updates |
 | Stuck “Queued (background)” with FAILED | Latest job never advanced — re-run after fix; check API logs if it fails again immediately |
@@ -1095,7 +1202,7 @@ API docs: http://127.0.0.1:8001/docs
 
 ---
 
-## 25. Where to find more documentation
+## 26. Where to find more documentation
 
 | Document | Content |
 |----------|---------|
@@ -1128,25 +1235,28 @@ python scripts\export_user_guide_doc.py
 
 ---
 
-## 26. Quick reference card
+## 27. Quick reference card
 
 ```text
 START     → Double-click ProtectionRCA.exe (portable: :8001 · dev: :5173)
 STOP      → Close launcher control window
 SHARE     → scripts\build-portable-share.bat → zip portable-share\
 LAN       → Others open http://<host-IP>:8001/ (Firewall allow)
-LOGIN     → Local account or SSO (if configured)
-NEW WORK  → Create event wizard → upload CFG/DAT/CFF/ZIP/vendor package
+LOGIN     → admin / admin123 (bootstrap) or SSO if configured
+PLANT     → Substation → Voltage → Bay → Feeder → IED → Open
+UPLOAD    → On IED workspace (CFG/DAT/CFF/ZIP/vendor) — not a global Upload menu
 MAP       → Setup → Channel map + DR targets → save
 ANALYSE   → Start / Re-run analysis (background) → watch status bar
 VERIFY    → Waveforms → Sequence → Consistency → RCA → Evidence
 CAUSE     → RCA cause enrichment (field evidence) → re-run
+FILTER    → All events: Search + From/To + Clear filters
 REPORT    → Download HTML or PDF
 CLOSE-OUT → Review (ACCEPT / MODIFY / REJECT / …)
-DELETE    → Events Actions → Delete (ANALYST+)
+DELETE    → All events → Delete (ANALYST+)
+DBS       → auth.db = users · local.db = plant/events
 REMEMBER  → No invented data · No OT control · No generative AI
 ```
 
 ---
 
-*End of User Guide — Protection RCA Platform (document version 0.4.0)*
+*End of User Guide — Protection RCA Platform (document version 0.6.0)*

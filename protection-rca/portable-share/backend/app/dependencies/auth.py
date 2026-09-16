@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import Role, role_at_least, safe_decode, TokenError
-from app.database import get_db
+from app.database import get_auth_db, get_db
 from app.models import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -20,7 +20,7 @@ async def get_current_user(
     credentials: Annotated[
         Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)
     ],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    auth_db: Annotated[AsyncSession, Depends(get_auth_db)],
 ) -> User:
     if credentials is None or not credentials.credentials:
         raise HTTPException(
@@ -41,7 +41,7 @@ async def get_current_user(
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token subject")
 
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await auth_db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise HTTPException(status_code=401, detail="User inactive or not found")
@@ -66,3 +66,4 @@ def require_role(minimum: Role) -> Callable:
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 DbSession = Annotated[AsyncSession, Depends(get_db)]
+AuthDbSession = Annotated[AsyncSession, Depends(get_auth_db)]

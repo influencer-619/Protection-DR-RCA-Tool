@@ -113,6 +113,7 @@ class EventOut(BaseModel):
     asset_name: Optional[str] = None
     fault_type: Optional[str] = None
     severity_summary: Optional[str] = None
+    protection_summary: Optional[str] = None
 
 
 class EventListResponse(BaseModel):

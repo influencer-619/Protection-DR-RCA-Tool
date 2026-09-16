@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { format } from 'date-fns';
+import { format, isValid, parseISO } from 'date-fns';
 import { api } from '@/services/api';
 import type { Event } from '@/types';
 import { EventStatusCell } from '@/components/EventStatusCell';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
-import { getLastEvent } from '@/utils/recentEvents';
+import { getLastEvent, pruneRecentEvents, removeRecentEvent } from '@/utils/recentEvents';
 
 const QUEUE_LABELS: Record<string, string> = {
   awaiting_analysis: 'Awaiting analysis',
@@ -19,9 +19,68 @@ const QUEUE_LABELS: Record<string, string> = {
   parser_dq_issues: 'Parser / DQ issues',
 };
 
+function eventExtra(ev: Event): Record<string, unknown> {
+  return (ev.extra as Record<string, unknown> | null | undefined) ?? {};
+}
+
+function eventSearchText(ev: Event): string {
+  const extra = eventExtra(ev);
+  const parts = [
+    ev.event_id,
+    ev.substation_name,
+    extra.substation_name,
+    ev.bay_name,
+    extra.bay_name,
+    ev.relay_tag,
+    extra.relay_tag,
+    ev.feeder,
+    ev.description,
+    ev.fault_type,
+    ev.protection_summary,
+    ev.status,
+    ev.decision_state,
+    ev.data_quality,
+    ev.severity_summary,
+  ];
+  return parts
+    .filter((p) => p != null && String(p).trim() !== '')
+    .join(' ')
+    .toLowerCase();
+}
+
+/** Parse datetime-local value as a local Date (no UTC shift). */
+function parseLocalInput(value: string): Date | null {
+  if (!value) return null;
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) {
+    const d = new Date(value);
+    return isValid(d) ? d : null;
+  }
+  const d = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    m[6] ? Number(m[6]) : 0,
+    0,
+  );
+  return isValid(d) ? d : null;
+}
+
+function eventWhen(ev: Event): Date | null {
+  const raw = ev.event_datetime || ev.created_at;
+  if (!raw) return null;
+  try {
+    const d = parseISO(raw);
+    return isValid(d) ? d : null;
+  } catch {
+    return null;
+  }
+}
+
 export function EventsListPage() {
   const [events, setEvents] = useState<Event[]>([]);
-  const [showCreate, setShowCreate] = useState(false);
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
@@ -36,41 +95,63 @@ export function EventsListPage() {
     setLoading(true);
     const params: {
       queue?: string;
-      date_from?: string;
-      date_to?: string;
-    } = {};
+      page_size?: number;
+    } = { page_size: 200 };
     if (queue) params.queue = queue;
-    if (dateFrom) params.date_from = new Date(dateFrom).toISOString();
-    if (dateTo) params.date_to = new Date(dateTo).toISOString();
     void api
-      .getEvents(Object.keys(params).length ? params : undefined)
+      .getEvents(params)
       .then(setEvents)
+      .catch(() => setEvents([]))
       .finally(() => setLoading(false));
-  }, [queue, dateFrom, dateTo]);
+  }, [queue]);
 
   useEffect(() => {
     const st = location.state as { openCreate?: boolean } | null;
     if (st?.openCreate) {
-      navigate('/events/new', { replace: true });
+      navigate('/plant', { replace: true });
     }
   }, [location.state, navigate]);
 
   const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    const from = parseLocalInput(dateFrom);
+    let to = parseLocalInput(dateTo);
+    // If "To" is at midnight, treat as end of that calendar day (inclusive).
+    if (to && /T00:00(:00)?$/.test(dateTo)) {
+      to = new Date(to);
+      to.setHours(23, 59, 59, 999);
+    }
+
     return events.filter((e) => {
-      const q = filter.toLowerCase();
-      if (!q) return true;
-      return (
-        e.event_id.toLowerCase().includes(q) ||
-        (e.substation_name ?? '').toLowerCase().includes(q) ||
-        (e.feeder ?? '').toLowerCase().includes(q) ||
-        (e.description ?? '').toLowerCase().includes(q)
-      );
+      if (q && !eventSearchText(e).includes(q)) return false;
+      if (from || to) {
+        const when = eventWhen(e);
+        if (!when) return false;
+        if (from && when < from) return false;
+        if (to && when > to) return false;
+      }
+      return true;
     });
-  }, [events, filter]);
+  }, [events, filter, dateFrom, dateTo]);
+
+  const hasActiveFilters = Boolean(filter.trim() || dateFrom || dateTo || queue);
+
+  const clearFilters = () => {
+    setFilter('');
+    setDateFrom('');
+    setDateTo('');
+    if (queue) setSearchParams({});
+  };
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Event | null>(null);
-  const last = getLastEvent();
+  const [last, setLast] = useState(() => getLastEvent());
+
+  useEffect(() => {
+    if (loading) return;
+    const pruned = pruneRecentEvents(events.map((e) => e.id));
+    setLast(pruned[0] ?? null);
+  }, [events, loading]);
 
   const onDelete = async () => {
     const ev = pendingDelete;
@@ -78,6 +159,7 @@ export function EventsListPage() {
     setDeletingId(ev.id);
     try {
       await api.deleteEvent(ev.id);
+      removeRecentEvent(ev.id);
       setEvents((prev) => prev.filter((e) => e.id !== ev.id));
       setPendingDelete(null);
     } catch (err) {
@@ -87,65 +169,46 @@ export function EventsListPage() {
     }
   };
 
-  const onCreate = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    const created = await api.createEvent({
-      event_id: String(fd.get('event_id') || '') || undefined,
-      description: String(fd.get('description') || ''),
-      feeder: String(fd.get('feeder') || ''),
-      substation_name: String(fd.get('substation') || '') || 'UNKNOWN',
-      bay_name: String(fd.get('bay') || '') || 'NOT VERIFIED',
-      nominal_voltage_kv: Number(fd.get('voltage') || 0) || undefined,
-      event_datetime: String(fd.get('datetime') || new Date().toISOString()),
-    });
-    setShowCreate(false);
-    navigate(`/events/${created.id}/files`);
-  };
-
   return (
     <div className="page">
       <div className="page-header">
         <div>
-          <h1>Events</h1>
+          <h1>All events</h1>
           <p className="subtitle">
             {queue && QUEUE_LABELS[queue]
               ? `Filtered: ${QUEUE_LABELS[queue]}`
-              : 'Disturbance records pending analysis and review'}
+              : 'Global list — create and upload under Plant → IED'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {last && (
-            <Link to={`/events/${last.id}/summary`} className="btn btn-primary">
-              Continue {last.event_id}
+            <Link
+              to={`/events/${last.id}/summary`}
+              className="btn btn-primary"
+              title={last.event_id}
+            >
+              Continue{' '}
+              {last.event_id.length > 12 ? `${last.event_id.slice(0, 12)}…` : last.event_id}
             </Link>
           )}
+          <Link to="/plant" className="btn btn-primary">
+            Open Plant
+          </Link>
           <Link to="/events/compare" className="btn">
             Compare
           </Link>
-          {queue && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => setSearchParams({})}
-            >
-              Clear filter
+          {hasActiveFilters && (
+            <button type="button" className="btn" onClick={clearFilters}>
+              Clear filters
             </button>
           )}
-          <Link to="/events/new" className="btn btn-primary">
-            + New event
-          </Link>
-          <button type="button" className="btn" onClick={() => setShowCreate(true)}>
-            Quick create
-          </button>
         </div>
       </div>
 
       {!loading && events.length === 0 && !queue && (
         <div className="alert alert-info" style={{ marginBottom: 16 }}>
-          <strong>Get started:</strong> Create an event with plant context → upload COMTRADE CFG+DAT →
-          Start analysis → follow the recommended next-step banner. Prefer{' '}
-          <Link to="/events/new">New event</Link> over Quick upload when you know the feeder/relay.
+          <strong>Get started:</strong> Open <Link to="/plant">Plant</Link>, build Substation →
+          Voltage → Bay → Feeder → IED, then upload files on the IED.
         </div>
       )}
 
@@ -165,12 +228,16 @@ export function EventsListPage() {
           alignItems: 'flex-end',
         }}
       >
-        <div style={{ maxWidth: 280, flex: 1 }}>
+        <div style={{ minWidth: 220, flex: '1 1 240px', maxWidth: 360 }}>
+          <label style={{ display: 'block', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+            Search
+          </label>
           <input
             className="form-control"
-            placeholder="Filter by ID, station, feeder…"
+            placeholder="ID, station, bay, relay, fault…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+            aria-label="Filter events"
           />
         </div>
         <div>
@@ -195,18 +262,9 @@ export function EventsListPage() {
             onChange={(e) => setDateTo(e.target.value)}
           />
         </div>
-        {(dateFrom || dateTo) && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => {
-              setDateFrom('');
-              setDateTo('');
-            }}
-          >
-            Clear dates
-          </button>
-        )}
+        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', paddingBottom: 8 }}>
+          {loading ? 'Loading…' : `${filtered.length} of ${events.length} events`}
+        </div>
       </div>
 
       <div className="panel">
@@ -218,7 +276,7 @@ export function EventsListPage() {
                 <th>Date/Time</th>
                 <th>Location</th>
                 <th>Relay</th>
-                <th>Fault</th>
+                <th>Fault / element</th>
                 <th>Status</th>
                 <th>Sev</th>
                 <th>DQ</th>
@@ -228,9 +286,23 @@ export function EventsListPage() {
             <tbody>
               {!loading && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={9} style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}>
-                    No disturbance events yet.{' '}
-                    <Link to="/events/new">Create your first event</Link>
+                  <td
+                    colSpan={9}
+                    style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}
+                  >
+                    {events.length === 0 ? (
+                      <>
+                        No disturbance events yet.{' '}
+                        <Link to="/plant">Open Plant to add an IED and upload</Link>
+                      </>
+                    ) : (
+                      <>
+                        No events match the current filters.{' '}
+                        <button type="button" className="btn btn-sm" onClick={clearFilters}>
+                          Clear filters
+                        </button>
+                      </>
+                    )}
                   </td>
                 </tr>
               )}
@@ -261,7 +333,14 @@ export function EventsListPage() {
                       (ev.extra as { relay_tag?: string } | undefined)?.relay_tag ??
                       '—'}
                   </td>
-                  <td className="mono">{ev.fault_type ?? '—'}</td>
+                  <td className="mono">
+                    {ev.protection_summary || ev.fault_type || '—'}
+                    {ev.protection_summary && ev.fault_type ? (
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        {ev.fault_type}
+                      </div>
+                    ) : null}
+                  </td>
                   <td>
                     <EventStatusCell event={ev} />
                   </td>
@@ -307,96 +386,6 @@ export function EventsListPage() {
         onCancel={() => setPendingDelete(null)}
         onConfirm={() => void onDelete()}
       />
-
-      {showCreate && (
-        <div className="modal-backdrop" onClick={() => setShowCreate(false)}>
-          <div
-            className="modal"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-labelledby="create-event-title"
-          >
-            <div className="modal-header">
-              <h2 id="create-event-title">Quick create</h2>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={() => setShowCreate(false)}
-              >
-                ✕
-              </button>
-            </div>
-            <form onSubmit={onCreate}>
-              <div className="modal-body">
-                <div className="form-group">
-                  <label htmlFor="event_id">Event ID (optional)</label>
-                  <input
-                    id="event_id"
-                    name="event_id"
-                    className="form-control"
-                    placeholder="Auto if blank"
-                  />
-                </div>
-                <div className="two-col">
-                  <div className="form-group">
-                    <label htmlFor="substation">Substation</label>
-                    <input
-                      id="substation"
-                      name="substation"
-                      className="form-control"
-                      placeholder="UNKNOWN"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="bay">Bay</label>
-                    <input id="bay" name="bay" className="form-control" placeholder="NOT VERIFIED" />
-                  </div>
-                </div>
-                <div className="two-col">
-                  <div className="form-group">
-                    <label htmlFor="feeder">Feeder</label>
-                    <input id="feeder" name="feeder" className="form-control" />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="voltage">Nominal kV</label>
-                    <input
-                      id="voltage"
-                      name="voltage"
-                      type="number"
-                      step="0.1"
-                      className="form-control"
-                    />
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label htmlFor="datetime">Event datetime (ISO)</label>
-                  <input
-                    id="datetime"
-                    name="datetime"
-                    className="form-control"
-                    defaultValue={new Date().toISOString().slice(0, 19)}
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="description">Description</label>
-                  <textarea id="description" name="description" className="form-control" rows={3} />
-                </div>
-              </div>
-              <div className="modal-footer">
-                <button type="button" className="btn" onClick={() => setShowCreate(false)}>
-                  Cancel
-                </button>
-                <Link to="/events/new" className="btn">
-                  Full wizard
-                </Link>
-                <button type="submit" className="btn btn-primary">
-                  Create & upload files
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

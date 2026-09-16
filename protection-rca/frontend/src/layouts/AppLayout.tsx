@@ -4,18 +4,17 @@ import { useAuth } from '@/hooks/useAuth';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import styles from './AppLayout.module.css';
 
-/** Sidebar focused on disturbance-record analysis + RCA (no plant/settings registry). */
+/** Sidebar: plant-first analysis (upload only under IED). */
 const NAV: Array<
   | { to: string; label: string }
   | { label: string; children: Array<{ to: string; label: string }> }
 > = [
+  { to: '/plant', label: 'Plant' },
   {
     label: 'Analysis',
     children: [
       { to: '/dashboard', label: 'Dashboard' },
-      { to: '/events', label: 'Events' },
-      { to: '/events/new', label: 'Create event' },
-      { to: '/upload', label: 'Upload files' },
+      { to: '/events', label: 'All events' },
     ],
   },
   {

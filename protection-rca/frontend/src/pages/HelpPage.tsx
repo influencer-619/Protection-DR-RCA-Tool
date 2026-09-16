@@ -25,15 +25,15 @@ export function HelpPage() {
             How to launch, analyse disturbance records, and complete engineer review
           </p>
         </div>
-        <Link className="btn btn-primary" to="/events/new">
-          Create event
+        <Link className="btn btn-primary" to="/plant">
+          Open Plant
         </Link>
       </div>
 
       <div className="alert alert-info" style={{ marginBottom: 16 }}>
-        Professional workflow (same idea as SIGRA / Synchrowave Event): upload COMTRADE → validate →
-        waveforms & timeline → electrical / protection → consistency vs settings → RCA → report →
-        engineer review. Hover any status badge in the app for a short explanation.
+        Plant-first workflow: Substation → Voltage level → Bay → Feeder → IED → upload COMTRADE →
+        validate → waveforms & timeline → electrical / protection → consistency → RCA → report →
+        engineer review. Hover any status badge for a short explanation.
       </div>
 
       <div className={styles.grid}>
@@ -61,9 +61,9 @@ export function HelpPage() {
           <div className="panel-body">
             <ol>
               <li>
-                <Link to="/events/new">Events → New event</Link> (leave unknown fields blank).
+                <Link to="/plant">Plant</Link> — create Substation → Voltage → Bay → Feeder → IED.
               </li>
-              <li>Files → upload CFG + DAT (or CFF), relay settings, SOE / event report.</li>
+              <li>Open the IED → upload CFG + DAT (or CFF), relay settings, SOE / event report.</li>
               <li>COMTRADE → confirm detection / validation status.</li>
               <li>Run analysis and follow the “Recommended next step” banner.</li>
               <li>Inspect Waveforms (I / V / Digitals) → Sequence of operation.</li>
@@ -103,7 +103,7 @@ export function HelpPage() {
               test_data/comtrade/ieee_1999/ag_fault.dat
             </p>
             <p style={{ color: 'var(--text-muted)', marginTop: 8 }}>
-              <Link to="/events/new">Create a new event</Link>, upload both files, run analysis, then
+              <Link to="/plant">Open Plant</Link>, create an IED, upload both files, run analysis, then
               explore each tab.
             </p>
           </div>

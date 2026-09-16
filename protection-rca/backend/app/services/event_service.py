@@ -32,6 +32,30 @@ async def create_event(
         if k in payload
     }
     extra = dict(payload.pop("extra", None) or {})
+
+    relay_id = payload.get("relay_id")
+    if relay_id:
+        from app.services.plant_service import resolve_ied_plant
+
+        plant = await resolve_ied_plant(db, relay_id)
+        payload["relay_id"] = plant["relay_id"]
+        payload["bay_id"] = plant["bay_id"]
+        payload["substation_id"] = plant["substation_id"]
+        if not payload.get("feeder"):
+            payload["feeder"] = plant["feeder"]
+        if payload.get("nominal_voltage_kv") is None and plant.get("nominal_voltage_kv") is not None:
+            payload["nominal_voltage_kv"] = plant["nominal_voltage_kv"]
+        for k, v in plant["labels"].items():
+            if v:
+                labels.setdefault(k, v)
+        extra["plant_mapped"] = True
+        extra["plant_path"] = {
+            "substation_id": plant["substation_id"],
+            "bay_id": plant["bay_id"],
+            "relay_id": plant["relay_id"],
+            "feeder": plant["feeder"],
+        }
+
     if labels:
         extra.setdefault("plant_labels", {})
         extra["plant_labels"].update({k: v for k, v in labels.items() if v})
@@ -75,6 +99,8 @@ async def list_events(
     page_size: int = 50,
     status: Optional[str] = None,
     substation_id: Optional[str] = None,
+    relay_id: Optional[str] = None,
+    unmapped: Optional[bool] = None,
     decision_state: Optional[str] = None,
     data_quality: Optional[str] = None,
     queue: Optional[str] = None,
@@ -129,6 +155,9 @@ async def list_events(
         )
         q = q.where(Event.id.in_(subq))
         cq = cq.where(Event.id.in_(subq))
+    elif queue == "unmapped_plant":
+        q = q.where(Event.relay_id.is_(None))
+        cq = cq.where(Event.relay_id.is_(None))
 
     if status:
         statuses = [s.strip() for s in status.split(",") if s.strip()]
@@ -141,6 +170,15 @@ async def list_events(
     if substation_id:
         q = q.where(Event.substation_id == substation_id)
         cq = cq.where(Event.substation_id == substation_id)
+    if relay_id:
+        q = q.where(Event.relay_id == relay_id)
+        cq = cq.where(Event.relay_id == relay_id)
+    if unmapped is True:
+        q = q.where(Event.relay_id.is_(None))
+        cq = cq.where(Event.relay_id.is_(None))
+    elif unmapped is False:
+        q = q.where(Event.relay_id.is_not(None))
+        cq = cq.where(Event.relay_id.is_not(None))
     if decision_state:
         q = q.where(Event.decision_state == decision_state)
         cq = cq.where(Event.decision_state == decision_state)
@@ -187,6 +225,52 @@ async def list_events(
         )
     ).scalars().all()
     return list(rows), int(total)
+
+
+async def map_event_to_ied(
+    db: AsyncSession,
+    event: Event,
+    relay_id: str,
+    *,
+    user_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+) -> Event:
+    from app.services.plant_service import resolve_ied_plant
+
+    plant = await resolve_ied_plant(db, relay_id)
+    event.relay_id = plant["relay_id"]
+    event.bay_id = plant["bay_id"]
+    event.substation_id = plant["substation_id"]
+    event.feeder = plant["feeder"]
+    if event.nominal_voltage_kv is None and plant.get("nominal_voltage_kv") is not None:
+        event.nominal_voltage_kv = plant["nominal_voltage_kv"]
+    extra = dict(event.extra) if isinstance(event.extra, dict) else {}
+    plant_labels = dict(extra.get("plant_labels") or {}) if isinstance(extra.get("plant_labels"), dict) else {}
+    for k, v in plant["labels"].items():
+        if v:
+            extra[k] = v
+            plant_labels[k] = v
+    extra["plant_labels"] = plant_labels
+    extra["plant_mapped"] = True
+    extra["plant_path"] = {
+        "substation_id": plant["substation_id"],
+        "bay_id": plant["bay_id"],
+        "relay_id": plant["relay_id"],
+        "feeder": plant["feeder"],
+    }
+    event.extra = extra
+    await db.flush()
+    await write_audit(
+        db,
+        action="MAP_PLANT",
+        user_id=user_id,
+        object_type="Event",
+        object_id=event.id,
+        new_value={"relay_id": relay_id, "plant_path": extra["plant_path"]},
+        request_id=request_id,
+    )
+    await db.refresh(event)
+    return event
 
 
 async def update_event(

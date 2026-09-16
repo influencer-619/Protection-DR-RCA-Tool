@@ -13,7 +13,6 @@ import type {
 import { StatusBadge } from '@/components/StatusBadge';
 import { SettingSourceBanner } from '@/components/SettingSourceBanner';
 import { VerifyActiveSettingsCard } from '@/components/VerifyActiveSettingsCard';
-import { PlantLabelsEditor } from '@/components/PlantLabelsEditor';
 import { OneLineBay } from '@/components/OneLineBay';
 import { formatOperatedElements, filterDistanceLimitations, isDistanceApplicable } from '@/utils/schemeContext';
 import { humanizeEvidenceToken } from '@/utils/evidenceLabels';
@@ -55,7 +54,7 @@ function faultLoopZ(fault: FaultClassification | null): {
 export function EventOverviewPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { event, reload, applyEvent, analysisRevision } = useEventOrWorkspace(id);
+  const { event, reload, analysisRevision } = useEventOrWorkspace(id);
   const [fault, setFault] = useState<FaultClassification | null>(null);
   const [rca, setRca] = useState<RcaHypothesis[]>([]);
   const [protection, setProtection] = useState<ProtectionOperation[]>([]);
@@ -168,16 +167,6 @@ export function EventOverviewPage() {
   return (
     <div>
       {settingSource && <SettingSourceBanner source={settingSource} />}
-
-      {event && (
-        <PlantLabelsEditor
-          event={event}
-          onSaved={(updated) => {
-            applyEvent(updated);
-            void reload();
-          }}
-        />
-      )}
 
       {event && id && (
         <OneLineBay

@@ -70,23 +70,23 @@ const ReportPage = lazy(() =>
 const ReviewPage = lazy(() =>
   import('@/pages/ReviewPage').then((m) => ({ default: m.ReviewPage })),
 );
-const UploadPage = lazy(() =>
-  import('@/pages/UploadPage').then((m) => ({ default: m.UploadPage })),
-);
 const UsersPage = lazy(() =>
   import('@/pages/UsersPage').then((m) => ({ default: m.UsersPage })),
 );
 const AuditPage = lazy(() =>
   import('@/pages/AuditPage').then((m) => ({ default: m.AuditPage })),
 );
-const CreateEventPage = lazy(() =>
-  import('@/pages/CreateEventPage').then((m) => ({ default: m.CreateEventPage })),
-);
 const HelpPage = lazy(() =>
   import('@/pages/HelpPage').then((m) => ({ default: m.HelpPage })),
 );
 const CompareEventsPage = lazy(() =>
   import('@/pages/CompareEventsPage').then((m) => ({ default: m.CompareEventsPage })),
+);
+const PlantPage = lazy(() =>
+  import('@/pages/PlantPage').then((m) => ({ default: m.PlantPage })),
+);
+const IedWorkspacePage = lazy(() =>
+  import('@/pages/IedWorkspacePage').then((m) => ({ default: m.IedWorkspacePage })),
 );
 
 function RouteFallback() {
@@ -103,12 +103,14 @@ export default function App() {
           <Route path="/events/:id/waveforms/popout" element={<WaveformPage popout />} />
 
           <Route element={<AppLayout />}>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<Navigate to="/plant" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/plant" element={<PlantPage />} />
+            <Route path="/plant/ieds/:iedId" element={<IedWorkspacePage />} />
             <Route path="/events" element={<EventsListPage />} />
             <Route path="/events/compare" element={<CompareEventsPage />} />
-            <Route path="/events/new" element={<CreateEventPage />} />
-            <Route path="/upload" element={<UploadPage />} />
+            <Route path="/events/new" element={<Navigate to="/plant" replace />} />
+            <Route path="/upload" element={<Navigate to="/plant" replace />} />
             <Route path="/help" element={<HelpPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/audit" element={<AuditPage />} />
@@ -137,7 +139,7 @@ export default function App() {
           </Route>
         </Route>
 
-        <Route path="*" element={<Navigate to="/dashboard" />} />
+        <Route path="*" element={<Navigate to="/plant" />} />
       </Routes>
     </Suspense>
   );

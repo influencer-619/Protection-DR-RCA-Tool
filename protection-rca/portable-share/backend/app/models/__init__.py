@@ -24,16 +24,17 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.database import Base
+from app.database import AuthBase, Base
 from app.models.base_mixins import TimestampMixin, UUIDPrimaryKeyMixin, generate_uuid
 
+
 # ---------------------------------------------------------------------------
-# Identity & access
+# Identity & access (AUTH database — separate from plant/events DB)
 # ---------------------------------------------------------------------------
 
 
-class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Platform user account."""
+class User(AuthBase, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Platform user account (stored in auth DB only)."""
 
     __tablename__ = "users"
     __table_args__ = (
@@ -53,26 +54,8 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     preferences: Mapped[Any] = mapped_column(JSON, nullable=True)
 
-    events_as_engineer: Mapped[list[Event]] = relationship(
-        "Event",
-        back_populates="engineer_user",
-        foreign_keys="Event.engineer_id",
-    )
-    reviews: Mapped[list[EngineerReview]] = relationship(
-        "EngineerReview", back_populates="reviewer"
-    )
-    audit_entries: Mapped[list[AuditLog]] = relationship(
-        "AuditLog", back_populates="user"
-    )
-    analysis_jobs: Mapped[list[AnalysisJob]] = relationship(
-        "AnalysisJob", back_populates="requested_by_user"
-    )
-    documents_uploaded: Mapped[list[Document]] = relationship(
-        "Document", back_populates="uploaded_by_user"
-    )
 
-
-class Role(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+class Role(AuthBase, UUIDPrimaryKeyMixin, TimestampMixin):
     """
     Optional role catalog table for RBAC extension.
 
@@ -91,7 +74,7 @@ class Role(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 
 # ---------------------------------------------------------------------------
-# Asset hierarchy: Substation → Bay → Relay / Breaker / Asset
+# Asset hierarchy: Substation → VoltageLevel → Bay → Feeder → IED (Relay)
 # ---------------------------------------------------------------------------
 
 
@@ -116,6 +99,9 @@ class Substation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    voltage_levels: Mapped[list[VoltageLevel]] = relationship(
+        "VoltageLevel", back_populates="substation", cascade="all, delete-orphan"
+    )
     bays: Mapped[list[Bay]] = relationship(
         "Bay", back_populates="substation", cascade="all, delete-orphan"
     )
@@ -127,18 +113,52 @@ class Substation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     events: Mapped[list[Event]] = relationship("Event", back_populates="substation")
 
 
+class VoltageLevel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Voltage level under a substation (e.g. 132 kV, 33 kV)."""
+
+    __tablename__ = "voltage_levels"
+    __table_args__ = (
+        UniqueConstraint(
+            "substation_id", "code", name="uq_voltage_levels_substation_code"
+        ),
+        Index("ix_voltage_levels_substation_id", "substation_id"),
+    )
+
+    substation_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("substations.id", ondelete="CASCADE"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    nominal_voltage_kv: Mapped[Any] = mapped_column(Float, nullable=True)
+    metadata_json: Mapped[Any] = mapped_column("metadata", JSON, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    substation: Mapped[Substation] = relationship(
+        "Substation", back_populates="voltage_levels"
+    )
+    bays: Mapped[list[Bay]] = relationship(
+        "Bay", back_populates="voltage_level"
+    )
+
+
 class Bay(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Bay / feeder position within a substation."""
+    """Bay under a voltage level (named by user, e.g. 'line1 bay')."""
 
     __tablename__ = "bays"
     __table_args__ = (
         UniqueConstraint("substation_id", "code", name="uq_bays_substation_code"),
         Index("ix_bays_substation_id", "substation_id"),
+        Index("ix_bays_voltage_level_id", "voltage_level_id"),
         Index("ix_bays_feeder_name", "feeder_name"),
     )
 
     substation_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("substations.id", ondelete="CASCADE"), nullable=False
+    )
+    voltage_level_id: Mapped[Any] = mapped_column(
+        String(36),
+        ForeignKey("voltage_levels.id", ondelete="CASCADE"),
+        nullable=True,
     )
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -151,10 +171,35 @@ class Bay(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     substation: Mapped[Substation] = relationship("Substation", back_populates="bays")
+    voltage_level: Mapped[Any] = relationship("VoltageLevel", back_populates="bays")
+    feeders: Mapped[list[Feeder]] = relationship(
+        "Feeder", back_populates="bay", cascade="all, delete-orphan"
+    )
     assets: Mapped[list[Asset]] = relationship("Asset", back_populates="bay")
     relays: Mapped[list[Relay]] = relationship("Relay", back_populates="bay")
     breakers: Mapped[list[Breaker]] = relationship("Breaker", back_populates="bay")
     events: Mapped[list[Event]] = relationship("Event", back_populates="bay")
+
+
+class Feeder(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Feeder under a bay."""
+
+    __tablename__ = "feeders"
+    __table_args__ = (
+        UniqueConstraint("bay_id", "code", name="uq_feeders_bay_code"),
+        Index("ix_feeders_bay_id", "bay_id"),
+    )
+
+    bay_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("bays.id", ondelete="CASCADE"), nullable=False
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    metadata_json: Mapped[Any] = mapped_column("metadata", JSON, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    bay: Mapped[Bay] = relationship("Bay", back_populates="feeders")
+    ieds: Mapped[list[Relay]] = relationship("Relay", back_populates="feeder")
 
 
 class Asset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -194,12 +239,13 @@ class Asset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 
 class Relay(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Protection relay / IED."""
+    """Protection relay / IED (upload and analysis locus)."""
 
     __tablename__ = "relays"
     __table_args__ = (
         UniqueConstraint("substation_id", "relay_tag", name="uq_relays_sub_tag"),
         Index("ix_relays_bay_id", "bay_id"),
+        Index("ix_relays_feeder_id", "feeder_id"),
         Index("ix_relays_manufacturer_model", "manufacturer", "model"),
     )
 
@@ -208,6 +254,9 @@ class Relay(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     bay_id: Mapped[Any] = mapped_column(
         String(36), ForeignKey("bays.id", ondelete="SET NULL"), nullable=True
+    )
+    feeder_id: Mapped[Any] = mapped_column(
+        String(36), ForeignKey("feeders.id", ondelete="CASCADE"), nullable=True
     )
     relay_tag: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -228,6 +277,7 @@ class Relay(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         "Substation", back_populates="relays"
     )
     bay: Mapped[Any] = relationship("Bay", back_populates="relays")
+    feeder: Mapped[Any] = relationship("Feeder", back_populates="ieds")
     settings: Mapped[list[Setting]] = relationship(
         "Setting", back_populates="relay", cascade="all, delete-orphan"
     )
@@ -241,7 +291,6 @@ class Relay(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     protection_operations: Mapped[list[ProtectionOperation]] = relationship(
         "ProtectionOperation", back_populates="relay"
     )
-
 
 class Breaker(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Circuit breaker associated with a bay / protected asset."""
@@ -460,8 +509,8 @@ class Event(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(36), ForeignKey("breakers.id", ondelete="SET NULL"), nullable=True
     )
     engineer_id: Mapped[Any] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
+        String(36), nullable=True
+    )  # auth user id (no cross-DB FK)
     feeder: Mapped[Any] = mapped_column(String(255), nullable=True)
     event_datetime: Mapped[Any] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -487,11 +536,6 @@ class Event(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     relay: Mapped[Any] = relationship("Relay", back_populates="events")
     breaker: Mapped[Any] = relationship(
         "Breaker", back_populates="events"
-    )
-    engineer_user: Mapped[Any] = relationship(
-        "User",
-        back_populates="events_as_engineer",
-        foreign_keys=[engineer_id],
     )
     files: Mapped[list[EventFile]] = relationship(
         "EventFile", back_populates="event", cascade="all, delete-orphan"
@@ -1092,8 +1136,8 @@ class Document(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(36), ForeignKey("events.id", ondelete="CASCADE"), nullable=True
     )
     uploaded_by: Mapped[Any] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
+        String(36), nullable=True
+    )  # auth user id (no cross-DB FK)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     document_type: Mapped[str] = mapped_column(
         String(64), nullable=False, default="OTHER"
@@ -1108,9 +1152,6 @@ class Document(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     extra: Mapped[Any] = mapped_column(JSON, nullable=True)
 
     event: Mapped[Any] = relationship("Event", back_populates="documents")
-    uploaded_by_user: Mapped[Any] = relationship(
-        "User", back_populates="documents_uploaded"
-    )
 
 
 class Report(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -1163,8 +1204,8 @@ class EngineerReview(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(36), ForeignKey("events.id", ondelete="CASCADE"), nullable=False
     )
     reviewer_id: Mapped[Any] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
+        String(36), nullable=True
+    )  # auth user id (no cross-DB FK)
     action: Mapped[str] = mapped_column(
         String(64), nullable=False
     )  # ACCEPT, MODIFY, REJECT, INCONCLUSIVE, REQUEST_FIELD_INVESTIGATION
@@ -1181,7 +1222,6 @@ class EngineerReview(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     extra: Mapped[Any] = mapped_column(JSON, nullable=True)
 
     event: Mapped[Event] = relationship("Event", back_populates="engineer_reviews")
-    reviewer: Mapped[Any] = relationship("User", back_populates="reviews")
 
 
 # ---------------------------------------------------------------------------
@@ -1201,8 +1241,8 @@ class AuditLog(Base, UUIDPrimaryKeyMixin):
     )
 
     user_id: Mapped[Any] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
+        String(36), nullable=True
+    )  # auth user id (no cross-DB FK)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -1221,8 +1261,6 @@ class AuditLog(Base, UUIDPrimaryKeyMixin):
     metadata_json: Mapped[Any] = mapped_column(
         "metadata", JSON, nullable=True
     )
-
-    user: Mapped[Any] = relationship("User", back_populates="audit_entries")
 
 
 class RuleVersion(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -1304,8 +1342,8 @@ class AnalysisJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(36), ForeignKey("events.id", ondelete="CASCADE"), nullable=False
     )
     requested_by: Mapped[Any] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
+        String(36), nullable=True
+    )  # auth user id (no cross-DB FK)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="PENDING"
     )  # PENDING, RUNNING, COMPLETED, FAILED, CANCELLED
@@ -1337,9 +1375,6 @@ class AnalysisJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     parameters: Mapped[Any] = mapped_column(JSON, nullable=True)
 
     event: Mapped[Event] = relationship("Event", back_populates="analysis_jobs")
-    requested_by_user: Mapped[Any] = relationship(
-        "User", back_populates="analysis_jobs"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1350,7 +1385,9 @@ __all__ = [
     "User",
     "Role",
     "Substation",
+    "VoltageLevel",
     "Bay",
+    "Feeder",
     "Asset",
     "Relay",
     "Breaker",

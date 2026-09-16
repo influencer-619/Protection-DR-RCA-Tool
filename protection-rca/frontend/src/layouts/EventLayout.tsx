@@ -13,7 +13,7 @@ import { NextStepBanner, deriveNextStep } from '@/components/NextStepBanner';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SharePackButton } from '@/components/SharePackButton';
 import { api } from '@/services/api';
-import { touchRecentEvent } from '@/utils/recentEvents';
+import { touchRecentEvent, removeRecentEvent } from '@/utils/recentEvents';
 import { wasDrVisited } from '@/utils/drSession';
 import styles from './EventLayout.module.css';
 
@@ -121,6 +121,7 @@ function EventLayoutInner() {
     setDialogError(null);
     try {
       await api.deleteEvent(id);
+      removeRecentEvent(id);
       navigate('/events', { replace: true });
     } catch (err) {
       setDialogError(err instanceof Error ? err.message : 'Failed to delete event');

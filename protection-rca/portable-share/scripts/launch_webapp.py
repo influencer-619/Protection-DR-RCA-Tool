@@ -418,6 +418,15 @@ def start_backend(root: Path, *, portable: bool) -> None:
         "DATABASE_URL",
         f"sqlite+aiosqlite:///{db.resolve().as_posix()}",
     )
+    # First-time local/portable login (empty users table only)
+    env.setdefault("BOOTSTRAP_ADMIN_USERNAME", "admin")
+    env.setdefault("BOOTSTRAP_ADMIN_PASSWORD", "admin123")
+    env.setdefault("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
+    auth_db = backend / "protection_rca_auth.db"
+    env.setdefault(
+        "AUTH_DATABASE_URL",
+        f"sqlite+aiosqlite:///{auth_db.resolve().as_posix()}",
+    )
     if portable:
         dist = root / "frontend" / "dist"
         env["SERVE_FRONTEND"] = "1"

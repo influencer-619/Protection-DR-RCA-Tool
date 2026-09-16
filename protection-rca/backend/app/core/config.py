@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://protection:protection_dev_only@localhost:5432/protection_rca"
     )
+    # Separate DB for username/password accounts (default: sibling protection_rca_auth.db for SQLite)
+    auth_database_url: str = ""
 
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"
