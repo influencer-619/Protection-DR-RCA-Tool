@@ -58,12 +58,15 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 200
     allowed_upload_extensions: str = (
         ".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip,"
-        ".set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex5,.d5z,.pcmi,.pcmp"
+        ".set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex5,.d5z,.pcmi,.pcmp,"
+        ".cid,.icd,.scd,.iid"
     )
     storage_backend: str = "auto"  # auto | s3 | local
     local_storage_path: str = "storage"
     rate_limit_per_minute: int = 600
     run_analysis_sync: bool = False  # True = sync in-process (dev/tests)
+    # Background poller for IEDs with IEC 61850 auto-fetch enabled (run in one API process only)
+    iec61850_auto_fetch: bool = True
 
     # Uploaded settings files are treated as APPROVED / VERIFIED automatically
     # (no manual engineer approve step). Set AUTO_APPROVE_UPLOADED_SETTINGS=false to require manual approval.

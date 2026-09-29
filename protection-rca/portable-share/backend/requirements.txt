@@ -29,3 +29,5 @@ pytest-asyncio==0.25.0
 pytest-cov==6.0.0
 olefile>=0.47
 pycev>=0.1.0
+# IEC 61850 MMS client (libiec61850, GPLv3) — optional; enables "Fetch from IED"
+pyiec61850-ng>=1.6.1

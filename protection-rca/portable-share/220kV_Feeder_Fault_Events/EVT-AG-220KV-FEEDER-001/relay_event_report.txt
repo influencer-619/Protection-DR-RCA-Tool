@@ -1,0 +1,28 @@
+=====================================================================
+CONSOLIDATED RELAY EVENT REPORT
+Avaada 220kV Substation - Feeder Bay 1
+IED: IED-Feeder-Relay-01
+=====================================================================
+All records include both secondary (as-recorded) and primary-referred
+(kA / kV) analog channels. See relay_base_settings.txt for channel
+naming convention (e.g. IA = secondary, IA_PRI = primary in kA).
+
+---------------------------------------------------------------------
+EVENT 2 OF 4  |  Record: EVT-AG-220KV-FEEDER-001.cfg/.dat
+---------------------------------------------------------------------
+Date / Time (trigger)   : 03-Aug-2026 09:41:52.300
+Fault Type              : Single Line-to-Ground Fault (A-G)
+Faulted Phase           : A
+Protection Operated     : 50N - Earth Fault Instantaneous Overcurrent
+Pickup Time             : t = 0.303 s (3 ms after inception)
+Operate/Trip Time       : t = 0.333 s (30 ms operate time)
+Fault Current (secondary): Ia ~4.5 x rated (~4.5 A sec)
+Fault Current (primary)  : Ia ~5.4 kA (IA_PRI channel)
+CB Trip Command Issued  : Yes (TRIP_CMD asserted at t = 0.333 s)
+CB Interrupted           : t = 0.393 s (60 ms CB operating time)
+Total Fault Duration     : 93 ms (~4.65 cycles)
+Voltage Behaviour (pri) : Va collapsed to ~15% (~19.1 kV); Vb, Vc unchanged (~127 kV)
+Targets/Flags            : 51N_PICKUP, 50N_INST_TRIP, CB_52A_STATUS (open)
+Auto-reclose             : Initiated, 5.0 s dead time, 1 shot (success assumed)
+Remarks                  : Earth fault current well above 50N pickup
+                           (2.5 A sec / 3.0 kA primary); operation as expected.

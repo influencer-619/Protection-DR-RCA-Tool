@@ -28,6 +28,14 @@ import type {
   Feeder,
   Relay,
   IedContext,
+  Iec61850AutoFetch,
+  Iec61850AutoFetchSettings,
+  Iec61850Browse,
+  Iec61850Connection,
+  Iec61850ConnectionInput,
+  Iec61850FetchResult,
+  Iec61850Identify,
+  Iec61850Info,
 } from '@/types';
 
 const TOKEN_KEY = 'protection_rca_token';
@@ -273,6 +281,97 @@ export const api = {
   async getIedContext(iedId: string): Promise<IedContext> {
     const { data } = await apiClient.get<IedContext>(`/ieds/${iedId}`);
     return data;
+  },
+
+  async getIec61850Info(): Promise<Iec61850Info> {
+    const { data } = await apiClient.get<Iec61850Info>('/iec61850/info');
+    return data;
+  },
+
+  async getIec61850Connection(iedId: string): Promise<Iec61850Connection> {
+    const { data } = await apiClient.get<Iec61850Connection>(`/ieds/${iedId}/iec61850`);
+    return data;
+  },
+
+  async testIec61850(iedId: string, body: Iec61850ConnectionInput): Promise<Iec61850Identify> {
+    try {
+      const { data } = await apiClient.post<Iec61850Identify>(
+        `/ieds/${iedId}/iec61850/test`,
+        body,
+        { timeout: 90000 },
+      );
+      return data;
+    } catch (err) {
+      throw apiError(err, 'Connection test failed');
+    }
+  },
+
+  async browseIec61850(iedId: string, body: Iec61850ConnectionInput): Promise<Iec61850Browse> {
+    try {
+      const { data } = await apiClient.post<Iec61850Browse>(
+        `/ieds/${iedId}/iec61850/browse`,
+        body,
+        { timeout: 180000 },
+      );
+      return data;
+    } catch (err) {
+      throw apiError(err, 'Could not browse the IED');
+    }
+  },
+
+  async getIec61850AutoFetch(iedId: string): Promise<Iec61850AutoFetch> {
+    const { data } = await apiClient.get<Iec61850AutoFetch>(`/ieds/${iedId}/iec61850/auto-fetch`);
+    return data;
+  },
+
+  async saveIec61850AutoFetch(
+    iedId: string,
+    body: Iec61850AutoFetchSettings & Iec61850ConnectionInput,
+  ): Promise<Iec61850AutoFetch> {
+    try {
+      const { data } = await apiClient.put<Iec61850AutoFetch>(
+        `/ieds/${iedId}/iec61850/auto-fetch`,
+        body,
+      );
+      return data;
+    } catch (err) {
+      throw apiError(err, 'Could not save auto-fetch settings');
+    }
+  },
+
+  async runIec61850AutoFetchNow(iedId: string): Promise<Iec61850AutoFetch> {
+    try {
+      const { data } = await apiClient.post<Iec61850AutoFetch>(
+        `/ieds/${iedId}/iec61850/auto-fetch/run-now`,
+        {},
+        { timeout: 360000 },
+      );
+      return data;
+    } catch (err) {
+      throw apiError(err, 'Auto-fetch check failed');
+    }
+  },
+
+  async fetchIec61850(
+    iedId: string,
+    body: Iec61850ConnectionInput & {
+      records: string[];
+      include_settings: boolean;
+      include_events: boolean;
+      include_scl: boolean;
+      description?: string;
+    },
+  ): Promise<Iec61850FetchResult> {
+    try {
+      const { data } = await apiClient.post<Iec61850FetchResult>(
+        `/ieds/${iedId}/iec61850/fetch`,
+        body,
+        { timeout: 360000 },
+      );
+      return data;
+    } catch (err) {
+      throw apiError(err, 'Fetch from IED failed');
+    }
   },
 
   async deleteEvent(id: string): Promise<void> {

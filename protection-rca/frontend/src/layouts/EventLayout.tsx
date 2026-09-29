@@ -366,111 +366,130 @@ function EventLayoutInner() {
 
   return (
     <div className={styles.wrap}>
-      <div className={styles.header}>
-        <div>
-          <div className={styles.eyebrow}>Event analysis</div>
-          <h1 className={styles.title}>
-            <span className="mono">{event?.event_id ?? id}</span>
-            {event?.feeder && <span className={styles.feeder}> / {event.feeder}</span>}
-          </h1>
-          <div className={styles.meta}>
-            <span>{substationLabel}</span>
-            <span>{bayLabel}</span>
-            <span className="mono">{relayLabel}</span>
-            {event?.event_datetime && (
-              <span className="mono">{new Date(event.event_datetime).toLocaleString()}</span>
-            )}
+      <div className={styles.headBand}>
+        <div className={styles.header}>
+          <div className={styles.headMain}>
+            <div className={styles.headIcon} aria-hidden>
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 12h4l3-8 4 16 3-8h4" />
+              </svg>
+            </div>
+            <div className={styles.headText}>
+              <div className={styles.crumbs}>
+                <span>{substationLabel}</span>
+                <span className={styles.sep}>›</span>
+                <span>{bayLabel}</span>
+                <span className={styles.sep}>›</span>
+                <span className="mono">{relayLabel}</span>
+              </div>
+              <h1 className={styles.title}>
+                <span className="mono">{event?.event_id ?? id}</span>
+                {event?.feeder && <span className={styles.feeder}>{event.feeder}</span>}
+              </h1>
+              <div className={styles.badges}>
+                {loading && <span className={styles.loading}>Loading…</span>}
+                {event?.event_datetime && (
+                  <span className={`mono ${styles.when}`}>
+                    {new Date(event.event_datetime).toLocaleString()}
+                  </span>
+                )}
+                {event?.status && (
+                  <StatusBadge
+                    status={event.status}
+                    title={
+                      event.status === 'FAILED' && job?.error_message
+                        ? job.error_message
+                        : undefined
+                    }
+                  />
+                )}
+                {event?.decision_state && <StatusBadge status={event.decision_state} />}
+                {event?.data_quality && <DataQualityBadge quality={event.data_quality} />}
+                {faultType && <span className={`mono ${styles.fault}`}>{faultType}</span>}
+                {event?.severity_summary && <SeverityBadge severity={event.severity_summary} />}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className={styles.badges}>
-          {loading && <span className={styles.loading}>Loading…</span>}
-          {event?.status && (
-            <StatusBadge
-              status={event.status}
-              title={
-                event.status === 'FAILED' && job?.error_message
-                  ? job.error_message
-                  : undefined
-              }
-            />
-          )}
-          {event?.decision_state && <StatusBadge status={event.decision_state} />}
-          {event?.data_quality && <DataQualityBadge quality={event.data_quality} />}
-          {faultType && <span className={`mono ${styles.fault}`}>{faultType}</span>}
-          {event?.severity_summary && <SeverityBadge severity={event.severity_summary} />}
-          {event && id && (
-            <SharePackButton eventId={id} eventCode={event.event_id} />
-          )}
           {event && (
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={analysisBusy || deleting}
-              onClick={() => void onAnalyse()}
-            >
-              {analysisBusy
-                ? 'Analysing…'
-                : job?.status === 'COMPLETED'
-                  ? 'Re-run analysis'
-                  : 'Start analysis'}
-            </button>
-          )}
-          {event && (
-            <button
-              type="button"
-              className="btn btn-sm btn-danger"
-              disabled={deleting || analysisBusy}
-              onClick={() => setConfirmDelete(true)}
-            >
-              {deleting ? 'Deleting…' : 'Delete event'}
-            </button>
+            <div className={styles.actions}>
+              {id && <SharePackButton eventId={id} eventCode={event.event_id} />}
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={analysisBusy || deleting}
+                onClick={() => void onAnalyse()}
+              >
+                {analysisBusy
+                  ? 'Analysing…'
+                  : job?.status === 'COMPLETED'
+                    ? 'Re-run analysis'
+                    : 'Start analysis'}
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${styles.deleteBtn}`}
+                disabled={deleting || analysisBusy}
+                onClick={() => setConfirmDelete(true)}
+                title="Delete event"
+                aria-label="Delete event"
+              >
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+                </svg>
+                {deleting && <span>Deleting…</span>}
+              </button>
+            </div>
           )}
         </div>
+
+        <EventStatusBar lamps={lamps} eventBase={id ? `/events/${id}` : undefined} />
       </div>
 
       {dialogError && (
-        <div className="alert alert-danger" style={{ margin: '8px var(--content-pad-x)' }}>
+        <div className="alert alert-danger" style={{ margin: '12px var(--content-pad-x) 0' }}>
           {dialogError}
         </div>
       )}
 
-      <EventStatusBar lamps={lamps} eventBase={id ? `/events/${id}` : undefined} />
-
-      {nextStep && <NextStepBanner step={nextStep} />}
-
-      {normalizedJob && (
-        <div className={styles.progress}>
-          <AnalysisProgress job={normalizedJob as never} compact />
+      {(nextStep || (normalizedJob && normalizedJob.status !== 'COMPLETED')) && (
+        <div className={styles.guide}>
+          {nextStep && <NextStepBanner step={nextStep} />}
+          {normalizedJob && normalizedJob.status !== 'COMPLETED' && (
+            <AnalysisProgress job={normalizedJob as never} compact />
+          )}
         </div>
       )}
 
-      <div className={styles.tabGroups}>
-        {TAB_GROUPS.map((g) => (
-          <button
-            key={g.id}
-            type="button"
-            className={`${styles.groupBtn} ${tabGroup === g.id ? styles.groupActive : ''}`}
-            onClick={() => {
-              setTabGroup(g.id);
-              const first = g.tabs[0];
-              if (first && id) navigate(`/events/${id}/${first.to}`);
-            }}
-          >
-            {g.label}
-          </button>
-        ))}
-      </div>
-
-      <nav className={styles.tabs}>
-        {activeGroup.tabs.map((t) => (
-          <NavLink
-            key={t.to}
-            to={`/events/${id}/${t.to}`}
-            className={({ isActive }) => `${styles.tab} ${isActive ? styles.active : ''}`}
-          >
-            {t.label}
-          </NavLink>
-        ))}
+      <nav className={styles.nav} aria-label="Event sections">
+        <div className={styles.groups} role="tablist">
+          {TAB_GROUPS.map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              role="tab"
+              aria-selected={tabGroup === g.id}
+              className={`${styles.groupBtn} ${tabGroup === g.id ? styles.groupActive : ''}`}
+              onClick={() => {
+                setTabGroup(g.id);
+                const first = g.tabs[0];
+                if (first && id) navigate(`/events/${id}/${first.to}`);
+              }}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <div className={styles.tabs}>
+          {activeGroup.tabs.map((t) => (
+            <NavLink
+              key={t.to}
+              to={`/events/${id}/${t.to}`}
+              className={({ isActive }) => `${styles.tab} ${isActive ? styles.active : ''}`}
+            >
+              {t.label}
+            </NavLink>
+          ))}
+        </div>
       </nav>
 
       <div className={styles.body}>

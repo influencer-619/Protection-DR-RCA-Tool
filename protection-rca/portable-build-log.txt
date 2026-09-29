@@ -1,7 +1,8 @@
 Protection RCA portable build log
-Started: 16-09-2026 12:17:53.46
-ROOT=D:\Sachin_Python\Protection Expert System\protection-rca
+Started: 29-09-2026 13:53:51.63
+ROOT=D:\Sachin_Python\Protection Expert System_IEC61850\protection-rca
 Mode=verify-venv-no-pip-upgrade
 build-all-latest OK
-SUCCESS OUT=D:\Sachin_Python\Protection Expert System\protection-rca\portable-share
-Finished: 16-09-2026 12:18:31.79
+PYHOME=C:\Program Files\Python314
+SUCCESS OUT=D:\Sachin_Python\Protection Expert System_IEC61850\protection-rca\portable-share
+Finished: 29-09-2026 13:54:36.23

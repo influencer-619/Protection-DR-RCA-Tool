@@ -1,0 +1,26 @@
+=====================================================================
+CONSOLIDATED RELAY EVENT REPORT
+Avaada 132kV Substation - Feeder Bay 1
+IED: IED-Feeder-Relay-01
+=====================================================================
+
+---------------------------------------------------------------------
+EVENT 1 OF 4  |  Record: EVT-OC-132KV-FEEDER-001.cfg/.dat
+---------------------------------------------------------------------
+Date / Time (trigger)   : 12-Jul-2026 14:22:07.300
+Fault Type              : Phase-Phase Fault (B-C)
+Faulted Phases          : B, C
+Protection Operated     : 50P - Phase Instantaneous Overcurrent
+Pickup Time             : t = 0.302 s (2 ms after inception)
+Operate/Trip Time       : t = 0.322 s (20 ms operate time)
+Fault Current (Ib, Ic)  : ~9.0 x rated secondary (~7.2 kA primary)
+Pre-fault Load Current  : ~320 A primary (40% of CT rating)
+CB Trip Command Issued  : Yes (TRIP_CMD asserted at t = 0.322 s)
+CB Interrupted           : t = 0.382 s (60 ms CB operating time)
+Total Fault Duration     : 82 ms (~4.1 cycles)
+Voltage Behaviour        : Vb, Vc collapsed to ~25%; Va largely unaffected (~95%)
+Targets/Flags            : 51P_PICKUP, 50P_INST_TRIP, CB_52A_STATUS (open)
+Auto-reclose             : Not initiated (phase-phase fault, non-reclose group)
+Remarks                  : Correct operation of instantaneous phase O/C for a
+                           close-in inter-phase fault; magnitude consistent
+                           with 50P pickup setting of 6.0 A sec (4800 A pri).

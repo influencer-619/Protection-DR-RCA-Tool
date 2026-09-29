@@ -1,0 +1,28 @@
+=====================================================================
+CONSOLIDATED RELAY EVENT REPORT
+Avaada 132kV Substation - Feeder Bay 1
+IED: IED-Feeder-Relay-01
+=====================================================================
+
+---------------------------------------------------------------------
+EVENT 3 OF 4  |  Record: EVT-DIST-132KV-FEEDER-001.cfg/.dat
+---------------------------------------------------------------------
+Date / Time (trigger)   : 19-Aug-2026 17:05:11.300
+Fault Type              : Phase-Phase-Ground Fault (A-B-G)
+Faulted Phases          : A, B (+ ground)
+Protection Operated     : 21 - Distance, Zone 1 (instantaneous)
+Pickup Time             : t = 0.301 s (1 ms after inception)
+Operate/Trip Time       : t = 0.326 s (25 ms operate time incl. security margin)
+Fault Current (Ia, Ib)  : ~10.0 x rated secondary (~8.0 kA primary)
+Measured Loop Impedance : ~4.58 ohm primary (R=1.25, X=4.41)
+Estimated Fault Location: ~14.0 km from relay (33% of 42 km line length)
+Zone Reached            : Zone 1 (reach set to 80% / 33.6 km) - fault within reach
+CB Trip Command Issued  : Yes (TRIP_CMD asserted at t = 0.326 s)
+CB Interrupted           : t = 0.381 s (55 ms CB operating time)
+Total Fault Duration     : 81 ms (~4.05 cycles)
+Voltage Behaviour        : Va, Vb collapsed to ~20%; Vc largely unaffected (~90%)
+Targets/Flags            : 21_Z1_PICKUP, 21_Z1_TRIP, CB_52A_STATUS (open)
+Auto-reclose             : Initiated, 5.0 s dead time, 1 shot (success assumed)
+Remarks                  : Impedance measurement places fault well inside
+                           Zone 1 reach; instantaneous trip is correct and
+                           selective (no Zone 2/3 time delay involved).

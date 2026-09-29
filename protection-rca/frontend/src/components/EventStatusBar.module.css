@@ -1,48 +1,53 @@
 .bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 8px;
-  padding: 6px 10px;
-  margin: 0 16px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
-  border-top: none;
-  border-radius: 0 0 var(--radius) var(--radius);
-  font-size: 0.72rem;
-  box-shadow: var(--shadow-panel);
+  align-items: center;
+  gap: 6px;
+  padding: 8px var(--content-pad-x) 12px;
+  font-size: 0.7rem;
 }
 
 .item {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-family: var(--font-mono);
-  letter-spacing: 0.02em;
+  gap: 6px;
+  padding: 4px 10px 4px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-weight: 700;
+  letter-spacing: 0.04em;
   color: var(--text-muted);
 }
 
 .link {
   text-decoration: none;
-  padding: 4px 8px;
-  border-radius: 3px;
-  border: 1px solid transparent;
   cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
 }
 
 .link:hover {
   text-decoration: none;
-  background: var(--bg-panel);
-  border-color: var(--border);
-  color: var(--text-primary);
+  border-color: currentColor;
 }
 
 .linkActive {
+  box-shadow: 0 0 0 2px var(--accent-soft);
   border-color: var(--accent);
-  background: var(--bg-panel);
 }
 
 .icon {
-  font-size: 0.7rem;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.62rem;
+  line-height: 1;
+  background: var(--bg-panel);
+  border: 1px solid currentColor;
 }
 
 .label {
@@ -51,14 +56,26 @@
 
 .ok {
   color: var(--status-ok);
+  border-color: color-mix(in srgb, var(--status-ok) 35%, transparent);
+  background: color-mix(in srgb, var(--status-ok) 8%, var(--bg-panel));
+}
+
+.ok .icon {
+  background: var(--status-ok);
+  border-color: var(--status-ok);
+  color: #fff;
 }
 
 .warn {
   color: var(--sev-medium);
+  border-color: color-mix(in srgb, var(--sev-medium) 40%, transparent);
+  background: color-mix(in srgb, var(--sev-medium) 9%, var(--bg-panel));
 }
 
 .error {
   color: var(--sev-critical);
+  border-color: color-mix(in srgb, var(--sev-critical) 40%, transparent);
+  background: color-mix(in srgb, var(--sev-critical) 8%, var(--bg-panel));
 }
 
 .pending {

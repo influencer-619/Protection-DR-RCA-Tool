@@ -1,0 +1,9 @@
+Timestamp,Event_ID,IED,Point_Tag,Description,State
+2026-08-03 09:41:52.300,EVT-AG-132KV-FEEDER-001,IED-Feeder-Relay-01,FAULT_INCEPTION,Single line to ground fault (A-G) inception detected,-
+2026-08-03 09:41:52.303,EVT-AG-132KV-FEEDER-001,IED-Feeder-Relay-01,51N_PICKUP,Earth fault time overcurrent pickup,ON
+2026-08-03 09:41:52.333,EVT-AG-132KV-FEEDER-001,IED-Feeder-Relay-01,50N_INST_TRIP,Earth fault instantaneous overcurrent operate,ON
+2026-08-03 09:41:52.333,EVT-AG-132KV-FEEDER-001,IED-Feeder-Relay-01,TRIP_CMD,Trip command issued to breaker,ON
+2026-08-03 09:41:52.393,EVT-AG-132KV-FEEDER-001,IED-Feeder-Relay-01,CB_52A_STATUS,Breaker 52 auxiliary contact,OPEN
+2026-08-03 09:41:52.393,EVT-AG-132KV-FEEDER-001,RTU-01,BREAKER_FEEDER1,Feeder 1 breaker status,OPEN
+2026-08-03 09:41:57.393,EVT-AG-132KV-FEEDER-001,IED-Feeder-Relay-01,AUTO_RECLOSE,Auto-reclose dead time elapsed - reclose issued,ON
+2026-08-03 09:41:57.450,EVT-AG-132KV-FEEDER-001,IED-Feeder-Relay-01,CB_52A_STATUS,Breaker 52 auxiliary contact,CLOSED

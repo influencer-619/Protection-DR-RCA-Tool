@@ -79,11 +79,56 @@ def wait_port(host: str, port: int, timeout_s: float = 90.0) -> bool:
     return False
 
 
+def bundled_python(root: Path) -> Path | None:
+    py = root / "python" / "python.exe"
+    return py if py.is_file() else None
+
+
 def find_python(root: Path) -> Path:
+    bundled = bundled_python(root)
+    if bundled:
+        return bundled
     venv_py = root / "backend" / ".venv" / "Scripts" / "python.exe"
     if venv_py.is_file():
         return venv_py
     return Path(sys.executable)
+
+
+def api_log_path(root: Path) -> Path:
+    return root / "backend" / "logs" / "api-launch.log"
+
+
+def venv_base_problem(root: Path) -> str | None:
+    """A venv's python.exe only redirects to the base install named in pyvenv.cfg."""
+    cfg = root / "backend" / ".venv" / "pyvenv.cfg"
+    if bundled_python(root) or not cfg.is_file():
+        return None
+    home = ""
+    version = ""
+    for line in cfg.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        if key == "home":
+            home = value.strip()
+        elif key == "version":
+            version = value.strip()
+    if not home or (Path(home) / "python.exe").is_file():
+        return None
+    return (
+        f"The bundled backend\\.venv needs Python {version or ''} installed at:\n"
+        f"  {home}\n\n"
+        "That Python is not installed on this PC, so the API cannot start.\n\n"
+        f"Fix: install Python {version or '(same version)'} for all users "
+        f"(default path {home}), then start ProtectionRCA.exe again."
+    )
+
+
+def log_tail(path: Path, lines: int = 12) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    except OSError:
+        return ""
+    return "\n".join(text[-lines:])
 
 
 def find_npm(root: Path) -> Path | None:
@@ -239,13 +284,22 @@ def _assign_pid_to_job(pid: int) -> None:
         pass
 
 
-def popen_managed(cmd: list[str], cwd: Path, env: dict) -> subprocess.Popen:
+def popen_managed(
+    cmd: list[str], cwd: Path, env: dict, log_path: Path | None = None
+) -> subprocess.Popen:
+    out = subprocess.DEVNULL
+    if log_path is not None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            out = open(log_path, "w", encoding="utf-8", errors="replace")
+        except OSError:
+            out = subprocess.DEVNULL
     proc = subprocess.Popen(
         cmd,
         cwd=str(cwd),
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=out,
+        stderr=subprocess.STDOUT if out is not subprocess.DEVNULL else subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         creationflags=_creation_flags(),
         close_fds=True,
@@ -412,6 +466,10 @@ def start_backend(root: Path, *, portable: bool) -> None:
     backend = root / "backend"
     env = os.environ.copy()
     env["PYTHONPATH"] = str(backend)
+    if bundled_python(root):
+        # Keep a Python installed on this PC (if any) out of the bundled runtime.
+        env.pop("PYTHONHOME", None)
+        env["PYTHONNOUSERSITE"] = "1"
     # Absolute sqlite path so relaunch / cwd changes don't orphan the DB
     db = backend / "protection_rca_local.db"
     env.setdefault(
@@ -449,6 +507,7 @@ def start_backend(root: Path, *, portable: bool) -> None:
         ],
         backend,
         env,
+        log_path=api_log_path(root),
     )
 
 
@@ -626,10 +685,21 @@ def main() -> int:
             return 1
         portable = True
 
+    if not port_open(API_CHECK_HOST, API_PORT):
+        problem = venv_base_problem(root)
+        if problem:
+            error_box("Protection RCA", problem)
+            return 1
+
     try:
         start_backend(root, portable=portable)
-        if not wait_port(API_CHECK_HOST, API_PORT, 60):
-            raise RuntimeError(f"API did not start on port {API_PORT}.")
+        if not wait_port(API_CHECK_HOST, API_PORT, 90):
+            log = api_log_path(root)
+            tail = log_tail(log)
+            raise RuntimeError(
+                f"API did not start on port {API_PORT}.\n\n"
+                + (f"Last lines of {log}:\n\n{tail}" if tail else f"No output in {log}.")
+            )
         if not portable:
             start_frontend(root)
             if not wait_port(UI_CHECK_HOST, UI_PORT, 120):

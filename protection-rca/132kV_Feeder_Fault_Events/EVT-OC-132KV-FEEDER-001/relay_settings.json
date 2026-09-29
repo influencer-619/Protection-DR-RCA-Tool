@@ -1,0 +1,63 @@
+{
+  "site": "Avaada 132kV Substation - Feeder Bay 1",
+  "relay_model": "Multifunction Numerical Feeder/Bus Protection Relay",
+  "ct_ratio": "800/1",
+  "vt_ratio": "132000/110",
+  "nominal_frequency_hz": 50,
+  "line_parameters": {
+    "line_length_km": 42.0,
+    "positive_seq_impedance_ohm_per_km": {"R1": 0.089, "X1": 0.315},
+    "zero_seq_impedance_ohm_per_km": {"R0": 0.245, "X0": 0.985}
+  },
+  "protection_functions": {
+    "51P_phase_time_overcurrent": {
+      "enabled": true,
+      "pickup_A_secondary": 1.2,
+      "pickup_A_primary": 960,
+      "curve": "IEC Standard Inverse (SI)",
+      "time_multiplier_setting": 0.30,
+      "reset": "IDMT (IEC)"
+    },
+    "50P_phase_instantaneous_overcurrent": {
+      "enabled": true,
+      "pickup_A_secondary": 6.0,
+      "pickup_A_primary": 4800,
+      "definite_time_delay_ms": 20
+    },
+    "51N_earth_fault_time_overcurrent": {
+      "enabled": true,
+      "pickup_A_secondary": 0.30,
+      "pickup_A_primary": 240,
+      "curve": "IEC Standard Inverse (SI)",
+      "time_multiplier_setting": 0.20
+    },
+    "50N_earth_fault_instantaneous": {
+      "enabled": true,
+      "pickup_A_secondary": 2.5,
+      "pickup_A_primary": 2000,
+      "definite_time_delay_ms": 30
+    },
+    "21_distance": {
+      "enabled": true,
+      "zone1": {"reach_pct_of_line": 80, "reach_ohm_secondary": 7.33, "delay_ms": 0, "characteristic": "Quadrilateral"},
+      "zone2": {"reach_pct_of_line": 120, "reach_ohm_secondary": 11.0, "delay_ms": 350},
+      "zone3": {"reach_pct_of_line": 200, "reach_ohm_secondary": 18.3, "delay_ms": 800},
+      "phase_selection": "AN, BN, CN, AB, BC, CA"
+    },
+    "87_differential": {
+      "enabled": true,
+      "scheme": "Percentage Restrained Bus/Zone Differential",
+      "id_pickup_pu": 0.20,
+      "slope1_pct": 20,
+      "slope1_breakpoint_pu": 2.0,
+      "slope2_pct": 60,
+      "operate_time_target_ms": 15
+    }
+  },
+  "cb_fail_protection_ms": 200,
+  "auto_reclose": {
+    "enabled": true,
+    "dead_time_s": 5.0,
+    "shots": 1
+  }
+}

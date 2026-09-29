@@ -1,0 +1,9 @@
+Timestamp,Event_ID,IED,Point_Tag,Description,State
+2026-08-19 17:05:11.300,EVT-DIST-132KV-FEEDER-001,IED-Feeder-Relay-01,FAULT_INCEPTION,Phase-Phase-Ground fault (A-B-G) inception detected,-
+2026-08-19 17:05:11.301,EVT-DIST-132KV-FEEDER-001,IED-Feeder-Relay-01,21_Z1_PICKUP,Distance Zone 1 pickup,ON
+2026-08-19 17:05:11.326,EVT-DIST-132KV-FEEDER-001,IED-Feeder-Relay-01,21_Z1_TRIP,Distance Zone 1 operate (instantaneous),ON
+2026-08-19 17:05:11.326,EVT-DIST-132KV-FEEDER-001,IED-Feeder-Relay-01,TRIP_CMD,Trip command issued to breaker,ON
+2026-08-19 17:05:11.381,EVT-DIST-132KV-FEEDER-001,IED-Feeder-Relay-01,CB_52A_STATUS,Breaker 52 auxiliary contact,OPEN
+2026-08-19 17:05:11.381,EVT-DIST-132KV-FEEDER-001,RTU-01,BREAKER_FEEDER1,Feeder 1 breaker status,OPEN
+2026-08-19 17:05:16.381,EVT-DIST-132KV-FEEDER-001,IED-Feeder-Relay-01,AUTO_RECLOSE,Auto-reclose dead time elapsed - reclose issued,ON
+2026-08-19 17:05:16.430,EVT-DIST-132KV-FEEDER-001,IED-Feeder-Relay-01,CB_52A_STATUS,Breaker 52 auxiliary contact,CLOSED

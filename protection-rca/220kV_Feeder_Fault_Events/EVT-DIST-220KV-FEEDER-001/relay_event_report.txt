@@ -1,0 +1,32 @@
+=====================================================================
+CONSOLIDATED RELAY EVENT REPORT
+Avaada 220kV Substation - Feeder Bay 1
+IED: IED-Feeder-Relay-01
+=====================================================================
+All records include both secondary (as-recorded) and primary-referred
+(kA / kV) analog channels. See relay_base_settings.txt for channel
+naming convention (e.g. IA = secondary, IA_PRI = primary in kA).
+
+---------------------------------------------------------------------
+EVENT 3 OF 4  |  Record: EVT-DIST-220KV-FEEDER-001.cfg/.dat
+---------------------------------------------------------------------
+Date / Time (trigger)   : 19-Aug-2026 17:05:11.300
+Fault Type              : Phase-Phase-Ground Fault (A-B-G)
+Faulted Phases          : A, B (+ ground)
+Protection Operated     : 21 - Distance, Zone 1 (instantaneous)
+Pickup Time             : t = 0.301 s (1 ms after inception)
+Operate/Trip Time       : t = 0.326 s (25 ms operate time incl. security margin)
+Fault Current (secondary): Ia, Ib ~10.0 x rated (~10.0 A sec)
+Fault Current (primary)  : Ia, Ib ~12.0 kA (IA_PRI / IB_PRI channels)
+Measured Loop Impedance : ~7.84 ohm primary (R=0.77, X=7.80) at 24 km
+Estimated Fault Location: ~24.0 km from relay (37% of 65 km line length)
+Zone Reached            : Zone 1 (reach set to 80% / 52 km) - fault within reach
+CB Trip Command Issued  : Yes (TRIP_CMD asserted at t = 0.326 s)
+CB Interrupted           : t = 0.381 s (55 ms CB operating time)
+Total Fault Duration     : 81 ms (~4.05 cycles)
+Voltage Behaviour (pri) : Va, Vb collapsed to ~20% (~25.4 kV); Vc ~90% (~114.4 kV)
+Targets/Flags            : 21_Z1_PICKUP, 21_Z1_TRIP, CB_52A_STATUS (open)
+Auto-reclose             : Initiated, 5.0 s dead time, 1 shot (success assumed)
+Remarks                  : Impedance measurement places fault well inside
+                           Zone 1 reach (80% / 52 km); instantaneous trip
+                           is correct and selective.

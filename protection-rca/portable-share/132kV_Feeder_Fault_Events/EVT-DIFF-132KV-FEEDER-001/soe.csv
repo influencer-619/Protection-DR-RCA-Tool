@@ -1,0 +1,8 @@
+Timestamp,Event_ID,IED,Point_Tag,Description,State
+2026-09-02 06:58:44.300,EVT-DIFF-132KV-FEEDER-001,IED-Feeder-Relay-01,FAULT_INCEPTION,Internal zone fault (3-phase) inception detected,-
+2026-09-02 06:58:44.3005,EVT-DIFF-132KV-FEEDER-001,IED-Feeder-Relay-01,87_PICKUP,Differential current above pickup threshold,ON
+2026-09-02 06:58:44.3155,EVT-DIFF-132KV-FEEDER-001,IED-Feeder-Relay-01,87_OPERATE,Differential protection operate (outside restraint slope),ON
+2026-09-02 06:58:44.3155,EVT-DIFF-132KV-FEEDER-001,IED-Feeder-Relay-01,TRIP_CMD,Trip command issued to breaker,ON
+2026-09-02 06:58:44.3655,EVT-DIFF-132KV-FEEDER-001,IED-Feeder-Relay-01,CB_52A_STATUS,Breaker 52 auxiliary contact (high-speed CB),OPEN
+2026-09-02 06:58:44.3655,EVT-DIFF-132KV-FEEDER-001,RTU-01,BREAKER_FEEDER1,Feeder 1 breaker status,OPEN
+2026-09-02 06:58:49.3655,EVT-DIFF-132KV-FEEDER-001,IED-Feeder-Relay-01,AUTO_RECLOSE,Auto-reclose not initiated (differential fault - non-reclose policy),-

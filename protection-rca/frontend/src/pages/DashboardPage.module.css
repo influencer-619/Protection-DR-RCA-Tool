@@ -28,8 +28,9 @@
   padding: 14px 18px;
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
-  background: var(--bg-elevated);
-  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--accent-soft), var(--bg-panel) 60%);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
 }
 
 .inboxLabel {
@@ -90,22 +91,10 @@
 
 .kpiGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 12px;
   width: 100%;
   margin-bottom: 0;
-}
-
-@media (max-width: 1100px) {
-  .kpiGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 520px) {
-  .kpiGrid {
-    grid-template-columns: 1fr;
-  }
 }
 
 .kpiGrid :global(.kpi-card) {
@@ -114,7 +103,7 @@
   justify-content: space-between;
   min-height: 92px;
   padding: 14px 16px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 .kpiGrid :global(.kpi-value) {
@@ -202,26 +191,36 @@
 }
 
 .dayBtn {
-  font-family: var(--font-mono);
   font-size: 0.72rem;
-  padding: 3px 10px;
+  font-weight: 600;
+  padding: 4px 10px;
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  border-radius: 999px;
   cursor: pointer;
 }
 
+.dayBtn:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
 .dayActive {
-  border-color: var(--accent);
-  color: var(--accent-bright);
-  background: var(--accent-soft);
+  border-color: var(--accent-dim);
+  color: #fff;
+  background: var(--accent-dim);
+}
+
+.dayActive:hover {
+  color: #fff;
 }
 
 .chartSvg {
   width: 100%;
   height: 100%;
   min-height: 240px;
+  max-height: 320px;
   display: block;
 }
 
@@ -452,8 +451,9 @@
   padding: 16px 18px;
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
-  background: var(--bg-elevated);
-  border-radius: var(--radius);
+  background: var(--bg-panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
 }
 
 .emptyBanner p {

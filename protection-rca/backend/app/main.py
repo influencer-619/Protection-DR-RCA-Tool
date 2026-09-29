@@ -59,13 +59,32 @@ def _resolve_frontend_dist() -> Path | None:
     return None
 
 
+async def _renumber_legacy_events() -> None:
+    from app.database import AsyncSessionLocal
+    from app.services.event_service import renumber_legacy_events
+
+    try:
+        async with AsyncSessionLocal() as db:
+            count = await renumber_legacy_events(db)
+            await db.commit()
+        if count:
+            logger.info("events_renumbered", count=count)
+    except Exception as exc:  # startup must not fail on a cosmetic migration
+        logger.warning("events_renumber_failed", error=str(exc))
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings = get_settings()
     logger.info("starting", env=settings.app_env, version=settings.app_version)
     await init_db()
     await seed_if_empty()
+    await _renumber_legacy_events()
+    from app.services.iec61850 import auto_fetch
+
+    auto_fetch.start_scheduler()
     yield
+    await auto_fetch.stop_scheduler()
     logger.info("shutdown")
 
 

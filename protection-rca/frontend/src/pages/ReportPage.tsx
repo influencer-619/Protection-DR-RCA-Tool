@@ -121,6 +121,20 @@ function applyDisplayPatches(html: string, review: ReviewRow | null): string {
   return patchEngineerReview(patchScoresToPercent(html), review);
 }
 
+/** Inline preview must not carry document-level CSS — it would restyle the whole app. */
+function inlineBody(html: string): string {
+  if (!html) return html;
+  const body = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
+  let out = body ? body[1] : html;
+  out = out
+    .replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<link\b[^>]*>/gi, '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+  return out;
+}
+
 export function ReportPage() {
   const { id } = useParams<{ id: string }>();
   const { analysisRevision, event } = useEventOrWorkspace(id);
@@ -315,7 +329,7 @@ export function ReportPage() {
 
       {report?.summary && <div className="alert alert-info">{report.summary}</div>}
 
-      <div className={styles.report} dangerouslySetInnerHTML={{ __html: html }} />
+      <div className={styles.report} data-theme="light" dangerouslySetInnerHTML={{ __html: inlineBody(html) }} />
     </div>
   );
 }

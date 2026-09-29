@@ -2,8 +2,8 @@ Protection RCA — portable package (ALL LATEST CODES)
 ======================================================
 
 Packaged from current backend .py, rules, frontend\dist,
-and ProtectionRCA.exe. Uses the bundled backend\.venv
-(no Visual Studio / pip upgrade required on this PC).
+and ProtectionRCA.exe. Includes its own Python in python\
+(no Python / Visual Studio / pip install needed on this PC).
 
 START
   1. Copy this whole folder anywhere.

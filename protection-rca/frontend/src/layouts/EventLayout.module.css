@@ -4,44 +4,75 @@
   min-height: 100%;
 }
 
+/* ---------- Header band ---------- */
+
+.headBand {
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
 .header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
-  padding: 10px var(--content-pad-x) 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
-  color: var(--chrome-text);
+  gap: 16px;
+  padding: 14px var(--content-pad-x) 10px;
+  flex-wrap: wrap;
 }
 
-.eyebrow {
-  font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--chrome-muted);
-  font-weight: 700;
+.headMain {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  flex: 1 1 420px;
+}
+
+.headIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: #fff;
+  background: linear-gradient(135deg, #2a7a9a, #1f5a78);
+  box-shadow: 0 4px 10px rgba(31, 90, 120, 0.25);
+}
+
+.headText {
+  min-width: 0;
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.sep {
+  opacity: 0.6;
 }
 
 .title {
-  margin: 1px 0 4px;
-  font-size: 1.1rem;
+  margin: 2px 0 6px;
+  font-size: 1.3rem;
   font-weight: 700;
   color: var(--text-primary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  line-height: 1.25;
 }
 
 .feeder {
   color: var(--accent);
   font-weight: 600;
+  font-size: 1.05rem;
   font-family: var(--font-sans);
-}
-
-.meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  font-size: 0.75rem;
-  color: var(--text-secondary);
 }
 
 .badges {
@@ -49,107 +80,138 @@
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  justify-content: flex-end;
-  max-width: min(560px, 52%);
 }
 
-.badges :global(.btn) {
+.when {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 999px;
   background: var(--bg-elevated);
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-}
-
-.badges :global(.btn:hover) {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-
-.badges :global(.btn-primary) {
-  background: #2a7a9a;
-  border-color: #1f6380;
-  color: #fff;
-}
-
-.badges :global(.btn-danger) {
-  background: var(--sev-critical-bg);
-  border-color: var(--sev-critical);
-  color: var(--sev-critical);
+  border: 1px solid var(--border);
 }
 
 .loading {
-  color: var(--chrome-muted);
+  color: var(--text-muted);
   font-size: 0.75rem;
 }
 
 .fault {
-  padding: 1px 7px;
+  padding: 1px 8px;
   background: var(--sev-critical-bg);
-  border: 1px solid var(--sev-critical);
-  border-radius: 2px;
+  border: 1px solid color-mix(in srgb, var(--sev-critical) 45%, transparent);
+  border-radius: 999px;
   font-size: 0.7rem;
   font-weight: 700;
   color: var(--sev-critical);
 }
 
-.progress {
-  padding: 8px var(--content-pad-x);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elevated);
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
-.tabGroups {
+.deleteBtn {
+  color: var(--sev-critical);
+  padding-left: 9px;
+  padding-right: 9px;
+}
+
+.deleteBtn:hover:not(:disabled) {
+  background: var(--sev-critical-bg);
+  border-color: var(--sev-critical);
+  color: var(--sev-critical);
+}
+
+/* ---------- Guide (next step + running pipeline) ---------- */
+
+.guide {
   display: flex;
-  gap: 4px;
-  padding: 8px var(--content-pad-x) 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px var(--content-pad-x) 0;
+}
+
+/* ---------- Section navigation ---------- */
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 12px var(--content-pad-x) 0;
+  padding: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  overflow-x: auto;
+}
+
+.groups {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
   background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  flex-shrink: 0;
 }
 
 .groupBtn {
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
+  border: none;
+  background: transparent;
   color: var(--text-secondary);
   font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  padding: 5px 12px;
-  border-radius: 3px;
+  padding: 6px 12px;
+  border-radius: 6px;
   cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .groupBtn:hover {
-  border-color: var(--accent);
   color: var(--text-primary);
 }
 
 .groupActive {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--text-primary);
+  background: var(--accent-dim);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+.groupActive:hover {
+  color: #fff;
 }
 
 .tabs {
   display: flex;
   gap: 2px;
-  overflow-x: auto;
-  padding: 4px var(--content-pad-x) 0;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border-strong);
+  min-width: 0;
 }
 
 .tab {
-  padding: 7px 12px;
-  font-size: 0.75rem;
+  position: relative;
+  padding: 8px 12px;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-secondary);
   text-decoration: none;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: var(--radius) var(--radius) 0 0;
+  border-radius: 6px;
   white-space: nowrap;
-  background: transparent;
   flex: 0 0 auto;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .tab:hover {
@@ -159,10 +221,19 @@
 }
 
 .active {
-  color: var(--brand-navy);
-  background: var(--bg-panel);
-  border-color: var(--border-strong);
-  box-shadow: inset 0 2px 0 var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.active::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -7px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 [data-theme='dark'] .active {
@@ -170,7 +241,7 @@
 }
 
 .body {
-  padding: 14px var(--content-pad-x) 24px;
+  padding: 16px var(--content-pad-x) 28px;
   flex: 1;
 }
 
@@ -178,5 +249,6 @@
 .body :global(.page) {
   padding-left: 0;
   padding-right: 0;
+  padding-top: 0;
   max-width: none;
 }

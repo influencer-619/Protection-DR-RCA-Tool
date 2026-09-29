@@ -122,6 +122,7 @@ class RelayOut(BaseModel):
     model: Optional[str] = None
     firmware_version: Optional[str] = None
     protection_functions: Optional[list[Any]] = None
+    ip_address: Optional[str] = None
     is_active: bool
     created_at: datetime
 

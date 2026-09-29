@@ -31,9 +31,9 @@ export function HelpPage() {
       </div>
 
       <div className="alert alert-info" style={{ marginBottom: 16 }}>
-        Plant-first workflow: Substation → Voltage level → Bay → Feeder → IED → upload COMTRADE →
-        validate → waveforms & timeline → electrical / protection → consistency → RCA → report →
-        engineer review. Hover any status badge for a short explanation.
+        Plant-first workflow: Substation → Voltage level → Bay → Feeder → IED → fetch from the relay
+        (IEC 61850) or upload COMTRADE → validate → waveforms & timeline → electrical / protection →
+        consistency → RCA → report → engineer review. Hover any status badge for a short explanation.
       </div>
 
       <div className={styles.grid}>
@@ -52,6 +52,11 @@ export function HelpPage() {
               </li>
               <li>Keep the “Protection RCA is running” window open while you work.</li>
               <li>Close that window (or Stop &amp; Close) to shut down API + UI.</li>
+              <li>
+                Sharing: copy the whole <span className="mono">portable-share</span> folder — Python is
+                bundled, nothing to install. If the API does not start, read{' '}
+                <span className="mono">backend\logs\api-launch.log</span>.
+              </li>
             </ol>
           </div>
         </section>
@@ -63,7 +68,11 @@ export function HelpPage() {
               <li>
                 <Link to="/plant">Plant</Link> — create Substation → Voltage → Bay → Feeder → IED.
               </li>
-              <li>Open the IED → upload CFG + DAT (or CFF), relay settings, SOE / event report.</li>
+              <li>
+                Open the IED → <strong>Fetch from IED</strong> (IEC 61850) or{' '}
+                <strong>Manual upload</strong> of CFG + DAT (or CFF), relay settings, SOE / event
+                report.
+              </li>
               <li>COMTRADE → confirm detection / validation status.</li>
               <li>Run analysis and follow the “Recommended next step” banner.</li>
               <li>Inspect Waveforms (I / V / Digitals) → Sequence of operation.</li>
@@ -78,10 +87,53 @@ export function HelpPage() {
         </section>
 
         <section className="panel">
+          <div className="panel-header">Fetch from IED (IEC 61850)</div>
+          <div className="panel-body">
+            <ol>
+              <li>
+                IED workspace → <strong>Fetch from IED</strong> → enter IP (port 102) and vendor, or
+                leave Auto-detect.
+              </li>
+              <li>
+                <strong>Test connection</strong> shows the nameplate and whether MMS file services are
+                available.
+              </li>
+              <li>
+                <strong>Browse IED</strong> → tick records (Complete / Incomplete / Already fetched) →{' '}
+                <strong>Fetch &amp; create event</strong>. One event per record; settings and
+                start/trip status are read too.
+              </li>
+              <li>
+                <strong>Auto-fetch new records</strong> polls the relay on a schedule (1 min – 4 h)
+                while the server runs. The first check only records what is already there.
+              </li>
+            </ol>
+            <p style={{ color: 'var(--text-muted)', marginTop: 8 }}>
+              Read-only: nothing is written to or deleted from the relay. Requires ANALYST role.
+            </p>
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">Event numbers</div>
+          <div className="panel-body">
+            <p>
+              New events are numbered <span className="mono">EVT-YYYY-NNNNN</span> (e.g.{' '}
+              <span className="mono">EVT-2026-00042</span>), counting from 00001 each year, for
+              uploads, fetches and auto-fetches alike.
+            </p>
+            <p style={{ color: 'var(--text-muted)', marginTop: 8 }}>
+              Events from older versions with random IDs were renumbered once at startup; the old ID
+              is kept as <span className="mono">previous_event_id</span>.
+            </p>
+          </div>
+        </section>
+
+        <section className="panel">
           <div className="panel-header">Safety reminders</div>
           <div className="panel-body">
             <ul>
-              <li>Read-only — no relay or breaker control.</li>
+              <li>Read-only — no relay or breaker control; IEC 61850 access only reads.</li>
               <li>No generative AI in analysis or reports.</li>
               <li>Never invent measurements, settings, or fault location.</li>
               <li>Disabled element + pickup/trip ⇒ INCONSISTENT, not auto “malfunction”.</li>
@@ -134,7 +186,11 @@ export function HelpPage() {
       </section>
 
       <p style={{ marginTop: 20, color: 'var(--text-muted)' }}>
-        Full document: <span className="mono">docs/USER_GUIDE.md</span>. Word copy:{' '}
+        Full document (v0.7.0):{' '}
+        <a href="/USER_GUIDE.md" target="_blank" rel="noreferrer">
+          open the detailed user guide
+        </a>{' '}
+        (<span className="mono">docs/USER_GUIDE.md</span>). Word copy:{' '}
         <span className="mono">Protection_RCA_User_Guide.doc</span> in the project root /{' '}
         <span className="mono">docs/</span> folder.
       </p>

@@ -6,27 +6,42 @@ interface Props {
   compact?: boolean;
 }
 
-function StageIcon({ status }: { status: AnalysisStage['status'] }) {
-  if (status === 'done') return <span className={styles.done}>✓</span>;
-  if (status === 'running') return <span className={styles.running}>●</span>;
-  if (status === 'failed') return <span className={styles.failed}>✕</span>;
-  return <span className={styles.pending}>○</span>;
-}
+const STAGE_ICON: Record<AnalysisStage['status'], string> = {
+  done: '✓',
+  running: '●',
+  failed: '✕',
+  pending: '○',
+  skipped: '–',
+};
+
+const STAGE_CLASS: Record<AnalysisStage['status'], string> = {
+  done: styles.stDone,
+  running: styles.stRunning,
+  failed: styles.stFailed,
+  pending: styles.stPending,
+  skipped: styles.stPending,
+};
 
 export function AnalysisProgress({ job, compact }: Props) {
+  const pct = Math.max(0, Math.min(100, Math.round(job.progress ?? 0)));
+  const failed = job.status === 'FAILED';
   return (
     <div className={`${styles.wrap} ${compact ? styles.compact : ''}`}>
       <div className={styles.header}>
         <span className={styles.title}>Analysis pipeline</span>
-        <span className={`mono ${styles.pct}`}>{Math.round(job.progress)}%</span>
+        {job.current_message && <span className={styles.message}>{job.current_message}</span>}
+        <span className={`mono ${styles.pct}`}>{pct}%</span>
       </div>
-      {job.current_message && (
-        <div className={styles.message}>{job.current_message}</div>
-      )}
+      <div className={styles.bar} aria-hidden>
+        <div
+          className={`${styles.fill} ${failed ? styles.fillFailed : ''}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
       <ol className={styles.list}>
         {job.stages.map((s) => (
-          <li key={s.name} className={`${styles.item} ${styles[s.status]}`}>
-            <StageIcon status={s.status} />
+          <li key={s.name} className={`${styles.item} ${STAGE_CLASS[s.status] ?? ''}`}>
+            <span className={styles.icon}>{STAGE_ICON[s.status] ?? '○'}</span>
             <span className={styles.label}>{s.label}</span>
           </li>
         ))}

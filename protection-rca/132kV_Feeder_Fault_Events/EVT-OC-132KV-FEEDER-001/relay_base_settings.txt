@@ -1,0 +1,52 @@
+=====================================================================
+RELAY BASE / GENERAL SETTINGS
+=====================================================================
+Substation                : Avaada 132kV Substation
+Bay                       : Feeder Bay 1 (132kV Outgoing Feeder)
+IED / Relay Tag           : IED-Feeder-Relay-01
+Relay Function            : Distance + O/C + E/F + Differential (multifunction)
+Firmware Revision         : 7.42
+Comm. Protocol            : IEC 61850 (MMS + GOOSE), IRIG-B time sync
+
+--- SYSTEM / RATINGS -------------------------------------------------
+Nominal System Voltage    : 132 kV
+Nominal Frequency         : 50 Hz
+Phase Rotation            : ABC
+CT Ratio                  : 800/1 A
+CT Class                  : 5P20, 15VA
+VT Ratio                  : 132000/110 V (Line-Line)
+VT Connection             : Star/Star with open-delta residual (3Vo)
+Rated Secondary Current   : 1 A
+Rated Secondary Voltage   : 110 V (ph-ph) / 63.5 V (ph-n)
+
+--- CT/VT WIRING ------------------------------------------------------
+CT Polarity               : P1 towards busbar
+VT Location               : Line side (feeder VT)
+Earthing                  : Solidly earthed system, Ground fault factor <1.4
+
+--- GENERAL PROTECTION SETTINGS ---------------------------------------
+Line Length                : 42.0 km
+Positive Seq. Impedance    : 0.089 + j0.315 ohm/km
+Zero Seq. Impedance        : 0.245 + j0.985 ohm/km
+CB Operating Time          : 60 ms (rated); High-speed CB used for bus zone: 50 ms
+CB Fail Timer              : 200 ms
+Breaker Type               : SF6, 132kV, 40kA rated breaking capacity
+
+--- RECORDING / DFR SETTINGS -------------------------------------------
+Sampling Rate              : 1000 Hz (20 samples/cycle @ 50Hz)
+Pre-fault Record Length    : 300 ms
+Post-fault Record Length   : 700 ms
+Trigger Source             : Any protection pickup or digital input change
+Record Format              : COMTRADE (IEEE C37.111), ASCII, Rev 1999
+
+--- ALARM / EVENT SETTINGS ----------------------------------------------
+Event Log Depth            : 1024 events
+SOE Time Resolution        : 1 ms
+Self-Monitoring            : Watchdog relay enabled, healthy contact wired to RTU
+
+=====================================================================
+Note: Base settings apply uniformly across all four fault event
+records referenced in this package (EVT-OC, EVT-AG, EVT-DIST,
+EVT-DIFF). Function-specific pickup/timer settings are listed
+separately in relay_settings.json.
+=====================================================================

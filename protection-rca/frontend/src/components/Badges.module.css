@@ -1,117 +1,118 @@
 .badge {
+  --tone: var(--border-strong);
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px;
-  border-radius: 2px;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
-  border: 1px solid transparent;
-  line-height: 1.4;
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  line-height: 1.5;
 }
 
 .shape {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   opacity: 0.9;
   line-height: 1;
 }
 
 .ok {
+  --tone: var(--status-ok);
   color: var(--alert-ok-text);
   background: var(--sev-low-bg);
-  border-color: var(--status-ok);
 }
 
 .warn {
+  --tone: var(--sev-medium);
   color: var(--alert-warn-text);
   background: var(--sev-medium-bg);
-  border-color: var(--sev-medium);
 }
 
 .error {
+  --tone: var(--sev-critical);
   color: var(--alert-error-text);
   background: var(--sev-critical-bg);
-  border-color: var(--sev-critical);
 }
 
 .pending {
+  --tone: var(--sev-info);
   color: var(--alert-info-text);
   background: var(--sev-info-bg);
-  border-color: var(--sev-info);
 }
 
 .running {
+  --tone: var(--accent);
   color: var(--accent-bright);
   background: var(--accent-soft);
-  border-color: var(--accent);
 }
 
 .neutral {
+  --tone: var(--border-strong);
   color: var(--text-secondary);
   background: var(--bg-elevated);
-  border-color: var(--border);
 }
 
 .sevInfo {
+  --tone: var(--sev-info);
   color: var(--alert-info-text);
   background: var(--sev-info-bg);
-  border-color: var(--sev-info);
 }
 
 .sevLow {
+  --tone: var(--sev-low);
   color: var(--alert-ok-text);
   background: var(--sev-low-bg);
-  border-color: var(--sev-low);
 }
 
 .sevMedium {
+  --tone: var(--sev-medium);
   color: var(--alert-warn-text);
   background: var(--sev-medium-bg);
-  border-color: var(--sev-medium);
 }
 
 .sevHigh {
+  --tone: var(--sev-high);
   color: var(--sev-high);
   background: var(--sev-high-bg);
-  border-color: var(--sev-high);
 }
 
 .sevCritical {
+  --tone: var(--sev-critical);
   color: var(--alert-error-text);
   background: var(--sev-critical-bg);
-  border-color: var(--sev-critical);
 }
 
 .dqGood {
+  --tone: var(--dq-good);
   color: var(--alert-ok-text);
   background: var(--sev-low-bg);
-  border-color: var(--dq-good);
 }
 
 .dqAcceptable {
+  --tone: var(--dq-acceptable);
   color: var(--status-ok);
   background: var(--sev-low-bg);
-  border-color: var(--dq-acceptable);
 }
 
 .dqWarning {
+  --tone: var(--dq-warning);
   color: var(--alert-warn-text);
   background: var(--sev-medium-bg);
-  border-color: var(--dq-warning);
 }
 
 .dqPoor {
+  --tone: var(--dq-poor);
   color: var(--sev-high);
   background: var(--sev-high-bg);
-  border-color: var(--dq-poor);
 }
 
 .dqInvalid {
+  --tone: var(--dq-invalid);
   color: var(--alert-error-text);
   background: var(--sev-critical-bg);
-  border-color: var(--dq-invalid);
 }

@@ -129,7 +129,7 @@ export function EventSummaryPage() {
         nextTo={`/events/${id}/dr`}
       />
 
-      <article className={styles.sheet}>
+      <article className={styles.sheet} data-theme="light">
         <header className={styles.header}>
           <div>
             <div className={styles.eyebrow}>Protection RCA · Disturbance summary</div>

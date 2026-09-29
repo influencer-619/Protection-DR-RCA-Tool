@@ -175,8 +175,124 @@ export interface Relay {
   model?: string | null;
   firmware_version?: string | null;
   protection_functions?: string[] | null;
+  ip_address?: string | null;
   is_active: boolean;
   created_at?: string;
+}
+
+export interface Iec61850Vendor {
+  id: string;
+  label: string;
+  families: string;
+  notes: string;
+}
+
+export interface Iec61850Info {
+  library: { available: boolean; reason?: string | null };
+  vendors: Iec61850Vendor[];
+}
+
+export interface Iec61850Nameplate {
+  vendor?: string | null;
+  model?: string | null;
+  swRev?: string | null;
+  hwRev?: string | null;
+  serNum?: string | null;
+  configRev?: string | null;
+}
+
+export interface Iec61850Connection {
+  host?: string | null;
+  port: number;
+  vendor_profile: string;
+  connect_timeout_s: number;
+  request_timeout_s: number;
+  last_nameplate?: Iec61850Nameplate | null;
+  last_seen_at?: string | null;
+}
+
+export interface Iec61850Identify {
+  host: string;
+  port: number;
+  logical_devices: string[];
+  nameplate: Iec61850Nameplate;
+  detected_profile: string;
+  detected_profile_label: string;
+  file_service: boolean;
+  file_service_error?: string | null;
+  elapsed_ms: number;
+}
+
+export interface Iec61850Record {
+  key: string;
+  name: string;
+  directory: string;
+  files: string[];
+  size: number;
+  last_modified?: string | null;
+  complete: boolean;
+  event_id?: string | null;
+}
+
+export interface Iec61850RemoteFile {
+  path: string;
+  name: string;
+  size: number;
+  last_modified?: string | null;
+}
+
+export interface Iec61850Browse {
+  nameplate: Iec61850Nameplate;
+  logical_devices: string[];
+  profile: string;
+  profile_label: string;
+  records: Iec61850Record[];
+  settings_files: Iec61850RemoteFile[];
+  event_files: Iec61850RemoteFile[];
+  scl_files: Iec61850RemoteFile[];
+  truncated: boolean;
+}
+
+export interface Iec61850FetchResult {
+  events: {
+    id: string;
+    event_id: string;
+    record?: string | null;
+    files: string[];
+    package_ready: boolean;
+  }[];
+  warnings: string[];
+  nameplate: Iec61850Nameplate;
+  profile?: string | null;
+}
+
+export interface Iec61850AutoFetchSettings {
+  enabled: boolean;
+  interval_min: number;
+  include_settings: boolean;
+  include_events: boolean;
+  auto_analyse: boolean;
+  import_existing: boolean;
+}
+
+export interface Iec61850AutoFetch extends Iec61850AutoFetchSettings {
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  last_status?: 'OK' | 'ERROR' | null;
+  last_error?: string | null;
+  last_new_records?: number | null;
+  last_event_at?: string | null;
+  records_on_ied?: number | null;
+  total_events_created: number;
+  baseline_done: boolean;
+  scheduler_running: boolean;
+  interval_choices: number[];
+}
+
+export interface Iec61850ConnectionInput {
+  host?: string;
+  port?: number;
+  vendor_profile?: string;
 }
 
 export interface PlantIedNode {

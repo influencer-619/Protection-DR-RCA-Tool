@@ -37,6 +37,10 @@ SOURCE_BY_EXT = {
     ".eve": "RELAY_EVENT_REPORT",
     ".cev": "COMTRADE",  # converted to CFG/DAT on ingest
     ".pdf": "ATTACHMENT",
+    ".cid": "ATTACHMENT",
+    ".icd": "ATTACHMENT",
+    ".scd": "ATTACHMENT",
+    ".iid": "ATTACHMENT",
     ".zip": "PACKAGE",
     ".dz5": "PACKAGE",
     ".dex5": "PACKAGE",
@@ -510,6 +514,42 @@ async def store_event_file(
         source_type=source_type,
         uploaded_by=uploaded_by,
         request_id=request_id,
+    )
+    return [ef]
+
+
+async def store_acquired_bytes(
+    db: AsyncSession,
+    event: Event,
+    *,
+    filename: str,
+    data: bytes,
+    source_type: Optional[str] = None,
+    uploaded_by: Optional[str] = None,
+    request_id: Optional[str] = None,
+    file_metadata: Optional[dict] = None,
+) -> list[EventFile]:
+    """Store bytes pulled from an IED (IEC 61850 file transfer / data model read)."""
+    if Path(filename).suffix.lower() == ".cev":
+        return await _store_cev_and_derivatives(
+            db,
+            event,
+            filename=filename,
+            data=data,
+            source_type=source_type,
+            uploaded_by=uploaded_by,
+            request_id=request_id,
+        )
+    ef = await _store_bytes(
+        db,
+        event,
+        filename=filename,
+        data=data,
+        content_type=None,
+        source_type=source_type,
+        uploaded_by=uploaded_by,
+        request_id=request_id,
+        file_metadata=file_metadata,
     )
     return [ef]
 

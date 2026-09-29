@@ -1,0 +1,8 @@
+Timestamp,Event_ID,IED,Point_Tag,Description,State
+2026-07-12 14:22:07.300,EVT-OC-220KV-FEEDER-001,IED-Feeder-Relay-01,FAULT_INCEPTION,Phase-Phase fault (B-C) inception detected,-
+2026-07-12 14:22:07.302,EVT-OC-220KV-FEEDER-001,IED-Feeder-Relay-01,51P_PICKUP,Phase time overcurrent pickup,ON
+2026-07-12 14:22:07.322,EVT-OC-220KV-FEEDER-001,IED-Feeder-Relay-01,50P_INST_TRIP,Phase instantaneous overcurrent operate,ON
+2026-07-12 14:22:07.322,EVT-OC-220KV-FEEDER-001,IED-Feeder-Relay-01,TRIP_CMD,Trip command issued to breaker,ON
+2026-07-12 14:22:07.382,EVT-OC-220KV-FEEDER-001,IED-Feeder-Relay-01,CB_52A_STATUS,Breaker 52 auxiliary contact,OPEN
+2026-07-12 14:22:07.382,EVT-OC-220KV-FEEDER-001,RTU-01,BREAKER_FEEDER1,Feeder 1 breaker status,OPEN
+2026-07-12 14:22:12.382,EVT-OC-220KV-FEEDER-001,IED-Feeder-Relay-01,AUTO_RECLOSE,Auto-reclose not initiated (non-reclose fault type),-

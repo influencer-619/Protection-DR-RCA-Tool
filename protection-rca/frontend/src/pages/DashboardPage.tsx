@@ -60,7 +60,8 @@ function TrendChart({
   );
   const n = Math.max(visible.length, 1);
   const gap = 2;
-  const barW = Math.max(3, innerW / n - gap);
+  const slot = innerW / n;
+  const barW = Math.min(36, Math.max(3, slot - gap));
   const labelEvery = visible.length > 60 ? 14 : visible.length > 20 ? 5 : 1;
 
   return (
@@ -84,7 +85,7 @@ function TrendChart({
         );
       })}
       {visible.map((p, i) => {
-        const x = pad.l + i * (barW + gap);
+        const x = pad.l + i * slot + (slot - barW) / 2;
         const a = (p.analysed / max) * innerH;
         const r = (p.review / max) * innerH;
         const iss = (p.issues / max) * innerH;

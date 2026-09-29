@@ -477,6 +477,15 @@ class Setting(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 # ---------------------------------------------------------------------------
 
 
+class EventCounter(Base):
+    """Running sequence behind human-readable event numbers (one row per series, e.g. EVT-2026)."""
+
+    __tablename__ = "event_counters"
+
+    series: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class Event(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Protection disturbance / fault event under analysis."""
 
@@ -1395,6 +1404,7 @@ __all__ = [
     "SettingVersion",
     "Setting",
     "Event",
+    "EventCounter",
     "EventFile",
     "ComtradeFile",
     "ComtradeChannel",

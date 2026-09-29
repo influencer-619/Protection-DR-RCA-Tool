@@ -1,0 +1,50 @@
+=====================================================================
+CONSOLIDATED RELAY EVENT REPORT
+Avaada 220kV Substation - Feeder Bay 1
+IED: IED-Feeder-Relay-01
+=====================================================================
+All records include both secondary (as-recorded) and primary-referred
+(kA / kV) analog channels. See relay_base_settings.txt for channel
+naming convention (e.g. IA = secondary, IA_PRI = primary in kA).
+
+---------------------------------------------------------------------
+EVENT 4 OF 4  |  Record: EVT-DIFF-220KV-FEEDER-001.cfg/.dat
+---------------------------------------------------------------------
+Date / Time (trigger)   : 02-Sep-2026 06:58:44.300
+Fault Type              : Internal Zone Fault - Three Phase (Bus/Zone Differential)
+Faulted Phases          : A, B, C (all three)
+Protection Operated     : 87 - Percentage Restrained Differential
+Pickup Time             : t = 0.3005 s (0.5 ms after inception)
+Operate Time            : t = 0.3155 s (15 ms - meets 87 operate time target)
+Fault Current (secondary): Ia, Ib, Ic ~12.0 x rated (~12.0 A sec), balanced
+Fault Current (primary)  : Ia, Ib, Ic ~14.4 kA (IA/IB/IC_PRI channels)
+Differential Current Id : Well above Id_pickup (0.20 pu), outside restraint slope
+CB Trip Command Issued  : Yes (TRIP_CMD/87_OPERATE asserted at t = 0.3155 s)
+CB Interrupted           : t = 0.3655 s (50 ms - high-speed breaker used for zone)
+Total Fault Duration     : 65.5 ms (~3.3 cycles)
+Voltage Behaviour (pri) : Va, Vb, Vc all collapsed to ~8% (~10.2 kV), severe
+Targets/Flags            : 87_PICKUP, 87_OPERATE, CB_52A_STATUS (open)
+Auto-reclose             : Not initiated (differential/zone faults are
+                           non-reclose by policy)
+Remarks                  : Fast, high-magnitude, balanced three-phase
+                           signature is consistent with an internal
+                           differential zone fault; no restraint blocking
+                           observed.
+
+=====================================================================
+SUMMARY TABLE
+=====================================================================
+Event ID   | Fault Type        | Function | Operate Time | CB Clear Time | I_fault (primary)
+-----------|-------------------|----------|--------------|----------------|-------------------
+EVT-OC     | B-C Phase Fault   | 50P      | 20 ms        | 82 ms          | ~10.8 kA
+EVT-AG     | A-G Earth Fault   | 50N      | 30 ms        | 93 ms          | ~5.4 kA
+EVT-DIST   | A-B-G, Zone 1     | 21       | 25 ms        | 81 ms          | ~12.0 kA
+EVT-DIFF   | 3-Phase Internal  | 87       | 15 ms        | 65.5 ms        | ~14.4 kA
+=====================================================================
+All four events show correct, selective operation of the relevant
+protection function at 220kV, with both secondary (relay-measured)
+and primary-referred (actual line kA/kV) values available directly
+in the COMTRADE channels for cross-verification. Refer to soe.csv
+for the full sequence-of-events, and relay_settings.json for the
+settings each operation was checked against.
+=====================================================================

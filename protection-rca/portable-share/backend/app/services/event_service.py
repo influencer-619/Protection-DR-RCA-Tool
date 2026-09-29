@@ -2,14 +2,87 @@
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Event
+from app.models import Event, EventCounter
 from app.schemas.events import EventCreate, EventUpdate
 from app.services.audit_service import write_audit
+
+
+EVENT_NUMBER_PREFIX = "EVT"
+_EVENT_NUMBER_RE = re.compile(rf"^{EVENT_NUMBER_PREFIX}-(\d{{4}})-(\d+)$")
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
+
+
+def format_event_number(year: int, seq: int) -> str:
+    return f"{EVENT_NUMBER_PREFIX}-{year}-{seq:05d}"
+
+
+async def _highest_used(db: AsyncSession, year: int) -> int:
+    prefix = f"{EVENT_NUMBER_PREFIX}-{year}-"
+    rows = (
+        await db.execute(select(Event.event_id).where(Event.event_id.like(f"{prefix}%")))
+    ).scalars()
+    return max(
+        (int(m.group(2)) for r in rows if (m := _EVENT_NUMBER_RE.match(r or ""))), default=0
+    )
+
+
+async def next_event_number(db: AsyncSession, year: Optional[int] = None) -> str:
+    """Allocate the next EVT-<year>-<seq> number.
+
+    The counter row is bumped with a single UPDATE so the database serialises
+    concurrent allocations (row lock on PostgreSQL, write lock on SQLite).
+    """
+    year = year or datetime.now().year
+    series = f"{EVENT_NUMBER_PREFIX}-{year}"
+    for _ in range(2):
+        res = await db.execute(
+            update(EventCounter)
+            .where(EventCounter.series == series)
+            .values(value=EventCounter.value + 1)
+            .returning(EventCounter.value)
+        )
+        seq = res.scalar_one_or_none()
+        if seq is not None:
+            candidate = format_event_number(year, seq)
+            clash = await db.execute(select(Event.id).where(Event.event_id == candidate))
+            if clash.first() is None:
+                return candidate
+            # Someone typed this number manually: jump past everything in use.
+            top = await _highest_used(db, year)
+            await db.execute(
+                update(EventCounter).where(EventCounter.series == series).values(value=top + 1)
+            )
+            return format_event_number(year, top + 1)
+        db.add(EventCounter(series=series, value=await _highest_used(db, year)))
+        await db.flush()
+    raise RuntimeError("Could not allocate an event number")
+
+
+async def renumber_legacy_events(db: AsyncSession) -> int:
+    """Give events that still carry a random UUID as their number a readable EVT number."""
+    rows = (
+        await db.execute(select(Event).order_by(Event.created_at.asc(), Event.id.asc()))
+    ).scalars().all()
+    legacy = [e for e in rows if _UUID_RE.match(e.event_id or "")]
+    for ev in legacy:
+        created = ev.created_at or datetime.now()
+        old = ev.event_id
+        ev.event_id = await next_event_number(db, created.year)
+        extra = dict(ev.extra or {})
+        extra.setdefault("previous_event_id", old)
+        ev.extra = extra
+    if legacy:
+        await db.flush()
+    return len(legacy)
 
 
 async def create_event(
@@ -62,8 +135,10 @@ async def create_event(
         for k, v in labels.items():
             if v:
                 extra[k] = v
-    if "event_id" in payload and not payload["event_id"]:
-        payload.pop("event_id")
+    if payload.get("event_id"):
+        payload["event_id"] = str(payload["event_id"]).strip()
+    if not payload.get("event_id"):
+        payload["event_id"] = await next_event_number(db)
     event = Event(
         **payload,
         engineer_id=engineer_id,
