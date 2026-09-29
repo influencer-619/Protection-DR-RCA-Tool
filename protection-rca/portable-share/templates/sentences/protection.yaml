@@ -1,0 +1,5 @@
+sentences:
+  operated_consistent: "Protection element {element} operated consistently with the configured protection parameters."
+  operated_inconsistent: "Protection element {element} operation is inconsistent with the configured enabled state."
+  not_operated: "Protection element {element} did not operate during the disturbance record window."
+  unverifiable: "Protection element {element} assessment is UNVERIFIABLE due to insufficient setting or channel evidence."

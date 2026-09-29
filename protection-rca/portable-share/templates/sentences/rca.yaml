@@ -1,0 +1,6 @@
+sentences:
+  confirmed: "Hypothesis {hypothesis} is CONFIRMED based on satisfied evidence requirements."
+  probable: "Hypothesis {hypothesis} is PROBABLE based on supporting engineering evidence."
+  possible: "Hypothesis {hypothesis} remains POSSIBLE; required confirming evidence is incomplete."
+  unlikely: "Hypothesis {hypothesis} is UNLIKELY given contradicting evidence."
+  inconclusive: "Root cause assessment is INCONCLUSIVE pending verification of settings or additional evidence."

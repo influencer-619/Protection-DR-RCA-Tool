@@ -2,7 +2,7 @@
 REM ============================================================
 REM  Portable share package — ALL latest app codes
 REM  Uses scripts\build-all-latest.bat (verify venv, NO pip --upgrade)
-REM  then copies backend + frontend\dist + rules + EXE → portable-share\
+REM  then copies backend + frontend\dist + rules + templates + EXE → portable-share\
 REM ============================================================
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0.."
@@ -59,7 +59,7 @@ if not exist "%ROOT%\frontend\dist\index.html" (
 echo.
 echo [2/2] Assembling portable-share folder...
 REM Only replace what this script produces; keep anything else (e.g. sample event folders).
-for %%D in (backend frontend rules scripts python) do (
+for %%D in (backend frontend rules templates scripts python) do (
   if exist "%OUT%\%%D" rmdir /s /q "%OUT%\%%D"
 )
 if exist "%OUT%\ProtectionRCA.exe" del /q "%OUT%\ProtectionRCA.exe"
@@ -123,6 +123,19 @@ set "RC=!ERRORLEVEL!"
 if !RC! GEQ 8 (
   echo robocopy rules failed, code=!RC!
   >> "%LOG%" echo ERROR: robocopy rules code=!RC!
+  goto :fail
+)
+
+robocopy "%ROOT%\templates" "%OUT%\templates" /E /NFL /NDL /NJH /NJS /nc /ns /np
+set "RC=!ERRORLEVEL!"
+if !RC! GEQ 8 (
+  echo robocopy templates failed, code=!RC!
+  >> "%LOG%" echo ERROR: robocopy templates code=!RC!
+  goto :fail
+)
+if not exist "%OUT%\templates\reports\event_report.html.j2" (
+  echo ERROR: report template missing in portable-share\templates
+  >> "%LOG%" echo ERROR: templates\reports\event_report.html.j2 missing
   goto :fail
 )
 

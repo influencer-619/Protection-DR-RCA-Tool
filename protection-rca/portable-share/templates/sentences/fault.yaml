@@ -1,0 +1,5 @@
+sentences:
+  classified: "The disturbance record indicates a {fault_type} fault."
+  probable: "The disturbance record indicates a probable {fault_type} fault."
+  inconclusive: "Fault type could not be conclusively determined from available electrical evidence."
+  distance_not_calculable: "Fault location (km) was attempted but not calculable — required line/CT-VT/settings data unavailable."

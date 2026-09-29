@@ -164,6 +164,7 @@ That creates / refreshes `protection-rca\portable-share\` containing:
 | `backend\` | API source code, SQLite databases, storage |
 | `frontend\dist\` | Built web UI — no Node/npm install |
 | `rules\` | RCA / protection rule catalogs |
+| `templates\` | Report template and controlled sentence library (needed for HTML/PDF reports) |
 | `scripts\` | Launcher script used by the exe |
 | `HOW_TO_RUN.txt` | Short start / LAN instructions |
 
@@ -1624,6 +1625,7 @@ A: OIDC not enabled on the API (`AUTH_MODE` still `local`).
 | Consistency empty | Analysis not run or no digital/setting inputs |
 | Vendor `.rdb` / `.cev` / DIGSI unused | Confirm extract succeeded on Files tab; else export CFG/DAT + settings text from vendor tool |
 | PDF download fails | Ensure `reportlab` installed in backend env (included in portable build) |
+| Report shows “Report template NOT AVAILABLE” | The `templates\` folder is missing next to `backend\` (portable folders built before this fix). Rebuild `portable-share` or copy `protection-rca\templates` into it, restart the exe, then click **Refresh report** |
 | Cannot review | Role below PROTECTION_ENGINEER / APPROVER |
 | Audit shows “system” | Automatic action (e.g. auto-fetch) — not a missing user |
 

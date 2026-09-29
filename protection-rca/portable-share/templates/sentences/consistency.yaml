@@ -1,0 +1,4 @@
+sentences:
+  inconsistent_disabled: "The available records contain an inconsistency between the configured protection state and the observed relay operation. The active setting group at the event time could not be independently verified."
+  consistent: "Observed protection behavior is consistent with the resolved settings for element {element}."
+  data_quality: "A data quality issue prevents reliable consistency assessment for element {element}."
