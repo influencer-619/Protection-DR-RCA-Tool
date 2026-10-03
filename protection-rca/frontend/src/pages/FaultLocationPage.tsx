@@ -149,15 +149,6 @@ export function FaultLocationPage() {
           )}
         </div>
       </div>
-
-      {meta.line_impedance_estimate && (
-        <div className="panel">
-          <div className="panel-header">Line impedance estimate (settings)</div>
-          <div className="panel-body mono" style={{ fontSize: '0.85rem' }}>
-            {JSON.stringify(meta.line_impedance_estimate, null, 2)}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

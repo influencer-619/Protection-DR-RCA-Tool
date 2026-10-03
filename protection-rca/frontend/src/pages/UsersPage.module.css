@@ -1,0 +1,57 @@
+.actionsCol {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.empty {
+  padding: 20px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 14px;
+}
+
+.span2 {
+  grid-column: 1 / -1;
+}
+
+.checkLabel {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.checkRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  font-size: 0.9rem;
+}
+
+.hint {
+  margin: 14px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .span2 {
+    grid-column: auto;
+  }
+}

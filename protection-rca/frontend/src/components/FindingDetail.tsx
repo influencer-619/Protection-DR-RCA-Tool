@@ -1,4 +1,5 @@
 import type { ConsistencyFinding } from '@/types';
+import { formatCheckName, formatFindingValue } from '@/utils/findingValue';
 import { SeverityBadge } from './SeverityBadge';
 import { StatusBadge } from './StatusBadge';
 import styles from './FindingDetail.module.css';
@@ -9,9 +10,7 @@ interface Props {
 }
 
 function fmt(v: ConsistencyFinding['expected']): string {
-  if (v == null) return '—';
-  if (typeof v === 'string') return v;
-  return JSON.stringify(v);
+  return formatFindingValue(v);
 }
 
 export function FindingDetail({ finding, onClose }: Props) {
@@ -21,7 +20,8 @@ export function FindingDetail({ finding, onClose }: Props) {
         <div>
           <div className={styles.id}>{finding.finding_id}</div>
           <h3>
-            {finding.element} — {finding.check_type.replace(/_/g, ' ')}
+            {finding.element === 'GENERAL' ? 'General' : finding.element} —{' '}
+            {formatCheckName(finding.check_type)}
           </h3>
         </div>
         <div className="badge-row">

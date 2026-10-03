@@ -52,7 +52,7 @@ function shapeFor(_status: string, cls: string): string {
   if (cls === styles.ok) return '●';
   if (cls === styles.running) return '◆';
   if (cls === styles.pending) return '○';
-  return '–';
+  return '○';
 }
 
 interface Props {

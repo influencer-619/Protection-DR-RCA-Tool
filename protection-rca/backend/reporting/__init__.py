@@ -182,7 +182,7 @@ class ReportGenerator:
         rca = analysis.get("rca_hypotheses") or {}
         primary = rca.get("primary") or {}
         if primary:
-            hid = primary.get("hypothesis_id", "UNKNOWN")
+            hid = primary.get("title") or primary.get("hypothesis_id", "UNKNOWN")
             status = (primary.get("status") or "INCONCLUSIVE").lower()
             key = {
                 "confirmed": "confirmed",

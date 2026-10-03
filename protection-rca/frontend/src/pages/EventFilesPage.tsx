@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useState, type DragEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import { api } from '@/services/api';
 import type { EventFile, SettingSourceInfo } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { VerifyActiveSettingsCard } from '@/components/VerifyActiveSettingsCard';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
-import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT } from '@/utils/uploadAccept';
+import {
+  UPLOAD_ACCEPT,
+  UPLOAD_ACCEPT_HINT,
+  hasComtradePackage,
+  looksLikeSettingsFile,
+} from '@/utils/uploadAccept';
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -14,30 +19,13 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function looksLikeSettings(name: string): boolean {
-  const n = name.toLowerCase();
-  return (
-    n.includes('setting') ||
-    n.includes('relay') ||
-    n.endsWith('.set') ||
-    (n.endsWith('.json') && (n.includes('param') || n.includes('relay')))
-  );
-}
-
-function packageReady(files: EventFile[]): boolean {
-  const names = files.map((f) => (f.original_filename || '').toLowerCase());
-  const hasCff = names.some((n) => n.endsWith('.cff'));
-  const hasCfg = names.some((n) => n.endsWith('.cfg'));
-  const hasDat = names.some((n) => n.endsWith('.dat'));
-  const hasSettings = files.some(
-    (f) =>
-      f.source_type === 'SETTINGS' || looksLikeSettings(f.original_filename || ''),
-  );
-  return (hasCff || (hasCfg && hasDat)) && hasSettings;
+function canAutoAnalyse(files: EventFile[]): boolean {
+  return hasComtradePackage(files.map((f) => f.original_filename || ''));
 }
 
 export function EventFilesPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { event, reload: reloadEvent, reloadJob, analysisRevision, analysisBusy } =
     useEventOrWorkspace(id);
   const [files, setFiles] = useState<EventFile[]>([]);
@@ -65,11 +53,9 @@ export function EventFilesPage() {
     setError(null);
     setAutoMsg(null);
     const arr = Array.from(list);
-    const hadSettings = arr.some((f) => looksLikeSettings(f.name));
+    const hadSettings = arr.some((f) => looksLikeSettingsFile(f.name));
     try {
       const uploaded = await api.uploadEventFiles(id, arr);
-      const nextFiles = [...uploaded, ...files];
-      setFiles(nextFiles);
       // Refresh full file list from server
       const all = await api.getEventFiles(id);
       setFiles(all);
@@ -77,22 +63,22 @@ export function EventFilesPage() {
         hadSettings ||
         uploaded.some(
           (f) =>
-            f.source_type === 'SETTINGS' || looksLikeSettings(f.original_filename || ''),
+            f.source_type === 'SETTINGS' ||
+            looksLikeSettingsFile(f.original_filename || ''),
         )
       ) {
         setSettingsHint(true);
       }
-      // Auto-start full analysis when COMTRADE + settings package is complete
-      if (packageReady(all)) {
+      // COMTRADE present → run full pipeline and open one-page summary
+      if (canAutoAnalyse(all)) {
         setAnalysing(true);
         try {
           await api.startAnalysis(id, true);
           await reloadJob();
           await reloadEvent();
           setSettingsHint(false);
-          setAutoMsg(
-            'Files look complete — full analysis started. Watch the progress bar, then walk each tab.',
-          );
+          navigate(`/events/${id}/summary`);
+          return;
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to start analysis');
         } finally {
@@ -121,7 +107,7 @@ export function EventFilesPage() {
       await api.startAnalysis(id, true);
       setSettingsHint(false);
       await reloadJob();
-      setAutoMsg('Analysis started — all tabs will refresh when it completes.');
+      navigate(`/events/${id}/summary`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start analysis');
     } finally {

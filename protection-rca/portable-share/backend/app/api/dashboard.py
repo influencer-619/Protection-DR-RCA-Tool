@@ -67,12 +67,19 @@ async def dashboard_stats(
         ).scalar_one()
         or 0
     )
+    # Count distinct *events* that still have a generated report (not every HTML/PDF row).
+    # Joining Event ensures deleted events never inflate the KPI.
     completed_reports = int(
         (
             await db.execute(
-                select(func.count())
+                select(func.count(func.distinct(Report.event_id)))
                 .select_from(Report)
-                .where(Report.status.in_(("READY", "PUBLISHED", "COMPLETE", "GENERATED")))
+                .join(Event, Event.id == Report.event_id)
+                .where(
+                    Report.status.in_(
+                        ("READY", "PUBLISHED", "COMPLETE", "GENERATED", "FINAL")
+                    )
+                )
             )
         ).scalar_one()
         or 0

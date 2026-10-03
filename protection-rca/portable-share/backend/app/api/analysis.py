@@ -13,6 +13,7 @@ from app.models import (
     ComtradeChannel,
     ComtradeFile,
     ConsistencyFinding,
+    EventFile,
     EventTimeline,
     Evidence,
     FaultClassification,
@@ -42,6 +43,41 @@ from app.schemas.rca import RcaHypothesisOut, RcaResponse
 from app.services import analysis_service, event_service
 
 router = APIRouter(prefix="/api", tags=["analysis"])
+
+_SETTING_PLACEHOLDERS = {
+    "",
+    "N/A",
+    "NA",
+    "NONE",
+    "MIXED",
+    "NOT AVAILABLE",
+    "NOT_AVAILABLE",
+}
+
+
+def _bound_setting_value(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.upper().replace("_", " ") in _SETTING_PLACEHOLDERS:
+        return None
+    return text
+
+
+async def _settings_file_checksum(db: DbSession, event_id: str, setting_file: object) -> str | None:
+    rows = (
+        await db.execute(select(EventFile).where(EventFile.event_id == event_id))
+    ).scalars().all()
+    settings = [f for f in rows if (f.source_type or "").upper() == "SETTINGS"]
+    name = str(setting_file or "").lower()
+    if name:
+        for f in settings or rows:
+            orig = (f.original_filename or "").lower()
+            if name in orig or orig.endswith(name) or orig in name:
+                return f.sha256
+    if settings:
+        return settings[0].sha256
+    return None
 
 
 @router.post("/analyse", response_model=AnalyseResponse)
@@ -299,18 +335,30 @@ async def get_consistency(
             1 for f in findings if (f.severity or "").upper() in ("HIGH", "CRITICAL")
         ),
     }
-    src = findings[0].setting_source if findings else None
-    ver = findings[0].setting_version if findings else None
     extra = event.extra if isinstance(event.extra, dict) else {}
     plant = extra.get("plant_labels") if isinstance(extra.get("plant_labels"), dict) else {}
+    src = _bound_setting_value(extra.get("setting_source"))
+    ver = _bound_setting_value(extra.get("setting_version"))
+    for f in findings:
+        if src is None:
+            src = _bound_setting_value(f.setting_source)
+        if ver is None:
+            ver = _bound_setting_value(f.setting_version)
+        if src and ver:
+            break
+    checksum = extra.get("setting_checksum") or extra.get("checksum")
+    if not checksum:
+        checksum = await _settings_file_checksum(db, event.id, extra.get("setting_file"))
     setting_info = {
-        "source": src or extra.get("setting_source") or "NOT VERIFIED",
-        "version": ver or extra.get("setting_version") or "NOT VERIFIED",
-        "group": extra.get("setting_group") or "NOT VERIFIED",
+        "source": src or "NOT AVAILABLE",
+        "version": ver or "NOT AVAILABLE",
+        "group": extra.get("setting_group") or "—",
         "active_group_status": extra.get("active_group_status") or "NOT VERIFIED",
         "verification_state": extra.get("active_group_status") or "NOT VERIFIED",
         "approval_status": extra.get("setting_approval") or "NOT VERIFIED",
         "relay_tag": extra.get("relay_tag") or plant.get("relay_tag"),
+        "effective_from": extra.get("setting_effective_from") or extra.get("effective_from"),
+        "checksum": checksum,
     }
     return ConsistencyListResponse(
         event_id=event.id,

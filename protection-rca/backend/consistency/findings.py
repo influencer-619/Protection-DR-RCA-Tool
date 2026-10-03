@@ -17,8 +17,8 @@ class ConsistencyFinding:
     check_type: str
     setting_source: str
     setting_version: str
-    expected: str
-    observed: str
+    expected: Any
+    observed: Any
     status: str  # CONSISTENT | INCONSISTENT | UNVERIFIABLE | DATA_QUALITY_ISSUE
     severity: str
     evidence_ids: list[str] = field(default_factory=list)
@@ -37,8 +37,8 @@ def new_finding(
     check_type: str,
     setting_source: str,
     setting_version: str,
-    expected: str,
-    observed: str,
+    expected: Any,
+    observed: Any,
     status: str,
     severity: str,
     explanation: str,

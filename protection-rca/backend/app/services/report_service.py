@@ -102,6 +102,104 @@ def _plant_from_event(event: Event) -> tuple[str | None, str | None, dict[str, A
     )
 
 
+def _fmt_report_dt(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%d %b %Y %H:%M:%S")
+        except Exception:  # noqa: BLE001
+            pass
+    text = str(value).strip()
+    if not text:
+        return None
+    if "T" in text:
+        try:
+            from datetime import datetime
+
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime(
+                "%d %b %Y %H:%M:%S"
+            )
+        except Exception:  # noqa: BLE001
+            return text.replace("T", " ").split(".")[0]
+    return text
+
+
+def _looks_like_file_batch_desc(desc: str | None) -> bool:
+    if not desc or not str(desc).strip():
+        return True
+    text = str(desc).strip()
+    if text.lower().startswith("upload batch"):
+        return True
+    if text.lower().startswith("iec 61850"):
+        return False
+    exts = (".cfg", ".dat", ".cff", ".json", ".txt", ".csv", ".pdf", ".zip", ".set", ".rdb")
+    hits = sum(1 for e in exts if e in text.lower())
+    return hits >= 2
+
+
+_EVENT_TYPE_LABELS = {
+    "protection_pickup": "Protection pickup",
+    "protection_trip": "Protection trip",
+    "breaker_trip_command": "Breaker trip command",
+    "52a_change": "Breaker auxiliary (52a)",
+    "current_interruption": "Current interruption",
+    "fault_inception": "Fault inception",
+    "reclose": "Reclose",
+    "lockout": "Lockout",
+}
+
+
+def _humanize_event_type(value: Any) -> str:
+    key = str(value or "").strip()
+    if not key:
+        return "—"
+    if key in _EVENT_TYPE_LABELS:
+        return _EVENT_TYPE_LABELS[key]
+    return key.replace("_", " ").strip().title()
+
+
+def _humanize_token(value: Any) -> str:
+    key = str(value or "").strip()
+    if not key or key in ("—", "-", "N/A", "NA"):
+        return "—"
+    labels = {
+        "fault_classified": "Fault type classified",
+        "fault_classified_strong": "Strong fault classification",
+        "current_increase_observed": "Fault current increase observed",
+        "protection_operated": "Protection operated",
+        "protection_responded": "Protection responded",
+        "settings_behavior_consistent": "Settings vs behaviour consistent",
+        "ground_involved": "Ground / earth involved",
+        "distance_element_operated": "Distance element (21) operated",
+        "distance_estimate_available": "Location estimate available",
+        "loop_impedance_available": "Loop impedance available",
+        "scheme_distance": "Distance scheme context",
+        "differential_operated": "Differential operated",
+        "through_fault_excluded": "Through-fault excluded",
+        "cable_asset_confirmed": "Cable asset confirmed",
+        "protection_sequence": "Protection sequence",
+        "enabled_vs_pickup": "Enabled vs pickup",
+        "enabled_vs_trip": "Enabled vs trip",
+        "pickup_vs_trip": "Pickup vs trip",
+    }
+    if key in labels:
+        return labels[key]
+    if key.startswith("scheme_"):
+        return "Scheme: " + key.replace("scheme_", "").replace("_", " ")
+    return key.replace("_", " ")
+
+
+def _yes_no(value: Any) -> str:
+    if value is True:
+        return "Yes"
+    if value is False:
+        return "No"
+    if value in (None, "", "—"):
+        return "—"
+    return str(value)
+
+
 def _format_score_pct(value: Any) -> str:
     """Render 0–1 scores (or already-percent values) as percentage text."""
     if value is None:
@@ -197,10 +295,18 @@ def _rebuild_analysis_from_db(
             relay_line = f"Relay / recording device: {ct0.recording_device}"
 
     desc = event.description
-    if not desc and files:
-        names = ", ".join(f.original_filename for f in files[:8])
-        more = f" (+{len(files) - 8} more)" if len(files) > 8 else ""
-        desc = f"Upload batch — {names}{more}"
+    if _looks_like_file_batch_desc(desc):
+        desc = None
+
+    file_inventory = [
+        {
+            "filename": f.original_filename,
+            "type": f.source_type or "OTHER",
+            "size_bytes": f.file_size,
+            "sha256": (f.sha256 or "")[:16] + "…" if f.sha256 else "—",
+        }
+        for f in files
+    ]
 
     primary_fault = next((f for f in faults if f.is_primary), faults[0] if faults else None)
     fault_dict: dict[str, Any] = {}
@@ -309,7 +415,19 @@ def _rebuild_analysis_from_db(
             "confidence": _conf_label(f.confidence),
             "_op": "ASSESSMENT",
         }
-    protection = [{k: v for k, v in r.items() if k != "_op"} for r in by_el.values()]
+    protection = []
+    for r in by_el.values():
+        clean = {k: v for k, v in r.items() if k != "_op"}
+        clean["enabled_display"] = _yes_no(clean.get("enabled"))
+        clean["pickup_display"] = _yes_no(clean.get("pickup"))
+        clean["trip_display"] = _yes_no(clean.get("trip"))
+        protection.append(clean)
+    operated_elements = [
+        str(p.get("element"))
+        for p in protection
+        if p.get("trip") is True
+        or str(p.get("actual_operation") or "").upper() in ("OPERATED", "TRIP", "TRUE")
+    ]
 
     timeline_rows = []
     for te in sorted(timeline, key=lambda x: (x.sequence or 0, x.t_us or 0)):
@@ -320,6 +438,7 @@ def _rebuild_analysis_from_db(
         timeline_rows.append(
             {
                 "event_type": te.event_type,
+                "event_type_label": _humanize_event_type(te.event_type),
                 "timestamp": float(ts) if ts is not None else 0.0,
                 "source": te.source or payload.get("source") or "COMTRADE",
                 "confidence": te.confidence
@@ -331,6 +450,30 @@ def _rebuild_analysis_from_db(
             }
         )
 
+    # Key timings for the executive summary (pickup → trip → interrupt)
+    timing: dict[str, Any] = {}
+    for row in timeline_rows:
+        et = str(row.get("event_type") or "")
+        t = row.get("timestamp")
+        if t is None:
+            continue
+        if et == "protection_pickup" and "pickup_s" not in timing:
+            timing["pickup_s"] = t
+        elif et == "protection_trip" and "trip_s" not in timing:
+            timing["trip_s"] = t
+        elif et == "52a_change" and "breaker_s" not in timing:
+            timing["breaker_s"] = t
+        elif et == "current_interruption" and "interrupt_s" not in timing:
+            timing["interrupt_s"] = t
+    if timing.get("pickup_s") is not None and timing.get("trip_s") is not None:
+        timing["pickup_to_trip_ms"] = round(
+            (float(timing["trip_s"]) - float(timing["pickup_s"])) * 1000.0, 1
+        )
+    if timing.get("trip_s") is not None and timing.get("interrupt_s") is not None:
+        timing["trip_to_clear_ms"] = round(
+            (float(timing["interrupt_s"]) - float(timing["trip_s"])) * 1000.0, 1
+        )
+
     hyp_rows = []
     primary_hyp = None
     for h in hyps:
@@ -340,6 +483,8 @@ def _rebuild_analysis_from_db(
             missing = h.extra.get("missing_evidence")
         if isinstance(raw, dict):
             missing = missing or raw.get("missing_evidence")
+        supporting = h.supporting_evidence_ids or []
+        missing_list = list(missing or [])
         row = {
             "hypothesis_id": h.hypothesis_code or h.title,
             "title": h.title,
@@ -348,8 +493,11 @@ def _rebuild_analysis_from_db(
             "score_raw": h.confidence,
             "confidence": h.confidence_level or _conf_label(h.confidence),
             "statement": h.statement,
-            "missing_evidence": missing or [],
-            "supporting_evidence": h.supporting_evidence_ids or [],
+            "explanation": h.explanation,
+            "missing_evidence": missing_list,
+            "missing_evidence_labels": [_humanize_token(x) for x in missing_list],
+            "supporting_evidence": supporting,
+            "supporting_evidence_labels": [_humanize_token(x) for x in supporting],
             "recommended_actions": h.recommended_actions or [],
         }
         hyp_rows.append(row)
@@ -376,31 +524,56 @@ def _rebuild_analysis_from_db(
             }
         )
 
-    dq: dict[str, Any] = {}
-    if event.data_quality:
-        dq["event_data_quality"] = event.data_quality
+    dq: dict[str, Any] = {
+        "event_data_quality": event.data_quality or "NOT AVAILABLE",
+        "comtrade": [],
+    }
     for cf in comtrades[:3]:
-        dq.setdefault("comtrade", [])
-        if isinstance(dq["comtrade"], list):
-            dq["comtrade"].append(
-                {
-                    "station_name": cf.station_name,
-                    "recording_device": cf.recording_device,
-                    "sample_rate_hz": cf.sample_rate_hz,
-                    "total_samples": cf.total_samples,
-                    "analog_channel_count": cf.analog_channel_count,
-                    "digital_channel_count": cf.digital_channel_count,
-                    "validation_status": cf.validation_status,
-                    "data_quality": cf.data_quality,
-                    "parse_warnings": cf.parse_warnings,
-                }
-            )
-    if not dq:
-        dq = {"status": "NOT AVAILABLE — re-run analysis after COMTRADE parse"}
+        dq["comtrade"].append(
+            {
+                "station_name": cf.station_name,
+                "recording_device": cf.recording_device,
+                "sample_rate_hz": cf.sample_rate_hz,
+                "total_samples": cf.total_samples,
+                "analog_channel_count": cf.analog_channel_count,
+                "digital_channel_count": cf.digital_channel_count,
+                "validation_status": cf.validation_status,
+                "data_quality": cf.data_quality,
+                "parse_warnings": cf.parse_warnings,
+                "start_timestamp": _fmt_report_dt(cf.start_timestamp),
+            }
+        )
+    if not dq["comtrade"] and not event.data_quality:
+        dq = {"status": "NOT AVAILABLE — re-run analysis after COMTRADE parse", "comtrade": []}
+
+    def _bound_setting(value: object) -> Any:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text.upper().replace("_", " ") in {
+            "N/A",
+            "NA",
+            "NONE",
+            "MIXED",
+            "NOT AVAILABLE",
+            "NOT_AVAILABLE",
+        }:
+            return None
+        return value if not isinstance(value, str) else text
+
+    src = _bound_setting(extra.get("setting_source"))
+    ver = _bound_setting(extra.get("setting_version"))
+    for f in findings or []:
+        if src is None:
+            src = _bound_setting(getattr(f, "setting_source", None))
+        if ver is None:
+            ver = _bound_setting(getattr(f, "setting_version", None))
+        if src and ver:
+            break
 
     setting_ref = {
-        "setting_source_used": extra.get("setting_source"),
-        "setting_version": extra.get("setting_version"),
+        "setting_source_used": src,
+        "setting_version": ver,
         "setting_group": extra.get("setting_group"),
         "active_setting_group_verification": extra.get("active_group_status"),
         "setting_approval": extra.get("setting_approval"),
@@ -408,7 +581,13 @@ def _rebuild_analysis_from_db(
         "param_count": extra.get("setting_param_count"),
         "explanation": extra.get("settings_file_verification_note"),
     }
-    if not any(v is not None and v != "" for v in setting_ref.values()):
+    # Treat param_count=0 as empty so we don't keep a hollow table of dashes
+    meaningful = [
+        v
+        for k, v in setting_ref.items()
+        if k != "param_count" and v is not None and v != ""
+    ]
+    if not meaningful and not (setting_ref.get("param_count") or 0):
         setting_ref = {
             "status": "NOT AVAILABLE / NOT VERIFIED",
             "hint": "Upload relay_settings.json and re-run analysis",
@@ -470,6 +649,22 @@ def _rebuild_analysis_from_db(
                 "Fault location shown only when calculable from validated line/CT-VT inputs."
             )
 
+    plant_labels = extra.get("plant_labels") if isinstance(extra.get("plant_labels"), dict) else {}
+    substation = plant_labels.get("substation_name") or extra.get("substation_name")
+    bay = plant_labels.get("bay_name") or extra.get("bay_name")
+    relay_tag = plant_labels.get("relay_tag") or extra.get("relay_tag")
+    ct0 = comtrades[0] if comtrades else None
+    event_when = _fmt_report_dt(event.event_datetime) or (
+        _fmt_report_dt(ct0.start_timestamp) if ct0 else None
+    ) or _fmt_report_dt(event.created_at)
+
+    if not desc:
+        ft = (fault_dict or {}).get("fault_type")
+        if ft and ft != "UNKNOWN":
+            desc = f"{ft} disturbance on {event.feeder or 'feeder'} — protection RCA"
+        else:
+            desc = "Disturbance record analysis"
+
     return {
         "event": {
             "id": event.id,
@@ -478,18 +673,21 @@ def _rebuild_analysis_from_db(
             "decision_state": event.decision_state,
             "data_quality": event.data_quality,
             "description": desc,
+            "event_datetime": event_when,
             "feeder": event.feeder,
             "nominal_voltage_kv": event.nominal_voltage_kv,
             "nominal_frequency_hz": event.nominal_frequency_hz,
             "asset": asset_line,
             "relay": relay_line,
-            "substation": (extra.get("plant_labels") or {}).get("substation_name")
-            if isinstance(extra.get("plant_labels"), dict)
-            else extra.get("substation_name"),
-            "bay": (extra.get("plant_labels") or {}).get("bay_name")
-            if isinstance(extra.get("plant_labels"), dict)
-            else extra.get("bay_name"),
+            "substation": substation or (ct0.station_name if ct0 else None),
+            "bay": bay,
+            "relay_tag": relay_tag or (ct0.recording_device if ct0 else None),
+            "recording_device": ct0.recording_device if ct0 else None,
+            "station_name": ct0.station_name if ct0 else None,
         },
+        "files": file_inventory,
+        "timing": timing,
+        "operated_elements": operated_elements,
         "data_quality": dq,
         "electrical_analysis": {
             "limitations": limitations[:8]
@@ -507,13 +705,24 @@ def _rebuild_analysis_from_db(
                 "severity": c.severity,
                 "explanation": c.explanation,
                 "check_type": c.check_type,
+                "check_label": _humanize_token(c.check_type),
             }
             for c in findings
         ],
         "fault_classification": fault_dict,
         "breaker_analysis": {
-            "assessment": "INCONCLUSIVE",
-            "reason": "See timeline / protection digitals for breaker evidence",
+            "assessment": (
+                "Breaker open evidenced"
+                if timing.get("breaker_s") is not None or timing.get("interrupt_s") is not None
+                else "INCONCLUSIVE"
+            ),
+            "reason": (
+                "52a / current interruption present on timeline"
+                if timing.get("breaker_s") is not None or timing.get("interrupt_s") is not None
+                else "See timeline / protection digitals for breaker evidence"
+            ),
+            "pickup_to_trip_ms": timing.get("pickup_to_trip_ms"),
+            "trip_to_clear_ms": timing.get("trip_to_clear_ms"),
         },
         "rca_hypotheses": {
             "hypotheses": hyp_rows,
@@ -528,11 +737,18 @@ def _rebuild_analysis_from_db(
         "limitations": limitations,
         "setting_reference": setting_ref,
         "engineer_review": _format_engineer_review(latest_review),
+        "generated_label": "Protection disturbance analysis report",
     }
 
 
 def _normalize_analysis(analysis: dict[str, Any]) -> dict[str, Any]:
-    """Ensure template-friendly shapes (distance display, pretty refs)."""
+    """Ensure template-friendly shapes (distance display, pretty refs).
+
+    Keep nested dicts as dicts — event_report.html.j2 reads
+    ``data_quality.comtrade``, ``setting_reference.*``, and
+    ``breaker_analysis.assessment``. Stringifying those fields made §3/§4
+    render as NOT AVAILABLE / dashes even when DB data existed.
+    """
     out = dict(analysis)
     fault = dict(out.get("fault_classification") or {})
     if fault:
@@ -543,12 +759,16 @@ def _normalize_analysis(analysis: dict[str, Any]) -> dict[str, Any]:
         fault["distance_display"] = display  # may be None → template treats as N/A
         out["fault_classification"] = fault
 
-    sr = out.get("setting_reference")
-    if isinstance(sr, dict):
-        out["setting_reference"] = json.dumps(sr, indent=2, default=str)
-    dq = out.get("data_quality")
-    if isinstance(dq, dict):
-        out["data_quality"] = json.dumps(dq, indent=2, default=str)
+    # If a prior path left these as JSON strings, parse back to dicts for Jinja
+    for key in ("setting_reference", "data_quality", "breaker_analysis"):
+        val = out.get(key)
+        if isinstance(val, str) and val.strip().startswith("{"):
+            try:
+                parsed = json.loads(val)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                out[key] = parsed
 
     elec = out.get("electrical_analysis")
     if isinstance(elec, dict):
@@ -560,12 +780,6 @@ def _normalize_analysis(analysis: dict[str, Any]) -> dict[str, Any]:
             }
             out["electrical_analysis"] = elec
 
-    ba = out.get("breaker_analysis")
-    if isinstance(ba, dict):
-        out["breaker_analysis"] = (
-            f"{ba.get('assessment', 'INCONCLUSIVE')}"
-            + (f" — {ba['reason']}" if ba.get("reason") else "")
-        )
     _pct_scores_in_rca(out.get("rca_hypotheses"))
     return out
 
@@ -600,9 +814,9 @@ def _render_html(analysis: dict[str, Any], title: str) -> str:
         bundle = ReportGenerator().render(_normalize_analysis(analysis))
         html = bundle.html
         # Guard: never ship the stripped fallback look if Jinja returned empty
-        if html and "19. Engineer Review" in html:
+        if html and "Engineer Review" in html and "Executive Summary" in html:
             return html
-        if html and "<h2>1. Event Identification</h2>" in html:
+        if html and "Event Identification" in html:
             return html
         # Some templates use different section numbering — accept rich HTML
         if html and len(html) > 3000 and "Jinja report fallback" not in html:
@@ -663,8 +877,901 @@ def _render_html(analysis: dict[str, Any], title: str) -> str:
             return "\n".join(lines)
 
 
+def _pdf_esc(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _pdf_dash(value: Any, fallback: str = "—") -> str:
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text if text else fallback
+
+
+def _pdf_humanize(value: Any) -> str:
+    """Turn ENUM_STYLE tokens into compact readable labels for narrow PDF cells."""
+    text = _pdf_dash(value)
+    if text == "—":
+        return text
+    known = {
+        "ANALYSIS_COMPLETE": "Analysis complete",
+        "ANALYSIS_COMPLETE_WITH_WARNINGS": "Complete (warnings)",
+        "ENGINEER_REVIEW_REQUIRED": "Review required",
+        "DATA_INSUFFICIENT": "Data insufficient",
+        "UNSUPPORTED_FORMAT": "Unsupported format",
+        "INCONCLUSIVE": "Inconclusive",
+        "UNLIKELY": "Unlikely",
+        "PROBABLE": "Probable",
+        "POSSIBLE": "Possible",
+        "CONFIRMED": "Confirmed",
+        "CONSISTENT": "Consistent",
+        "INCONSISTENT": "Inconsistent",
+        "ACCEPTABLE": "Acceptable",
+        "NOT_VERIFIED": "Not verified",
+        "NOT VERIFIED": "Not verified",
+        "NOT_AVAILABLE": "Not available",
+        "NOT AVAILABLE": "Not available",
+    }
+    if text in known:
+        return known[text]
+    upper = text.upper()
+    if upper in known:
+        return known[upper]
+    if "_" in text and text.upper() == text:
+        return text.replace("_", " ").title()
+    return text
+
+
+def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
+    """Build a professional A4 PDF from the analysis payload (matches HTML report structure)."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        HRFlowable,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    ink = colors.HexColor("#1e2a32")
+    accent = colors.HexColor("#1f6f8b")
+    muted = colors.HexColor("#5a6b7a")
+    border_c = colors.HexColor("#d5dee6")
+    panel = colors.HexColor("#f4f7fa")
+    header_bg = colors.HexColor("#e8f0f5")
+    ok = colors.HexColor("#0b7a45")
+    warn = colors.HexColor("#9a6b00")
+    bad = colors.HexColor("#a12828")
+    white = colors.white
+    stripe = colors.HexColor("#f7f9fb")
+
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle(
+        "PdfH1",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=16,
+        textColor=accent,
+        spaceAfter=2,
+        spaceBefore=0,
+        leading=20,
+    )
+    sub = ParagraphStyle(
+        "PdfSub",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        textColor=muted,
+        spaceAfter=8,
+        leading=12,
+    )
+    h2 = ParagraphStyle(
+        "PdfH2",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        textColor=colors.HexColor("#234457"),
+        spaceBefore=14,
+        spaceAfter=4,
+        leading=14,
+    )
+    h3 = ParagraphStyle(
+        "PdfH3",
+        parent=styles["Heading3"],
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        textColor=colors.HexColor("#345468"),
+        spaceBefore=8,
+        spaceAfter=3,
+        leading=12,
+    )
+    body = ParagraphStyle(
+        "PdfBody",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9,
+        textColor=ink,
+        leading=12,
+        spaceAfter=4,
+    )
+    meta = ParagraphStyle(
+        "PdfMeta",
+        parent=body,
+        fontSize=8.5,
+        textColor=muted,
+    )
+    cell = ParagraphStyle(
+        "PdfCell",
+        parent=body,
+        fontSize=8,
+        leading=10,
+        spaceAfter=0,
+    )
+    cell_label = ParagraphStyle(
+        "PdfCellLabel",
+        parent=cell,
+        fontName="Helvetica-Bold",
+        textColor=colors.HexColor("#345468"),
+    )
+    kpi_lbl = ParagraphStyle(
+        "PdfKpiLbl",
+        parent=cell,
+        fontSize=6.5,
+        textColor=muted,
+        alignment=TA_LEFT,
+        spaceAfter=1,
+        leading=8,
+    )
+    kpi_val = ParagraphStyle(
+        "PdfKpiVal",
+        parent=cell,
+        fontName="Helvetica-Bold",
+        fontSize=8.5,
+        textColor=ink,
+        alignment=TA_LEFT,
+        leading=11,
+    )
+    status_cell = ParagraphStyle(
+        "PdfStatusCell",
+        parent=cell,
+        fontSize=7.5,
+        leading=9.5,
+    )
+
+    page_w, _page_h = A4
+    left_m = right_m = 14 * mm
+    top_m = bottom_m = 16 * mm
+    # Build doc early so widths match the real frame; zero frame padding to avoid overflow.
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        title=title or "RCA Report",
+        author="Protection Expert System",
+        leftMargin=left_m,
+        rightMargin=right_m,
+        topMargin=top_m,
+        bottomMargin=bottom_m,
+    )
+    for pt in doc.pageTemplates:
+        for fr in pt.frames:
+            fr.leftPadding = 0
+            fr.rightPadding = 0
+            fr.topPadding = 0
+            fr.bottomPadding = 0
+    usable = float(doc.width)
+    cover_pad = 10.0
+    accent_w = 3.5
+    panel_w = usable - accent_w
+    cover_inner = panel_w - (cover_pad * 2)
+
+    def P(text: Any, style: ParagraphStyle = body) -> Paragraph:
+        return Paragraph(_pdf_esc(text), style)
+
+    def section(story: list[Any], heading: str) -> None:
+        story.append(Paragraph(_pdf_esc(heading), h2))
+        story.append(
+            HRFlowable(
+                width="100%",
+                thickness=1.6,
+                color=accent,
+                spaceBefore=0,
+                spaceAfter=6,
+            )
+        )
+
+    def _norm_widths(ratios: list[float], total: float) -> list[float]:
+        s = sum(ratios) or 1.0
+        return [total * (r / s) for r in ratios]
+
+    def kv_table(rows: list[tuple[str, Any]]) -> Table:
+        data = [
+            [Paragraph(_pdf_esc(k), cell_label), Paragraph(_pdf_esc(_pdf_dash(v)), cell)]
+            for k, v in rows
+        ]
+        tbl = Table(data, colWidths=_norm_widths([0.30, 0.70], usable), hAlign="LEFT")
+        tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (0, -1), panel),
+                    ("BACKGROUND", (1, 0), (1, -1), white),
+                    ("BOX", (0, 0), (-1, -1), 0.5, border_c),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.4, border_c),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            )
+        )
+        return tbl
+
+    def data_table(
+        headers: list[str],
+        rows: list[list[Any]],
+        col_ratios: list[float] | None = None,
+        *,
+        humanize_cols: set[int] | None = None,
+    ) -> Table:
+        hum = humanize_cols or set()
+        # Auto-humanize Status / Severity style columns by header name
+        for i, h in enumerate(headers):
+            if str(h).strip().lower() in {"status", "severity", "consistency", "decision"}:
+                hum.add(i)
+        head = [Paragraph(_pdf_esc(h), cell_label) for h in headers]
+        body_rows: list[list[Any]] = []
+        for row in rows:
+            cells = []
+            for i, c in enumerate(row):
+                text = _pdf_humanize(c) if i in hum else _pdf_dash(c)
+                style = status_cell if i in hum else cell
+                cells.append(Paragraph(_pdf_esc(text), style))
+            body_rows.append(cells)
+        if not body_rows:
+            body_rows = [[Paragraph("NOT AVAILABLE", cell)] + [Paragraph("", cell)] * (len(headers) - 1)]
+        data = [head] + body_rows
+        if col_ratios and len(col_ratios) == len(headers):
+            widths = _norm_widths(col_ratios, usable)
+        else:
+            widths = [usable / len(headers)] * len(headers)
+        tbl = Table(data, colWidths=widths, hAlign="LEFT", repeatRows=1)
+        style_cmds: list[Any] = [
+            ("BACKGROUND", (0, 0), (-1, 0), header_bg),
+            ("TEXTCOLOR", (0, 0), (-1, 0), accent),
+            ("BOX", (0, 0), (-1, -1), 0.5, border_c),
+            ("INNERGRID", (0, 0), (-1, -1), 0.35, border_c),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 3.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [white, stripe]),
+        ]
+        tbl.setStyle(TableStyle(style_cmds))
+        return tbl
+
+    def callout(paragraphs: list[str], *, html: bool = False) -> Table:
+        # html=True: caller already escaped text and may include <b>/<font> markup
+        bar_w = 3.0
+        side_pad = 8.0
+        content_w = usable - bar_w - (side_pad * 2)
+        inner = [
+            [Paragraph(p if html else _pdf_esc(p), body)]
+            for p in paragraphs
+            if p
+        ]
+        if not inner:
+            inner = [[Paragraph("—", body)]]
+        content = Table(inner, colWidths=[content_w])
+        content.setStyle(
+            TableStyle(
+                [
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 1),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+                ]
+            )
+        )
+        wrap = Table([["", content]], colWidths=[bar_w, usable - bar_w])
+        wrap.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (0, 0), accent),
+                    ("BACKGROUND", (1, 0), (1, 0), panel),
+                    ("BOX", (0, 0), (-1, -1), 0.5, border_c),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (1, 0), (1, 0), side_pad),
+                    ("RIGHTPADDING", (1, 0), (1, 0), side_pad),
+                    ("TOPPADDING", (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ("LEFTPADDING", (0, 0), (0, 0), 0),
+                    ("RIGHTPADDING", (0, 0), (0, 0), 0),
+                ]
+            )
+        )
+        return wrap
+
+    def status_color(status: Any) -> colors.Color:
+        s = str(status or "").upper()
+        if s in ("CONFIRMED", "CONSISTENT", "OK", "ACCEPTABLE", "CLASSIFIED", "APPROVED"):
+            return ok
+        if s in ("PROBABLE", "POSSIBLE", "WARNING", "NOT VERIFIED", "PENDING", "UNVERIFIABLE"):
+            return warn
+        if s in ("INCONSISTENT", "REJECTED", "POOR", "INVALID", "UNLIKELY"):
+            return bad
+        return muted
+
+    ev = analysis.get("event") if isinstance(analysis.get("event"), dict) else {}
+    decision = analysis.get("decision") if isinstance(analysis.get("decision"), dict) else {}
+    fault = analysis.get("fault_classification") if isinstance(analysis.get("fault_classification"), dict) else {}
+    rca = analysis.get("rca_hypotheses") if isinstance(analysis.get("rca_hypotheses"), dict) else {}
+    primary = rca.get("primary") if isinstance(rca.get("primary"), dict) else {}
+    dq = analysis.get("data_quality") if isinstance(analysis.get("data_quality"), dict) else {}
+    if isinstance(dq, str):
+        try:
+            dq = json.loads(dq)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            dq = {}
+    ct_list = dq.get("comtrade") if isinstance(dq.get("comtrade"), list) else []
+    ct = ct_list[0] if ct_list else None
+    settings = analysis.get("setting_reference") if isinstance(analysis.get("setting_reference"), dict) else {}
+    if isinstance(settings, str):
+        try:
+            settings = json.loads(settings)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            settings = {}
+    timing = analysis.get("timing") if isinstance(analysis.get("timing"), dict) else {}
+    breaker = analysis.get("breaker_analysis") if isinstance(analysis.get("breaker_analysis"), dict) else {}
+    if isinstance(breaker, str):
+        breaker = {"assessment": breaker}
+    elec = analysis.get("electrical_analysis") if isinstance(analysis.get("electrical_analysis"), dict) else {}
+
+    story: list[Any] = []
+
+    # ——— Cover ———
+    loc_parts = [ev.get("substation"), ev.get("bay"), ev.get("feeder")]
+    loc = " · ".join(str(x) for x in loc_parts if x) or "NOT AVAILABLE"
+    cover_rows = [
+        [Paragraph("<b>Event</b>", cell_label), P(_pdf_dash(ev.get("event_id"), "NOT AVAILABLE"), cell)],
+        [Paragraph("<b>Date / time</b>", cell_label), P(_pdf_dash(ev.get("event_datetime"), "NOT AVAILABLE"), cell)],
+        [Paragraph("<b>Location</b>", cell_label), P(loc, cell)],
+        [
+            Paragraph("<b>Relay / IED</b>", cell_label),
+            P(_pdf_dash(ev.get("relay_tag") or ev.get("recording_device"), "NOT AVAILABLE"), cell),
+        ],
+    ]
+    sys_bits = []
+    if ev.get("nominal_voltage_kv") is not None:
+        sys_bits.append(f"{ev.get('nominal_voltage_kv')} kV")
+    freq = ev.get("nominal_frequency_hz") or elec.get("nominal_frequency_hz")
+    if freq is not None:
+        sys_bits.append(f"{freq} Hz")
+    cover_rows.append(
+        [Paragraph("<b>System</b>", cell_label), P(" · ".join(sys_bits) if sys_bits else "—", cell)]
+    )
+    cover_tbl = Table(cover_rows, colWidths=_norm_widths([0.24, 0.76], cover_inner))
+    cover_tbl.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), white),
+                ("BOX", (0, 0), (-1, -1), 0.4, border_c),
+                ("LINEBELOW", (0, 0), (-1, -2), 0.3, border_c),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+
+    kpi_items = [
+        ("Fault type", _pdf_humanize(fault.get("fault_type") or "UNKNOWN")),
+        ("Decision", _pdf_humanize(decision.get("state") or ev.get("decision_state"))),
+        (
+            "Primary RCA",
+            _pdf_humanize(primary.get("title") or primary.get("hypothesis_id") or "INCONCLUSIVE"),
+        ),
+        ("Data quality", _pdf_humanize(ev.get("data_quality") or dq.get("event_data_quality"))),
+    ]
+    kpi_gap = 5.0
+    kpi_col = (cover_inner - (kpi_gap * 3)) / 4.0
+    kpi_cards = []
+    for lbl, val in kpi_items:
+        mini = Table(
+            [
+                [Paragraph(_pdf_esc(lbl).upper(), kpi_lbl)],
+                [Paragraph(_pdf_esc(val), kpi_val)],
+            ],
+            colWidths=[kpi_col],
+        )
+        mini.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), white),
+                    ("BOX", (0, 0), (-1, -1), 0.5, border_c),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ]
+            )
+        )
+        kpi_cards.append(mini)
+    kpi_row = Table(
+        [[kpi_cards[0], "", kpi_cards[1], "", kpi_cards[2], "", kpi_cards[3]]],
+        colWidths=[kpi_col, kpi_gap, kpi_col, kpi_gap, kpi_col, kpi_gap, kpi_col],
+    )
+    kpi_row.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+
+    cover_block = Table(
+        [
+            [Paragraph(_pdf_esc(title or "Protection Disturbance Analysis Report"), h1)],
+            [Paragraph("Deterministic engineering report · COMTRADE / DR analysis", sub)],
+            [cover_tbl],
+            [Spacer(1, 6)],
+            [kpi_row],
+        ],
+        colWidths=[cover_inner],
+    )
+    cover_block.setStyle(
+        TableStyle(
+            [
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    cover_shell = Table(
+        [["", cover_block]],
+        colWidths=[accent_w, panel_w],
+    )
+    cover_shell.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (0, 0), accent),
+                ("BACKGROUND", (1, 0), (1, 0), panel),
+                ("BOX", (0, 0), (-1, -1), 0.6, border_c),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (0, 0), 0),
+                ("RIGHTPADDING", (0, 0), (0, 0), 0),
+                ("LEFTPADDING", (1, 0), (1, 0), cover_pad),
+                ("RIGHTPADDING", (1, 0), (1, 0), cover_pad),
+                ("TOPPADDING", (0, 0), (-1, -1), cover_pad),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), cover_pad),
+            ]
+        )
+    )
+    story.append(cover_shell)
+    story.append(Spacer(1, 10))
+
+    # ——— 1. Executive summary ———
+    section(story, "1. Executive Summary")
+    prim_title = primary.get("title") or "Root cause not confirmed"
+    prim_status = primary.get("status") or ""
+    score = primary.get("score")
+    score_txt = f" (score {score})" if score not in (None, "") else ""
+
+    def _hex(c: colors.Color) -> str:
+        return f"{int(c.red * 255):02x}{int(c.green * 255):02x}{int(c.blue * 255):02x}"
+
+    summary_lines = [
+        f"<b>{_pdf_esc(prim_title)}</b>"
+        + (
+            f" — <font color='#{_hex(status_color(prim_status))}'><b>{_pdf_esc(prim_status)}</b></font>"
+            if prim_status
+            else ""
+        )
+        + _pdf_esc(score_txt)
+    ]
+    if primary.get("statement"):
+        summary_lines.append(str(primary["statement"]))
+    meta_bits = [
+        f"Fault: <b>{_pdf_esc(_pdf_dash(fault.get('fault_type'), 'UNKNOWN'))}</b> "
+        f"({_pdf_esc(_pdf_dash(fault.get('status')))}, {_pdf_esc(_pdf_dash(fault.get('confidence'), 'INCONCLUSIVE'))})"
+    ]
+    ops = analysis.get("operated_elements") or []
+    if ops:
+        meta_bits.append(f"Operated: <b>{_pdf_esc(', '.join(str(x) for x in ops))}</b>")
+    if timing.get("pickup_to_trip_ms") is not None:
+        meta_bits.append(f"Pickup→trip: <b>{_pdf_esc(timing['pickup_to_trip_ms'])} ms</b>")
+    if timing.get("trip_to_clear_ms") is not None:
+        meta_bits.append(f"Trip→clear: <b>{_pdf_esc(timing['trip_to_clear_ms'])} ms</b>")
+    dist = fault.get("distance_display")
+    if dist and "NOT_APPLICABLE" not in str(dist).upper() and "NOT APPLICABLE" not in str(dist).upper():
+        meta_bits.append(f"Location: <b>{_pdf_esc(dist)}</b>")
+    summary_lines.append(" · ".join(meta_bits))
+    story.append(callout(summary_lines, html=True))
+    story.append(Spacer(1, 4))
+
+    # ——— 2. Event identification ———
+    section(story, "2. Event Identification")
+    story.append(
+        kv_table(
+            [
+                ("Event ID", ev.get("event_id")),
+                ("Event date / time", ev.get("event_datetime")),
+                ("Description", ev.get("description")),
+                ("Substation", ev.get("substation") or ev.get("station_name")),
+                ("Bay", ev.get("bay")),
+                ("Feeder / circuit", ev.get("feeder")),
+                (
+                    "Nominal voltage",
+                    f"{ev['nominal_voltage_kv']} kV" if ev.get("nominal_voltage_kv") is not None else None,
+                ),
+                ("Relay / IED tag", ev.get("relay_tag")),
+                ("Recording device", ev.get("recording_device")),
+                ("Event status", ev.get("status")),
+            ]
+        )
+    )
+
+    # ——— 3. COMTRADE quality ———
+    section(story, "3. COMTRADE Record Quality")
+    if isinstance(ct, dict) and ct:
+        story.append(
+            kv_table(
+                [
+                    ("Station (CFG)", ct.get("station_name")),
+                    ("Recording device", ct.get("recording_device")),
+                    ("Record start", ct.get("start_timestamp")),
+                    (
+                        "Sample rate",
+                        f"{ct['sample_rate_hz']} Hz" if ct.get("sample_rate_hz") is not None else None,
+                    ),
+                    ("Samples", ct.get("total_samples")),
+                    (
+                        "Analog / digital channels",
+                        f"{_pdf_dash(ct.get('analog_channel_count'))} / {_pdf_dash(ct.get('digital_channel_count'))}",
+                    ),
+                    ("Validation", ct.get("validation_status")),
+                    ("Data quality", ct.get("data_quality") or dq.get("event_data_quality")),
+                    ("Parse warnings", ct.get("parse_warnings")),
+                ]
+            )
+        )
+    elif dq.get("event_data_quality") and str(dq.get("event_data_quality")) != "NOT AVAILABLE":
+        story.append(
+            kv_table(
+                [
+                    ("Data quality", dq.get("event_data_quality")),
+                    (
+                        "COMTRADE detail",
+                        "Record-level CFG metadata not loaded — open COMTRADE tab or re-run analysis.",
+                    ),
+                ]
+            )
+        )
+    else:
+        story.append(P(dq.get("status") or "NOT AVAILABLE — re-run analysis after COMTRADE parse.", meta))
+
+    # ——— 4. Settings ———
+    section(story, "4. Setting Reference (bound for this analysis)")
+    if settings.get("status"):
+        hint = settings.get("hint")
+        story.append(P(f"{settings['status']}" + (f" — {hint}" if hint else ""), meta))
+    else:
+        story.append(
+            kv_table(
+                [
+                    ("Source", settings.get("setting_source_used")),
+                    ("Version", settings.get("setting_version")),
+                    ("Setting group", settings.get("setting_group")),
+                    ("Active group", settings.get("active_setting_group_verification")),
+                    ("Approval", settings.get("setting_approval")),
+                    ("Settings file", settings.get("setting_file")),
+                    ("Parameters loaded", settings.get("param_count")),
+                ]
+            )
+        )
+        if settings.get("explanation"):
+            story.append(P(settings["explanation"], meta))
+
+    # ——— 5. Sequence ———
+    section(story, "5. Sequence of Operation")
+    seq_meta = []
+    if timing.get("pickup_to_trip_ms") is not None:
+        seq_meta.append(f"Pickup → trip: <b>{_pdf_esc(timing['pickup_to_trip_ms'])} ms</b>")
+    if timing.get("trip_to_clear_ms") is not None:
+        seq_meta.append(f"Trip → current clear: <b>{_pdf_esc(timing['trip_to_clear_ms'])} ms</b>")
+    if breaker.get("assessment"):
+        seq_meta.append(f"Breaker: <b>{_pdf_esc(breaker['assessment'])}</b>")
+    if seq_meta:
+        story.append(Paragraph(" · ".join(seq_meta), meta))
+    tl_rows = []
+    for e in analysis.get("timeline") or []:
+        if not isinstance(e, dict):
+            continue
+        ts = e.get("timestamp")
+        try:
+            ts_s = f"{float(ts):.4f}" if ts is not None else "—"
+        except (TypeError, ValueError):
+            ts_s = _pdf_dash(ts)
+        step = e.get("event_type_label") or e.get("event_type") or "—"
+        if e.get("label"):
+            step = f"{step} ({e['label']})"
+        tl_rows.append([step, ts_s, e.get("source"), e.get("confidence")])
+    story.append(
+        data_table(
+            ["Step", "Time (s)", "Source", "Confidence"],
+            tl_rows,
+            [0.40, 0.16, 0.24, 0.20],
+        )
+    )
+
+    # ——— 6. Electrical ———
+    section(story, "6. Electrical Quantities")
+    elec_meta = []
+    if elec.get("sample_rate_hz") is not None:
+        elec_meta.append(f"Sample rate: {elec['sample_rate_hz']} Hz")
+    if elec.get("nominal_frequency_hz") is not None:
+        elec_meta.append(f"Nominal frequency: {elec['nominal_frequency_hz']} Hz")
+    if elec_meta:
+        story.append(P(" · ".join(elec_meta), meta))
+    rms = elec.get("rms") if isinstance(elec.get("rms"), dict) else {}
+    if rms:
+        rms_rows = []
+        for name, row in rms.items():
+            if not isinstance(row, dict):
+                row = {"value": row}
+            val = row.get("value")
+            try:
+                val_s = f"{float(val):.3f}" if val is not None else "—"
+            except (TypeError, ValueError):
+                val_s = _pdf_dash(val)
+            rms_rows.append([name, val_s, row.get("unit"), row.get("status")])
+        story.append(data_table(["Channel", "RMS", "Unit", "Status"], rms_rows, [0.35, 0.25, 0.15, 0.25]))
+    else:
+        story.append(P("RMS summary NOT AVAILABLE — open Waveforms / Electrical after analysis.", meta))
+
+    # ——— 7. Fault ———
+    section(story, "7. Fault Classification & Location")
+    story.append(
+        kv_table(
+            [
+                ("Fault type", fault.get("fault_type") or "UNKNOWN"),
+                ("Classification status", fault.get("status")),
+                ("Confidence", fault.get("confidence") or "INCONCLUSIVE"),
+                (
+                    "Fault location",
+                    fault.get("distance_display")
+                    or "Not applicable / not calculated for this scheme",
+                ),
+            ]
+        )
+    )
+    flims = fault.get("limitations")
+    if isinstance(flims, list) and flims:
+        story.append(P("Notes: " + "; ".join(str(x) for x in flims), meta))
+
+    # ——— 8. Protection ———
+    section(story, "8. Protection Performance")
+    prot_rows = []
+    for a in analysis.get("protection_assessment") or []:
+        if not isinstance(a, dict):
+            continue
+        prot_rows.append(
+            [
+                a.get("element"),
+                a.get("enabled_display") or a.get("enabled"),
+                a.get("pickup_display") or a.get("pickup"),
+                a.get("trip_display") or a.get("trip"),
+                a.get("expected_operation"),
+                a.get("actual_operation"),
+                a.get("consistency"),
+            ]
+        )
+    story.append(
+        data_table(
+            ["Element", "Enabled", "Pickup", "Trip", "Expected", "Actual", "Consistency"],
+            prot_rows,
+            [0.14, 0.11, 0.13, 0.13, 0.14, 0.14, 0.21],
+        )
+    )
+
+    # ——— 9. Consistency ———
+    section(story, "9. Protection Consistency Check")
+    cons_rows = []
+    for f in analysis.get("consistency_findings") or []:
+        if not isinstance(f, dict):
+            continue
+        cons_rows.append(
+            [
+                f.get("element"),
+                f.get("check_label") or f.get("check_type"),
+                f.get("status"),
+                f.get("severity"),
+                f.get("explanation"),
+            ]
+        )
+    story.append(
+        data_table(
+            ["Element", "Check", "Status", "Severity", "Explanation"],
+            cons_rows,
+            [0.14, 0.20, 0.16, 0.12, 0.38],
+        )
+    )
+
+    # ——— 10. RCA ———
+    section(story, "10. Root Cause Assessment")
+    if primary:
+        rca_lines = [
+            f"<b>Primary:</b> {_pdf_esc(primary.get('title') or primary.get('hypothesis_id'))} — "
+            f"<font color='#{_hex(status_color(primary.get('status')))}'><b>{_pdf_esc(primary.get('status'))}</b></font>"
+            f" · score {_pdf_esc(_pdf_dash(primary.get('score')))}"
+        ]
+        if primary.get("statement"):
+            rca_lines.append(str(primary["statement"]))
+        support = primary.get("supporting_evidence_labels") or primary.get("supporting_evidence") or []
+        missing = primary.get("missing_evidence_labels") or primary.get("missing_evidence") or []
+        if support:
+            rca_lines.append("<b>Supporting evidence:</b> " + _pdf_esc("; ".join(str(x) for x in support)))
+        rca_lines.append(
+            "<b>Missing evidence:</b> "
+            + (_pdf_esc("; ".join(str(x) for x in missing)) if missing else "none recorded")
+        )
+        story.append(callout(rca_lines, html=True))
+    else:
+        story.append(P("INCONCLUSIVE — no primary hypothesis ranked.", meta))
+
+    alts = [h for h in (rca.get("hypotheses") or []) if isinstance(h, dict)]
+    if len(alts) > 1:
+        story.append(Paragraph("Alternative hypotheses", h3))
+        alt_rows = []
+        for i, h in enumerate(alts):
+            if i == 0:
+                continue
+            miss = h.get("missing_evidence_labels") or h.get("missing_evidence") or []
+            alt_rows.append(
+                [
+                    i + 1,
+                    h.get("title") or h.get("hypothesis_id"),
+                    h.get("status"),
+                    h.get("score"),
+                    "; ".join(str(x) for x in miss) if miss else "—",
+                ]
+            )
+        story.append(
+            data_table(
+                ["Rank", "Hypothesis", "Status", "Score", "Missing / notes"],
+                alt_rows,
+                [0.07, 0.34, 0.18, 0.10, 0.31],
+            )
+        )
+
+    # ——— 11. Actions ———
+    section(story, "11. Recommended Verification")
+    actions = decision.get("recommended_actions") or primary.get("recommended_actions") or [
+        "Verify active setting group against the event time",
+        "Review Consistency and Protection tables",
+        "Confirm channel mapping and DR targets",
+    ]
+    for a in actions:
+        story.append(P(f"• {_pdf_dash(a)}", body))
+
+    # ——— 12. Limitations ———
+    section(story, "12. Limitations & Confidence")
+    story.append(
+        Paragraph(
+            f"Overall confidence: <b>{_pdf_esc(_pdf_dash(decision.get('confidence'), 'INCONCLUSIVE'))}</b>",
+            body,
+        )
+    )
+    lims = analysis.get("limitations") or []
+    if not lims:
+        lims = ["None recorded"]
+    for lim in lims:
+        story.append(P(f"• {_pdf_dash(lim)}", body))
+
+    # ——— 13. Review ———
+    section(story, "13. Engineer Review")
+    er = analysis.get("engineer_review")
+    if isinstance(er, dict):
+        story.append(P(er.get("action") or "PENDING", body))
+        if er.get("reviewed_at"):
+            story.append(P(f"Reviewed at: {er['reviewed_at']}", meta))
+        if er.get("decision_state"):
+            story.append(P(f"Decision state: {er['decision_state']}", meta))
+        if er.get("comments"):
+            story.append(P(f"Comments: {er['comments']}", meta))
+    elif er:
+        for er_line in str(er).splitlines() or [str(er)]:
+            if er_line.strip():
+                story.append(P(er_line, body))
+    else:
+        story.append(
+            P(
+                "PENDING — complete Review (ACCEPT / MODIFY / REJECT / …) after engineering check.",
+                meta,
+            )
+        )
+
+    # ——— 14. Files ———
+    section(story, "14. Evidence Files")
+    files = analysis.get("files") or []
+    if files:
+        file_rows = [
+            [f.get("filename"), f.get("type"), f.get("sha256")]
+            for f in files
+            if isinstance(f, dict)
+        ]
+        story.append(
+            data_table(
+                ["Filename", "Type", "SHA-256 (prefix)"],
+                file_rows,
+                [0.45, 0.20, 0.35],
+            )
+        )
+    else:
+        story.append(P("No file inventory available.", meta))
+
+    story.append(Spacer(1, 12))
+    story.append(
+        HRFlowable(width="100%", thickness=0.5, color=border_c, spaceBefore=4, spaceAfter=6)
+    )
+    story.append(
+        P(
+            "Report generated from structured analysis artefacts only. "
+            "Conclusions distinguish OBSERVED / CALCULATED / INFERRED / HYPOTHESIS. "
+            "This system does not invent measurements, settings, or root cause, "
+            "and does not issue OT control commands.",
+            meta,
+        )
+    )
+
+    event_label = _pdf_dash(ev.get("event_id"), "Event")
+    doc.title = title or f"RCA Report — {event_label}"
+
+    def _on_page(canvas_obj: Any, _doc: Any) -> None:
+        canvas_obj.saveState()
+        # Use RGB floats — avoids ReportLab/Python 3.14 Color eval quirks in callbacks
+        canvas_obj.setStrokeColorRGB(0.835, 0.871, 0.902)  # #d5dee6
+        canvas_obj.setLineWidth(0.5)
+        y_top = A4[1] - 12 * mm
+        canvas_obj.line(left_m, y_top, page_w - right_m, y_top)
+        canvas_obj.setFont("Helvetica", 7.5)
+        canvas_obj.setFillColorRGB(0.353, 0.420, 0.478)  # #5a6b7a
+        canvas_obj.drawString(left_m, A4[1] - 10 * mm, "Protection Disturbance Analysis Report")
+        canvas_obj.drawRightString(page_w - right_m, A4[1] - 10 * mm, str(event_label))
+        canvas_obj.line(left_m, 12 * mm, page_w - right_m, 12 * mm)
+        canvas_obj.drawCentredString(
+            page_w / 2,
+            8 * mm,
+            f"Page {_doc.page} · Read-only analysis · No invented measurements",
+        )
+        canvas_obj.restoreState()
+
+    doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
+    return buf.getvalue()
+
+
 def _html_to_pdf(html: str, title: str) -> bytes:
-    """Convert report HTML to PDF with headings, lists, and tables (no CSS dump)."""
+    """Legacy HTML scrape fallback — prefer ``_analysis_to_pdf`` for professional layout."""
     import re
     from html import unescape
 
@@ -675,14 +1782,12 @@ def _html_to_pdf(html: str, title: str) -> bytes:
     from reportlab.platypus import (
         HRFlowable,
         Paragraph,
-        Preformatted,
         SimpleDocTemplate,
         Spacer,
         Table,
         TableStyle,
     )
 
-    # Drop head/style/script so CSS never appears as body text
     body = html
     body = re.sub(r"(?is)<script\b[^>]*>.*?</script>", "", body)
     body = re.sub(r"(?is)<style\b[^>]*>.*?</style>", "", body)
@@ -690,232 +1795,93 @@ def _html_to_pdf(html: str, title: str) -> bytes:
     body = re.sub(r"(?is)<!DOCTYPE[^>]*>", "", body)
     body = re.sub(r"(?is)</?html\b[^>]*>", "", body)
     body = re.sub(r"(?is)</?body\b[^>]*>", "", body)
-    body = re.sub(r"(?is)<meta\b[^>]*/?>", "", body)
-    body = re.sub(r"(?is)<title\b[^>]*>.*?</title>", "", body)
 
     def _clean_inline(fragment: str) -> str:
         t = fragment or ""
         t = re.sub(r"(?is)<br\s*/?>", "[[BR]]", t)
-        t = re.sub(r"(?is)</?span\b[^>]*>", "", t)
-        t = re.sub(r"(?is)<strong\b[^>]*>", "[[B]]", t)
-        t = re.sub(r"(?is)</strong>", "[[/B]]", t)
-        t = re.sub(r"(?is)<b\b[^>]*>", "[[B]]", t)
-        t = re.sub(r"(?is)</b>", "[[/B]]", t)
-        t = re.sub(r"(?is)<em\b[^>]*>", "[[I]]", t)
-        t = re.sub(r"(?is)</em>", "[[/I]]", t)
-        t = re.sub(r"(?is)<i\b[^>]*>", "[[I]]", t)
-        t = re.sub(r"(?is)</i>", "[[/I]]", t)
+        t = re.sub(r"(?is)</?(span|strong|b|em|i)\b[^>]*>", "", t)
         t = re.sub(r"(?is)<[^>]+>", "", t)
         t = unescape(t)
-        t = (
+        return (
             t.replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
+            .replace("[[BR]]", "<br/>")
+            .strip()
         )
-        t = (
-            t.replace("[[BR]]", "<br/>")
-            .replace("[[B]]", "<b>")
-            .replace("[[/B]]", "</b>")
-            .replace("[[I]]", "<i>")
-            .replace("[[/I]]", "</i>")
-        )
-        return t.strip()
-
-    def _plain(fragment: str) -> str:
-        return unescape(re.sub(r"(?is)<[^>]+>", "", fragment)).strip()
 
     styles = getSampleStyleSheet()
-    navy = colors.HexColor("#1f4f68")
-    muted = colors.HexColor("#5a6e7e")
-    border = colors.HexColor("#b8c5d4")
-    header_bg = colors.HexColor("#e4ecf2")
-
+    accent = colors.HexColor("#1f6f8b")
     h1 = ParagraphStyle(
-        "ReportH1",
-        parent=styles["Heading1"],
-        fontName="Times-Bold",
-        fontSize=16,
-        textColor=navy,
-        spaceAfter=8,
-        spaceBefore=4,
-        leading=20,
+        "FbH1", parent=styles["Heading1"], fontName="Helvetica-Bold",
+        fontSize=14, textColor=accent, spaceAfter=8,
     )
     h2 = ParagraphStyle(
-        "ReportH2",
-        parent=styles["Heading2"],
-        fontName="Times-Bold",
-        fontSize=12,
-        textColor=navy,
-        spaceBefore=12,
-        spaceAfter=6,
-        leading=15,
-        borderPadding=2,
+        "FbH2", parent=styles["Heading2"], fontName="Helvetica-Bold",
+        fontSize=11, textColor=accent, spaceBefore=10, spaceAfter=4,
     )
     body_style = ParagraphStyle(
-        "ReportBody",
-        parent=styles["BodyText"],
-        fontName="Times-Roman",
-        fontSize=10,
-        leading=13,
-        textColor=colors.HexColor("#1a1a1a"),
-        spaceAfter=4,
-    )
-    meta_style = ParagraphStyle(
-        "ReportMeta",
-        parent=body_style,
-        textColor=muted,
-        fontSize=9,
+        "FbBody", parent=styles["BodyText"], fontName="Helvetica",
+        fontSize=9, leading=12, spaceAfter=3,
     )
     cell_style = ParagraphStyle(
-        "ReportCell",
-        parent=body_style,
-        fontSize=8,
-        leading=10,
-        spaceAfter=0,
+        "FbCell", parent=body_style, fontSize=8, leading=10, spaceAfter=0,
     )
-    pre_style = ParagraphStyle(
-        "ReportPre",
-        parent=body_style,
-        fontName="Courier",
-        fontSize=8,
-        leading=10,
-        backColor=colors.HexColor("#f4f6f8"),
-        leftIndent=4,
-        rightIndent=4,
-    )
-
-    story: list[Any] = []
-    story.append(Paragraph(_clean_inline(title) or "Protection Disturbance Event Report", h1))
-    story.append(
-        HRFlowable(width="100%", thickness=1, color=navy, spaceBefore=2, spaceAfter=10)
-    )
-
-    # Walk top-level block tags in order
-    pattern = re.compile(
-        r"(?is)<(h1|h2|p|ul|ol|pre|table|div)(\s[^>]*)?>(.*?)</\1>"
-    )
-    pos = 0
+    story: list[Any] = [
+        Paragraph(_clean_inline(title) or "Protection Disturbance Event Report", h1),
+        HRFlowable(width="100%", thickness=1.5, color=accent, spaceAfter=8),
+    ]
+    pattern = re.compile(r"(?is)<(h1|h2|p|ul|ol|table|div)(\s[^>]*)?>(.*?)</\1>")
     for m in pattern.finditer(body):
-        # Ignore orphan text between blocks (usually whitespace)
-        tag = m.group(1).lower()
-        inner = m.group(3)
-
-        if tag == "h1":
-            story.append(Paragraph(_clean_inline(inner), h1))
-            story.append(
-                HRFlowable(width="100%", thickness=0.6, color=border, spaceBefore=0, spaceAfter=6)
-            )
-        elif tag == "h2":
-            story.append(Paragraph(_clean_inline(inner), h2))
-            story.append(
-                HRFlowable(width="100%", thickness=0.5, color=border, spaceBefore=0, spaceAfter=4)
-            )
+        tag, inner = m.group(1).lower(), m.group(3)
+        if tag in ("h1", "h2"):
+            story.append(Paragraph(_clean_inline(inner), h1 if tag == "h1" else h2))
         elif tag == "p":
-            cls = m.group(2) or ""
-            style = meta_style if "meta" in cls.lower() else body_style
-            text = _clean_inline(inner)
-            if text:
-                story.append(Paragraph(text, style))
+            t = _clean_inline(inner)
+            if t:
+                story.append(Paragraph(t, body_style))
         elif tag in ("ul", "ol"):
-            items = re.findall(r"(?is)<li\b[^>]*>(.*?)</li>", inner)
-            for li in items:
-                text = _clean_inline(li)
-                if text:
-                    story.append(Paragraph(f"• {text}", body_style))
-            story.append(Spacer(1, 4))
-        elif tag == "pre":
-            plain = _plain(inner)
-            if plain:
-                # Preformatted avoids Paragraph XML issues with braces/JSON
-                story.append(Preformatted(plain, pre_style, maxLineLength=95))
-                story.append(Spacer(1, 6))
+            for li in re.findall(r"(?is)<li\b[^>]*>(.*?)</li>", inner):
+                t = _clean_inline(li)
+                if t:
+                    story.append(Paragraph(f"• {t}", body_style))
         elif tag == "table":
-            rows_html = re.findall(r"(?is)<tr\b[^>]*>(.*?)</tr>", inner)
-            data: list[list[Any]] = []
-            for rh in rows_html:
+            data = []
+            for rh in re.findall(r"(?is)<tr\b[^>]*>(.*?)</tr>", inner):
                 cells = re.findall(r"(?is)<t[hd]\b[^>]*>(.*?)</t[hd]>", rh)
-                if not cells:
-                    continue
-                data.append(
-                    [Paragraph(_clean_inline(c) or "—", cell_style) for c in cells]
-                )
+                if cells:
+                    data.append([Paragraph(_clean_inline(c) or "—", cell_style) for c in cells])
             if data:
-                col_count = max(len(r) for r in data)
+                n = max(len(r) for r in data)
                 for r in data:
-                    while len(r) < col_count:
+                    while len(r) < n:
                         r.append(Paragraph("", cell_style))
-                usable = A4[0] - 36 - 36
-                col_w = usable / col_count
-                tbl = Table(data, colWidths=[col_w] * col_count, hAlign="LEFT")
+                w = (A4[0] - 36 * 2) / n
+                tbl = Table(data, colWidths=[w] * n)
                 tbl.setStyle(
                     TableStyle(
                         [
-                            ("BACKGROUND", (0, 0), (-1, 0), header_bg),
-                            ("TEXTCOLOR", (0, 0), (-1, 0), navy),
-                            ("FONTNAME", (0, 0), (-1, 0), "Times-Bold"),
-                            ("FONTSIZE", (0, 0), (-1, -1), 8),
-                            ("GRID", (0, 0), (-1, -1), 0.4, border),
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8f0f5")),
+                            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d5dee6")),
                             ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("FONTSIZE", (0, 0), (-1, -1), 8),
                             ("LEFTPADDING", (0, 0), (-1, -1), 4),
                             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                            ("TOPPADDING", (0, 0), (-1, -1), 3),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                            (
-                                "ROWBACKGROUNDS",
-                                (0, 1),
-                                (-1, -1),
-                                [colors.white, colors.HexColor("#f7f9fb")],
-                            ),
                         ]
                     )
                 )
                 story.append(tbl)
-                story.append(Spacer(1, 8))
+                story.append(Spacer(1, 6))
         elif tag == "div":
-            # Flatten nested paragraphs / lists inside divs (e.g. limitations)
-            nested = list(pattern.finditer(inner))
-            if nested:
-                for nm in nested:
-                    ntag = nm.group(1).lower()
-                    ninner = nm.group(3)
-                    if ntag in ("p",):
-                        t = _clean_inline(ninner)
-                        if t:
-                            story.append(Paragraph(t, body_style))
-                    elif ntag in ("ul", "ol"):
-                        for li in re.findall(r"(?is)<li\b[^>]*>(.*?)</li>", ninner):
-                            t = _clean_inline(li)
-                            if t:
-                                story.append(Paragraph(f"• {t}", body_style))
-                    elif ntag == "pre":
-                        plain = _plain(ninner)
-                        if plain:
-                            story.append(Preformatted(plain, pre_style, maxLineLength=95))
-            else:
-                t = _clean_inline(inner)
-                if t:
-                    story.append(Paragraph(t, body_style))
-        pos = m.end()
-
-    if len(story) <= 2:
-        # Fallback: plain text without tags/CSS
-        plain = _plain(body)
-        for line in plain.splitlines():
-            line = line.strip()
-            if line:
-                story.append(Paragraph(line.replace("&", "&amp;"), body_style))
+            t = _clean_inline(inner)
+            if t:
+                story.append(Paragraph(t, body_style))
 
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=A4,
-        title=title,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
-        topMargin=16 * mm,
-        bottomMargin=16 * mm,
-    )
-    doc.build(story)
+    SimpleDocTemplate(
+        buf, pagesize=A4, title=title,
+        leftMargin=16 * mm, rightMargin=16 * mm, topMargin=14 * mm, bottomMargin=14 * mm,
+    ).build(story)
     return buf.getvalue()
 
 
@@ -1104,7 +2070,11 @@ async def generate_report(
             )
         elif fmt_u == "PDF":
             try:
-                pdf = _html_to_pdf(html, report_title)
+                try:
+                    pdf = _analysis_to_pdf(analysis, report_title)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Structured PDF failed — falling back to HTML scrape")
+                    pdf = _html_to_pdf(html, report_title)
                 sha = hashlib.sha256(pdf).hexdigest()
                 storage_key = storage.put_bytes(
                     pdf, sha256=sha, prefix=f"reports/{event.id}", suffix=".pdf",

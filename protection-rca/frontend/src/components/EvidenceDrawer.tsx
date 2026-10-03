@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { EvidenceItem } from '@/types';
+import { formatEvidenceSummary } from '@/utils/formatEvidenceSummary';
+import { formatFindingValue } from '@/utils/findingValue';
 import styles from './EvidenceDrawer.module.css';
 
 interface Props {
@@ -31,23 +33,30 @@ function sourceLabel(s: string): string {
   return s || 'Source unknown';
 }
 
+function friendlyTitle(title: string | undefined): string {
+  if (!title) return 'Evidence item';
+  return title
+    .replace(/^Measured RMS\s*-\s*channel\s*/i, 'Measured RMS — ')
+    .replace(/^Consistency check\s*-\s*/i, 'Consistency check — ');
+}
+
 function refLine(item: EvidenceItem): string | null {
   const r = item.references;
   if (!r || typeof r !== 'object') return null;
   const parts: string[] = [];
-  if (r.expected != null) parts.push(`Expected: ${String(r.expected)}`);
-  if (r.observed != null) parts.push(`Observed: ${String(r.observed)}`);
+  if (r.expected != null) parts.push(`Expected: ${formatFindingValue(r.expected)}`);
+  if (r.observed != null) parts.push(`Observed: ${formatFindingValue(r.observed)}`);
   if (r.value != null && r.expected == null) {
     parts.push(`Value: ${String(r.value)}${r.unit ? ` ${r.unit}` : ''}`);
   }
-  return parts.length ? parts.join(' · ') : null;
+  return parts.length ? parts.join('\n') : null;
 }
 
 function EvidenceNode({ item, depth = 0 }: { item: EvidenceItem; depth?: number }) {
   const [open, setOpen] = useState(depth < 1);
   const hasChildren = Boolean(item.children?.length);
-  const detail = item.summary || refLine(item);
-  const canExpand = hasChildren || !!detail;
+  const summary = formatEvidenceSummary(item.summary) || refLine(item);
+  const canExpand = hasChildren || !!summary;
 
   return (
     <div className={styles.node} style={{ marginLeft: depth * 14 }}>
@@ -57,29 +66,21 @@ function EvidenceNode({ item, depth = 0 }: { item: EvidenceItem; depth?: number 
         onClick={() => canExpand && setOpen((o) => !o)}
       >
         <span className={styles.chev}>{canExpand ? (open ? '▾' : '▸') : '·'}</span>
-        <span className={styles.title}>{item.title || 'Evidence item'}</span>
+        <span className={styles.title}>{friendlyTitle(item.title)}</span>
         <span className={styles.polBadge}>{POLARITY_LABEL[item.polarity] ?? item.polarity}</span>
         {item.confidence != null && item.confidence > 0 && (
           <span className={`mono ${styles.conf}`}>
-            {(item.confidence * 100).toFixed(0)}% conf.
+            {(item.confidence * 100).toFixed(0)}%
           </span>
         )}
       </button>
       {open && (
         <div className={styles.body}>
-          {item.summary && <p className={styles.summary}>{item.summary}</p>}
-          {!item.summary && refLine(item) && (
-            <p className={styles.summary}>{refLine(item)}</p>
-          )}
+          {summary && <p className={styles.summary}>{summary}</p>}
           <div className={styles.meta}>
             <span>{sourceLabel(item.source_type)}</span>
             {item.t_us != null && (
               <span className="mono">t = {(item.t_us / 1000).toFixed(2)} ms</span>
-            )}
-            {item.evidence_key && (
-              <span className="mono" title="Internal id">
-                id {item.evidence_key.slice(0, 16)}
-              </span>
             )}
           </div>
           {item.children?.map((c) => (

@@ -7,6 +7,17 @@
   font-size: 1.15rem;
 }
 
+.score {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
 .statement {
   margin: 0 0 10px;
   color: var(--text-secondary);
@@ -52,8 +63,48 @@
   color: var(--text-secondary);
 }
 
+.evidenceList {
+  list-style: disc;
+}
+
+.evidenceList a {
+  color: var(--accent-bright);
+  text-decoration: none;
+  line-height: 1.4;
+}
+
+.evidenceList a:hover {
+  text-decoration: underline;
+}
+
+.emptyNote {
+  list-style: none;
+  margin-left: -18px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .missing li {
   color: var(--sev-medium);
+}
+
+.altTitle {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.altCode {
+  margin-top: 2px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: capitalize;
+}
+
+.altNotes {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  max-width: 28rem;
 }
 
 .chain,

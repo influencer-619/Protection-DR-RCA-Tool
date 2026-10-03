@@ -73,15 +73,18 @@ export function HelpPage() {
                 <strong>Manual upload</strong> of CFG + DAT (or CFF), relay settings, SOE / event
                 report.
               </li>
-              <li>COMTRADE → confirm detection / validation status.</li>
-              <li>Run analysis and follow the “Recommended next step” banner.</li>
+              <li>
+                Complete packages start analysis automatically and open <strong>Summary</strong>.
+                Incomplete packages create the event only — add missing files, then Start analysis.
+              </li>
+              <li>Confirm COMTRADE / Inputs on Overview; fix Channel map / DR targets if needed.</li>
               <li>Inspect Waveforms (I / V / Digitals) → Sequence of operation.</li>
               <li>
                 Fault characteristics (type, timing, magnitudes). Use{' '}
                 <em>Location (optional)</em> only when line parameters / distance elements apply.
               </li>
               <li>Protection (any scheme: 50/51, 21, 87, BF, …) → Consistency → RCA → Evidence.</li>
-              <li>Report → Review (ACCEPT / MODIFY / REJECT / …).</li>
+              <li>Report (HTML / PDF) → Review (ACCEPT / MODIFY / REJECT / …).</li>
             </ol>
           </div>
         </section>
@@ -186,7 +189,7 @@ export function HelpPage() {
       </section>
 
       <p style={{ marginTop: 20, color: 'var(--text-muted)' }}>
-        Full document (v0.7.0):{' '}
+        Full document (v0.8.0):{' '}
         <a href="/USER_GUIDE.md" target="_blank" rel="noreferrer">
           open the detailed user guide
         </a>{' '}

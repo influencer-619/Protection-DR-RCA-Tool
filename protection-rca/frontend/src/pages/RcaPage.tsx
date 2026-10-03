@@ -5,7 +5,11 @@ import type { RcaHypothesis } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
-import { humanizeEvidenceToken } from '@/utils/evidenceLabels';
+import {
+  formatConfidencePct,
+  humanizeEvidenceNotes,
+  humanizeEvidenceToken,
+} from '@/utils/evidenceLabels';
 import { schemeLabel } from '@/utils/schemeContext';
 import styles from './RcaPage.module.css';
 
@@ -165,7 +169,7 @@ export function RcaPage() {
           <div className="ux-item">
             <div className="ux-label">Confidence</div>
             <div className={`ux-value ${primary.confidence_level !== 'HIGH' ? 'uncertain' : ''}`}>
-              {primary.confidence_level} ({((primary.confidence ?? 0) * 100).toFixed(0)}%)
+              {primary.status} · {formatConfidencePct(primary.confidence)}
             </div>
           </div>
           <div className="ux-item">
@@ -181,7 +185,7 @@ export function RcaPage() {
             <div className="ux-value uncertain">
               {primary.missing_evidence?.[0]
                 ? humanizeEvidenceToken(primary.missing_evidence[0])
-                : '—'}
+                : 'None'}
             </div>
           </div>
         </div>
@@ -192,47 +196,60 @@ export function RcaPage() {
           <div className="panel-header">
             <span>Primary hypothesis</span>
             <div className="badge-row">
-              <span className="mono">{primary.hypothesis_code}</span>
               <StatusBadge status={primary.status} />
+              <span className={styles.score} title={primary.hypothesis_code ?? undefined}>
+                {formatConfidencePct(primary.confidence)}
+              </span>
             </div>
           </div>
           <div className="panel-body">
             <h2 className={styles.title}>{primary.title}</h2>
             <p className={styles.statement}>{primary.statement}</p>
-            {primary.explanation && (
-              <p className={styles.explain}>{primary.explanation}</p>
-            )}
 
             <div className={styles.columns}>
               <div>
                 <h4>Supporting evidence</h4>
-                <ul>
+                <ul className={styles.evidenceList}>
                   {(primary.supporting_evidence_ids ?? []).map((e) => (
-                    <li key={e} className="mono">
-                      {id ? <Link to={`/events/${id}/evidence`}>{e}</Link> : e}
+                    <li key={e}>
+                      {id ? (
+                        <Link to={`/events/${id}/evidence`} title={e}>
+                          {humanizeEvidenceToken(e)}
+                        </Link>
+                      ) : (
+                        <span title={e}>{humanizeEvidenceToken(e)}</span>
+                      )}
                     </li>
                   ))}
-                  {!primary.supporting_evidence_ids?.length && <li>—</li>}
+                  {!primary.supporting_evidence_ids?.length && (
+                    <li className={styles.emptyNote}>None recorded</li>
+                  )}
                 </ul>
               </div>
               <div>
                 <h4>Contradicting</h4>
-                <ul>
+                <ul className={styles.evidenceList}>
                   {(primary.contradicting_evidence_ids ?? []).map((e) => (
-                    <li key={e} className="mono">
-                      {e}
+                    <li key={e} title={e}>
+                      {humanizeEvidenceToken(e)}
                     </li>
                   ))}
-                  {!primary.contradicting_evidence_ids?.length && <li>None recorded</li>}
+                  {!primary.contradicting_evidence_ids?.length && (
+                    <li className={styles.emptyNote}>None recorded</li>
+                  )}
                 </ul>
               </div>
               <div>
                 <h4>Missing evidence</h4>
                 <ul className={styles.missing}>
                   {(primary.missing_evidence ?? []).map((e) => (
-                    <li key={e}>{humanizeEvidenceToken(e)}</li>
+                    <li key={e} title={e}>
+                      {humanizeEvidenceToken(e)}
+                    </li>
                   ))}
-                  {!primary.missing_evidence?.length && <li>—</li>}
+                  {!primary.missing_evidence?.length && (
+                    <li className={styles.emptyNote}>None — required evidence is present</li>
+                  )}
                 </ul>
               </div>
             </div>
@@ -270,27 +287,32 @@ export function RcaPage() {
               <thead>
                 <tr>
                   <th>Rank</th>
-                  <th>Code</th>
-                  <th>Title</th>
+                  <th>Hypothesis</th>
                   <th>Status</th>
-                  <th>Confidence</th>
-                  <th>Uncertainty notes</th>
+                  <th>Score</th>
+                  <th>Why this rank</th>
                 </tr>
               </thead>
               <tbody>
                 {alts.map((h) => (
                   <tr key={h.id}>
                     <td className="num">{h.rank}</td>
-                    <td className="mono">{h.hypothesis_code}</td>
-                    <td>{h.title}</td>
+                    <td>
+                      <div className={styles.altTitle}>{h.title}</div>
+                      {h.hypothesis_code && (
+                        <div className={styles.altCode} title={h.hypothesis_code}>
+                          {h.hypothesis_code.replace(/_/g, ' ').toLowerCase()}
+                        </div>
+                      )}
+                    </td>
                     <td>
                       <StatusBadge status={h.status} />
                     </td>
-                    <td className="num">
-                      {h.confidence_level} ({((h.confidence ?? 0) * 100).toFixed(0)}%)
-                    </td>
-                    <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      {h.missing_evidence?.join('; ') || h.explanation || '—'}
+                    <td className="num">{formatConfidencePct(h.confidence)}</td>
+                    <td className={styles.altNotes}>
+                      {h.missing_evidence?.length
+                        ? humanizeEvidenceNotes(h.missing_evidence.join('; '))
+                        : '—'}
                     </td>
                   </tr>
                 ))}

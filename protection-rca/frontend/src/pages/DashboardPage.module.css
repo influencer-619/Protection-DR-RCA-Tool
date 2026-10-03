@@ -23,14 +23,21 @@
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
-  gap: 12px 24px;
-  align-items: center;
-  padding: 14px 18px;
+  gap: 16px 28px;
+  align-items: flex-start;
+  padding: 16px 20px;
   border: 1px solid var(--border);
   border-left: 4px solid var(--accent);
-  background: linear-gradient(90deg, var(--accent-soft), var(--bg-panel) 60%);
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 42%),
+    var(--bg-panel);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-panel);
+}
+
+.inboxMain {
+  min-width: min(100%, 28rem);
+  flex: 1;
 }
 
 .inboxLabel {
@@ -42,35 +49,123 @@
 }
 
 .inboxLine {
-  font-size: 1rem;
+  font-size: 1.15rem;
   color: var(--text-primary);
   margin-top: 4px;
+  line-height: 1.35;
+}
+
+.inboxLine strong {
+  font-variant-numeric: tabular-nums;
+  font-size: 1.35rem;
+}
+
+.inboxClear {
+  color: var(--status-ok);
 }
 
 .inboxMuted {
   color: var(--text-muted);
   font-weight: 400;
-  font-size: 0.85rem;
+  font-size: 0.92rem;
+}
+
+.queueChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.queueChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.queueChip:hover {
+  border-color: var(--accent-dim);
+  background: var(--bg-hover);
+}
+
+.queueChipHot {
+  border-color: color-mix(in srgb, var(--status-warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--status-warn) 10%, var(--bg-panel));
+  color: var(--text-primary);
+}
+
+.queueChipVal {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+}
+
+.queueChipLbl {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 .inboxActions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+  padding-top: 2px;
 }
 
 .recentRow {
-  margin-top: 8px;
+  margin-top: 12px;
   font-size: 0.8rem;
   color: var(--text-secondary);
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
 
-.recentRow a {
+.recentLabel {
+  color: var(--text-muted);
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.recentLink {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 16rem;
   color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recentMeta {
+  font-family: var(--font-sans, inherit);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recentLink:hover {
+  border-color: var(--accent-dim);
+  background: var(--accent-soft);
 }
 
 /* KPI sections — 4 equal scorecards per row, full width */
@@ -87,6 +182,62 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-muted);
+}
+
+.qualitySection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.qualityHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.sectionIntro {
+  margin: -2px 0 0;
+  max-width: 62ch;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.healthPill {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.healthPillOk {
+  color: var(--status-ok);
+  border-color: color-mix(in srgb, var(--status-ok) 35%, var(--border));
+  background: color-mix(in srgb, var(--status-ok) 12%, transparent);
+}
+
+.healthPillWarn {
+  color: var(--sev-medium);
+  border-color: color-mix(in srgb, var(--sev-medium) 40%, var(--border));
+  background: color-mix(in srgb, var(--sev-medium) 12%, transparent);
+}
+
+.kpiClick:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.kpiClick:disabled:hover {
+  border-color: var(--border);
+  background: var(--bg-panel);
+  box-shadow: none;
 }
 
 .kpiGrid {
@@ -170,18 +321,64 @@
 .trendPanel {
   display: flex;
   flex-direction: column;
-  min-height: 320px;
+  min-height: 360px;
 }
 
-.trendPanel :global(.panel-body) {
+.trendPanelBody {
   flex: 1;
-  display: flex;
+  display: flex !important;
   align-items: stretch;
+  padding: 12px 14px 14px !important;
 }
 
 .trendPanel :global(.panel-header) {
   flex-wrap: wrap;
   gap: 8px 12px;
+}
+
+.trendBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+}
+
+.trendStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.trendStats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+
+.trendStatVal {
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+
+.trendStatLbl {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.trendNote {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
 }
 
 .trendControls {
@@ -218,22 +415,53 @@
 
 .chartSvg {
   width: 100%;
-  height: 100%;
-  min-height: 240px;
-  max-height: 320px;
+  height: auto;
+  min-height: 220px;
+  max-height: 280px;
   display: block;
+  flex: 1;
+}
+
+.plotBg {
+  fill: color-mix(in srgb, var(--accent) 4%, var(--bg-elevated));
 }
 
 .gridLine {
   stroke: var(--border);
   stroke-width: 1;
-  stroke-dasharray: 3 4;
+  stroke-dasharray: 2 5;
+}
+
+.baseLine {
+  stroke: var(--border-strong, var(--border));
+  stroke-width: 1.25;
+}
+
+.zeroTick {
+  stroke: var(--border);
+  stroke-width: 1.5;
 }
 
 .axisLabel {
+  fill: var(--text-secondary);
+  font-size: 10px;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-weight: 500;
+}
+
+.axisTitle {
   fill: var(--text-muted);
   font-size: 9px;
-  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 650;
+}
+
+.barValue {
+  fill: var(--text-primary);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .barAnalysed {
@@ -246,6 +474,10 @@
 
 .barIssues {
   fill: var(--sev-critical);
+}
+
+.barEvents {
+  fill: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
 .legendInline {
@@ -279,6 +511,10 @@
 
 .lgIssues {
   background: var(--sev-critical);
+}
+
+.lgEvents {
+  background: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .chartEmpty {
@@ -339,13 +575,26 @@
   gap: 8px;
   font-size: 0.8rem;
   color: var(--text-secondary);
-  padding: 3px 0;
+  padding: 4px 0;
+}
+
+.legendName {
+  min-width: 5.5rem;
 }
 
 .donutLegend strong {
   margin-left: auto;
   font-family: var(--font-mono);
   color: var(--text-primary);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.legendPct {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.72rem;
 }
 
 .swatch {
@@ -380,20 +629,37 @@
 
 .attentionList li {
   display: grid;
-  grid-template-columns: minmax(90px, 1fr) 1.5fr auto;
+  grid-template-columns: minmax(110px, 1.1fr) 1.4fr auto;
   gap: 10px;
   align-items: center;
-  padding: 10px 14px;
+  padding: 11px 14px;
   border-bottom: 1px solid var(--border);
+}
+
+.attentionList li:last-child {
+  border-bottom: 0;
 }
 
 .attentionList li:hover {
   background: var(--bg-hover);
 }
 
+.attId {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.attId:hover {
+  text-decoration: underline;
+}
+
 .attReason {
   color: var(--text-secondary);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 /* Recent events — full-width table, natural column sizing */

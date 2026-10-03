@@ -5,24 +5,8 @@ import { api } from '@/services/api';
 import type { Event, IedContext, Iec61850FetchResult } from '@/types';
 import { EventStatusCell } from '@/components/EventStatusCell';
 import { Iec61850FetchPanel } from '@/components/Iec61850FetchPanel';
-import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT } from '@/utils/uploadAccept';
+import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT, hasComtradePackage } from '@/utils/uploadAccept';
 import styles from './IedWorkspacePage.module.css';
-
-function packageReady(names: string[]): boolean {
-  const lower = names.map((n) => n.toLowerCase());
-  const hasCff = lower.some((n) => n.endsWith('.cff'));
-  const hasCfg = lower.some((n) => n.endsWith('.cfg'));
-  const hasDat = lower.some((n) => n.endsWith('.dat'));
-  const hasSettings = lower.some(
-    (n) =>
-      n.includes('setting') ||
-      n.endsWith('.set') ||
-      n.endsWith('.xrio') ||
-      n.endsWith('.rio') ||
-      (n.endsWith('.json') && (n.includes('param') || n.includes('relay'))),
-  );
-  return (hasCff || (hasCfg && hasDat)) && hasSettings;
-}
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -105,12 +89,17 @@ export function IedWorkspacePage() {
       });
       await api.uploadEventFiles(created.id, files);
       const names = files.map((f) => f.name);
-      if (packageReady(names)) {
+      // COMTRADE present → run full pipeline, then land on one-page summary
+      if (hasComtradePackage(names)) {
         try {
           await api.startAnalysis(created.id, true);
         } catch {
-          /* navigate anyway; user can start analysis from event */
+          /* still open summary; user can re-run analysis from the event header */
         }
+        setFiles([]);
+        setDescription('');
+        navigate(`/events/${created.id}/summary`);
+        return;
       }
       setFiles([]);
       setDescription('');
@@ -129,7 +118,7 @@ export function IedWorkspacePage() {
         .map((ev) => api.startAnalysis(ev.id, true).catch(() => undefined)),
     );
     if (result.events.length === 1) {
-      navigate(`/events/${result.events[0].id}/files`);
+      navigate(`/events/${result.events[0].id}/summary`);
     } else {
       void load();
     }
@@ -337,14 +326,18 @@ export function IedWorkspacePage() {
 
                 <div className={styles.actions}>
                   <button type="submit" className="btn btn-primary" disabled={busy || !files.length}>
-                    {busy ? 'Creating event…' : 'Upload & create event'}
+                    {busy
+                      ? 'Uploading & analysing…'
+                      : hasComtradePackage(files.map((f) => f.name))
+                        ? 'Upload, analyse & open summary'
+                        : 'Upload & create event'}
                   </button>
                   {files.length > 0 && (
                     <button type="button" className="btn" onClick={() => setFiles([])}>
                       Clear {files.length} file{files.length === 1 ? '' : 's'}
                     </button>
                   )}
-                  {files.length > 0 && !packageReady(files.map((f) => f.name)) && (
+                  {files.length > 0 && !hasComtradePackage(files.map((f) => f.name)) && (
                     <span className={styles.note}>
                       Add CFG + DAT (or CFF) and a settings file to start analysis automatically.
                     </span>

@@ -19,6 +19,7 @@ import type {
   SettingSourceInfo,
   TimelineEntry,
   User,
+  UserRole,
   WaveformChannelData,
   WaveformMarker,
   PlantTree,
@@ -794,6 +795,37 @@ export const api = {
   async getUsers(): Promise<User[]> {
     const { data } = await apiClient.get<User[] | { items: User[] }>('/users');
     return Array.isArray(data) ? data : data.items ?? [];
+  },
+
+  async createUser(body: {
+    username: string;
+    email: string;
+    full_name?: string | null;
+    role: UserRole;
+    is_active: boolean;
+    password: string;
+  }): Promise<User> {
+    const { data } = await apiClient.post<User>('/users', body);
+    return data;
+  },
+
+  async updateUser(
+    userId: string,
+    body: {
+      username?: string;
+      email?: string;
+      full_name?: string | null;
+      role?: UserRole;
+      is_active?: boolean;
+      password?: string;
+    },
+  ): Promise<User> {
+    const { data } = await apiClient.patch<User>(`/users/${userId}`, body);
+    return data;
+  },
+
+  async deleteUser(userId: string): Promise<void> {
+    await apiClient.delete(`/users/${userId}`);
   },
 
   async getAuditLog(): Promise<AuditLogEntry[]> {

@@ -2,242 +2,519 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>Protection Disturbance Event Report</title>
+  <title>Protection Disturbance Analysis Report — {{ (analysis.event or {}).event_id or "Event" }}</title>
   <style>
-    body { font-family: Georgia, "Times New Roman", serif; margin: 2rem; color: #1a1a1a; }
-    h1 { font-size: 1.6rem; }
-    h2 { font-size: 1.15rem; margin-top: 1.6rem; border-bottom: 1px solid #ccc; padding-bottom: 0.25rem; }
-    .kind { font-weight: bold; font-size: 0.75rem; letter-spacing: 0.04em; }
-    .OBSERVED { color: #0b5; }
-    .CALCULATED { color: #06c; }
-    .INFERRED { color: #a60; }
-    .HYPOTHESIS { color: #808; }
-    table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1rem; }
-    th, td { border: 1px solid #ccc; padding: 0.35rem 0.5rem; text-align: left; font-size: 0.9rem; }
-    .limitations { background: #fff8e6; padding: 0.75rem; }
-    .meta { color: #555; font-size: 0.85rem; }
-    pre { white-space: pre-wrap; font-size: 0.85rem; background: #f7f7f7; padding: 0.5rem; }
+    :root {
+      --ink: #1e2a32;
+      --muted: #5a6b7a;
+      --line: #d5dee6;
+      --panel: #f4f7fa;
+      --accent: #1f6f8b;
+      --ok: #0b7a45;
+      --warn: #9a6b00;
+      --bad: #a12828;
+    }
+    body {
+      font-family: "Segoe UI", Calibri, Arial, sans-serif;
+      margin: 0;
+      padding: 28px 32px 40px;
+      color: var(--ink);
+      line-height: 1.5;
+      background: #fff;
+    }
+    .cover {
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--accent);
+      background: linear-gradient(180deg, #f7fafc 0%, #fff 100%);
+      padding: 18px 20px;
+      margin-bottom: 22px;
+    }
+    .cover h1 {
+      margin: 0 0 6px;
+      font-size: 1.45rem;
+      color: var(--accent);
+      border: 0;
+      padding: 0;
+    }
+    .cover .sub { color: var(--muted); font-size: 0.92rem; margin: 0 0 10px; }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .kpi {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .kpi .lbl {
+      display: block;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin-bottom: 2px;
+    }
+    .kpi .val { font-weight: 700; font-size: 0.95rem; }
+    h2 {
+      font-size: 1.05rem;
+      margin: 26px 0 10px;
+      padding-bottom: 5px;
+      border-bottom: 2px solid var(--accent);
+      color: #234457;
+    }
+    h3 {
+      font-size: 0.9rem;
+      margin: 14px 0 6px;
+      color: #345468;
+    }
+    p { margin: 0 0 8px; }
+    .meta { color: var(--muted); font-size: 0.85rem; }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 6px 0 14px;
+      border: 1px solid var(--line);
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 7px 9px;
+      text-align: left;
+      font-size: 0.86rem;
+      vertical-align: top;
+    }
+    th {
+      background: var(--panel);
+      color: #234457;
+      font-weight: 700;
+    }
+    .kv { width: 100%; }
+    .kv th { width: 32%; font-weight: 600; }
+    ul { margin: 0 0 10px; padding-left: 20px; }
+    .kind { font-weight: 700; font-size: 0.72rem; letter-spacing: 0.04em; }
+    .OBSERVED { color: var(--ok); }
+    .CALCULATED { color: #0663b8; }
+    .INFERRED { color: var(--warn); }
+    .HYPOTHESIS { color: #7a2d8a; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .badge-ok { color: var(--ok); background: #e8f7ef; border-color: #b9e2cb; }
+    .badge-warn { color: var(--warn); background: #fff6df; border-color: #f0d48a; }
+    .badge-bad { color: var(--bad); background: #fdecec; border-color: #f0b4b4; }
+    .callout {
+      background: #eef7fb;
+      border: 1px solid #c7e0ea;
+      border-left: 4px solid var(--accent);
+      padding: 10px 12px;
+      margin: 8px 0 14px;
+      border-radius: 4px;
+    }
+    .limitations {
+      background: #fff8e6;
+      border-left: 4px solid #d39b1f;
+      padding: 10px 12px;
+      border-radius: 4px;
+    }
+    .footnote {
+      margin-top: 28px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+    @media print {
+      body { padding: 12px; }
+      .cover { break-inside: avoid; }
+      h2 { break-after: avoid; }
+    }
   </style>
 </head>
 <body>
-  {% set ev = analysis.event or {} %}
-  {% set decision = analysis.decision or {} %}
-  <h1>1. Executive Summary</h1>
-  <p class="meta">Decision: {{ decision.state or "NOT AVAILABLE" }}
-     | Confidence: {{ decision.confidence or "INCONCLUSIVE" }}</p>
-  <ul>
-  {% for s in statements %}
-    <li><span class="kind {{ s.kind }}">[{{ s.kind }}]</span> {{ s.text }}</li>
-  {% else %}
-    <li>No structured statements available — see detailed sections below.</li>
-  {% endfor %}
-  </ul>
+{% set ev = analysis.event or {} %}
+{% set decision = analysis.decision or {} %}
+{% set fault = analysis.fault_classification or {} %}
+{% set rca = analysis.rca_hypotheses or {} %}
+{% set primary = rca.primary or {} %}
+{% set dq = analysis.data_quality or {} %}
+{% set ct = (dq.comtrade or [None])[0] %}
+{% set settings = analysis.setting_reference or {} %}
+{% set timing = analysis.timing or {} %}
+{% set breaker = analysis.breaker_analysis or {} %}
+{% set elec = analysis.electrical_analysis or {} %}
 
-  <h2>2. Event Information</h2>
-  <p>Event ID: {{ ev.event_id or "NOT AVAILABLE" }}</p>
-  <p>Description: {{ ev.description or "NOT AVAILABLE" }}</p>
-  {% if ev.feeder %}<p>Feeder: {{ ev.feeder }}</p>{% endif %}
-  {% if ev.nominal_voltage_kv %}<p>Nominal voltage: {{ ev.nominal_voltage_kv }} kV</p>{% endif %}
-
-  <h2>3. Asset Information</h2>
-  {% if ev.asset %}
-  <p>{{ ev.asset }}</p>
-  {% elif ev.substation or ev.bay or ev.feeder %}
-  <p>
-    {% if ev.substation %}Substation: {{ ev.substation }}{% endif %}
-    {% if ev.bay %}{% if ev.substation %} · {% endif %}Bay: {{ ev.bay }}{% endif %}
-    {% if ev.feeder %}{% if ev.substation or ev.bay %} · {% endif %}Feeder: {{ ev.feeder }}{% endif %}
-  </p>
-  {% else %}
-  <p>NOT AVAILABLE — set plant labels on Overview or re-run analysis after COMTRADE ingest.</p>
-  {% endif %}
-
-  <h2>4. Relay Information</h2>
-  {% if ev.relay %}
-  <p>{{ ev.relay }}</p>
-  {% else %}
-  <p>NOT AVAILABLE — set relay tag on Overview or ensure CFG recording device is present.</p>
-  {% endif %}
-
-  <h2>5. COMTRADE Data Quality</h2>
-  {% if analysis.data_quality %}
-  <pre>{{ analysis.data_quality }}</pre>
-  {% else %}
-  <p>NOT AVAILABLE</p>
-  {% endif %}
-
-  <h2>6. Setting Reference</h2>
-  {% if analysis.setting_reference %}
-  <pre>{{ analysis.setting_reference }}</pre>
-  {% else %}
-  <p>Setting reference: NOT AVAILABLE / NOT VERIFIED</p>
-  {% endif %}
-
-  <h2>7. Event Timeline</h2>
-  <table>
-    <tr><th>Type</th><th>Timestamp (s)</th><th>Source</th><th>Confidence</th></tr>
-    {% for e in analysis.timeline or [] %}
+{# ——— Cover ——— #}
+<div class="cover">
+  <h1>Protection Disturbance Analysis Report</h1>
+  <p class="sub">Deterministic engineering report · COMTRADE / DR analysis</p>
+  <table class="kv">
+    <tr><th>Event</th><td><strong>{{ ev.event_id or "NOT AVAILABLE" }}</strong></td></tr>
+    <tr><th>Date / time</th><td>{{ ev.event_datetime or "NOT AVAILABLE" }}</td></tr>
     <tr>
-      <td>{{ e.event_type }}{% if e.label %} ({{ e.label }}){% endif %}</td>
-      <td>{{ "%.6f"|format(e.timestamp|float) if e.timestamp is not none else "—" }}</td>
-      <td>{{ e.source or "—" }}</td>
-      <td>{{ e.confidence or "—" }}</td>
+      <th>Location</th>
+      <td>
+        {% if ev.substation or ev.bay or ev.feeder %}
+          {{ ev.substation or "—" }}{% if ev.bay %} · {{ ev.bay }}{% endif %}{% if ev.feeder %} · {{ ev.feeder }}{% endif %}
+        {% else %}
+          NOT AVAILABLE
+        {% endif %}
+      </td>
     </tr>
-    {% else %}
-    <tr><td colspan="4">NOT AVAILABLE — re-run analysis to reconstruct timeline from COMTRADE / SOE.</td></tr>
-    {% endfor %}
-  </table>
-
-  <h2>8. Electrical Analysis</h2>
-  {% if analysis.electrical_analysis %}
-  <p>Limitations: {{ analysis.electrical_analysis.limitations or "None recorded" }}</p>
-  {% if analysis.electrical_analysis.sample_rate_hz %}
-  <p class="meta">Sample rate: {{ analysis.electrical_analysis.sample_rate_hz }} Hz
-     {% if analysis.electrical_analysis.nominal_frequency_hz %}
-     · Nominal f: {{ analysis.electrical_analysis.nominal_frequency_hz }} Hz
-     {% endif %}
-  </p>
-  {% endif %}
-  {% if analysis.electrical_analysis.rms %}
-  <table>
-    <tr><th>Channel</th><th>RMS</th><th>Unit</th><th>Status</th></tr>
-    {% for name, row in analysis.electrical_analysis.rms.items() %}
+    <tr><th>Relay / IED</th><td>{{ ev.relay_tag or ev.recording_device or "NOT AVAILABLE" }}</td></tr>
     <tr>
-      <td>{{ name }}</td>
-      <td>{{ row.value if row.value is not none else "—" }}</td>
-      <td>{{ row.unit or "" }}</td>
-      <td>{{ row.status or "" }}</td>
+      <th>System</th>
+      <td>
+        {% if ev.nominal_voltage_kv %}{{ ev.nominal_voltage_kv }} kV{% else %}—{% endif %}
+        {% if ev.nominal_frequency_hz or elec.nominal_frequency_hz %}
+          · {{ ev.nominal_frequency_hz or elec.nominal_frequency_hz }} Hz
+        {% endif %}
+      </td>
     </tr>
-    {% endfor %}
   </table>
-  {% endif %}
-  {% else %}
-  <p>Limitations: NOT AVAILABLE</p>
-  {% endif %}
-
-  <h2>9. Fault Classification</h2>
-  {% set fault = analysis.fault_classification or {} %}
-  <p>Type: {{ fault.fault_type or "UNKNOWN" }} | Status: {{ fault.status or "UNKNOWN" }}
-     | Confidence: {{ fault.confidence or "INCONCLUSIVE" }}</p>
-  {% if fault.distance_display %}
-  <p>Location: {{ fault.distance_display }}</p>
-  {% else %}
-  <p>Location: Not applicable / not calculated for this disturbance (optional for non-distance schemes).</p>
-  {% endif %}
-
-  <h2>10. Protection Operation</h2>
-  <table>
-    <tr><th>Element</th><th>Enabled</th><th>Pickup</th><th>Trip</th><th>Expected</th><th>Actual</th><th>Consistency</th></tr>
-    {% for a in analysis.protection_assessment or [] %}
-    <tr>
-      <td>{{ a.element }}</td>
-      <td>{{ a.enabled }}</td>
-      <td>{{ a.pickup }}</td>
-      <td>{{ a.trip }}</td>
-      <td>{{ a.expected_operation }}</td>
-      <td>{{ a.actual_operation }}</td>
-      <td>{{ a.consistency }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="7">NOT AVAILABLE — re-run analysis after settings + COMTRADE digitals are loaded.</td></tr>
-    {% endfor %}
-  </table>
-
-  <h2>11. Protection Consistency Check</h2>
-  <table>
-    <tr><th>Element</th><th>Check</th><th>Status</th><th>Severity</th><th>Explanation</th></tr>
-    {% for f in analysis.consistency_findings or [] %}
-    <tr>
-      <td>{{ f.element }}</td>
-      <td>{{ f.check_type }}</td>
-      <td>{{ f.status }}</td>
-      <td>{{ f.severity }}</td>
-      <td>{{ f.explanation }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="5">NOT AVAILABLE</td></tr>
-    {% endfor %}
-  </table>
-
-  <h2>12. Breaker Analysis</h2>
-  <p>{{ analysis.breaker_analysis or "INCONCLUSIVE" }}</p>
-
-  <h2>13. RCA Assessment</h2>
-  {% set rca = analysis.rca_hypotheses or {} %}
-  {% if rca.primary %}
-  <p>Primary: {{ rca.primary.hypothesis_id }} — {{ rca.primary.status }} (score {{ rca.primary.score }})</p>
-  {% else %}
-  <p>INCONCLUSIVE</p>
-  {% endif %}
-  <table>
-    <tr><th>Hypothesis</th><th>Status</th><th>Score (%)</th><th>Missing Evidence</th></tr>
-    {% for h in rca.hypotheses or [] %}
-    <tr>
-      <td>{{ h.hypothesis_id }}</td>
-      <td>{{ h.status }}</td>
-      <td>{{ h.score }}</td>
-      <td>{{ h.missing_evidence }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="4">NOT AVAILABLE</td></tr>
-    {% endfor %}
-  </table>
-
-  <h2>14. Evidence Table</h2>
-  <table>
-    <tr><th>ID</th><th>Source</th><th>Parameter</th><th>Value</th><th>Interpretation</th></tr>
-    {% for e in analysis.evidence or [] %}
-    <tr>
-      <td>{{ e.evidence_id }}</td>
-      <td>{{ e.source_type }}</td>
-      <td>{{ e.parameter }}</td>
-      <td>{{ e.value }}</td>
-      <td>{{ e.interpretation }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="5">NOT AVAILABLE</td></tr>
-    {% endfor %}
-  </table>
-
-  <h2>15. Similar Historical Events</h2>
-  {% set sim = analysis.similar_events or {} %}
-  <p>{{ sim.message or "SIMILARITY RESULT: NOT AVAILABLE" }}</p>
-  <p class="meta">{{ sim.note or "Supporting evidence only — never treat as proof" }}</p>
-
-  <h2>16. Recommended Actions</h2>
-  <ul>
-  {% for a in decision.recommended_actions or [] %}
-    <li>{{ a }}</li>
-  {% else %}
-    <li>NOT AVAILABLE</li>
-  {% endfor %}
-  </ul>
-
-  <h2>17. Confidence</h2>
-  <p>{{ decision.confidence or "INCONCLUSIVE" }}</p>
-
-  <h2>18. Limitations</h2>
-  <div class="limitations">
-    <ul>
-    {% for lim in analysis.limitations or [] %}
-      <li>{{ lim }}</li>
-    {% else %}
-      <li>None recorded</li>
-    {% endfor %}
-    </ul>
+  <div class="kpis">
+    <div class="kpi">
+      <span class="lbl">Fault type</span>
+      <span class="val">{{ fault.fault_type or "UNKNOWN" }}</span>
+    </div>
+    <div class="kpi">
+      <span class="lbl">Decision</span>
+      <span class="val">{{ decision.state or ev.decision_state or "—" }}</span>
+    </div>
+    <div class="kpi">
+      <span class="lbl">Primary RCA</span>
+      <span class="val">{{ primary.title or primary.hypothesis_id or "INCONCLUSIVE" }}</span>
+    </div>
+    <div class="kpi">
+      <span class="lbl">Data quality</span>
+      <span class="val">{{ ev.data_quality or dq.event_data_quality or "—" }}</span>
+    </div>
   </div>
+</div>
 
-  <h2>19. Engineer Review</h2>
-  {% set er = analysis.engineer_review %}
-  {% if er is mapping %}
+{# ——— 1. Executive summary ——— #}
+<h2>1. Executive Summary</h2>
+<div class="callout">
+  <p>
+    <strong>{{ primary.title or "Root cause not confirmed" }}</strong>
+    {% if primary.status %}
+      — <span class="badge {% if primary.status == 'CONFIRMED' %}badge-ok{% elif primary.status in ['PROBABLE','POSSIBLE'] %}badge-warn{% else %}badge-bad{% endif %}">{{ primary.status }}</span>
+      {% if primary.score %} (score {{ primary.score }}){% endif %}
+    {% endif %}
+  </p>
+  {% if primary.statement %}
+  <p>{{ primary.statement }}</p>
+  {% endif %}
+  <p class="meta">
+    Fault: <strong>{{ fault.fault_type or "UNKNOWN" }}</strong>
+    ({{ fault.status or "—" }}, {{ fault.confidence or "INCONCLUSIVE" }})
+    {% if analysis.operated_elements %}
+      · Operated elements: <strong>{{ analysis.operated_elements | join(", ") }}</strong>
+    {% endif %}
+    {% if timing.pickup_to_trip_ms is defined and timing.pickup_to_trip_ms is not none %}
+      · Pickup→trip: <strong>{{ timing.pickup_to_trip_ms }} ms</strong>
+    {% endif %}
+    {% if timing.trip_to_clear_ms is defined and timing.trip_to_clear_ms is not none %}
+      · Trip→clear: <strong>{{ timing.trip_to_clear_ms }} ms</strong>
+    {% endif %}
+    {% if fault.distance_display and "NOT_APPLICABLE" not in (fault.distance_display|string|upper) and "NOT APPLICABLE" not in (fault.distance_display|string|upper) %}
+      · Location: <strong>{{ fault.distance_display }}</strong>
+    {% endif %}
+  </p>
+</div>
+<ul>
+{% for s in statements %}
+  <li><span class="kind {{ s.kind }}">[{{ s.kind }}]</span> {{ s.text }}</li>
+{% else %}
+  <li>No structured statements — see detailed sections below.</li>
+{% endfor %}
+</ul>
+
+{# ——— 2. Event identification ——— #}
+<h2>2. Event Identification</h2>
+<table class="kv">
+  <tr><th>Event ID</th><td>{{ ev.event_id or "—" }}</td></tr>
+  <tr><th>Event date / time</th><td>{{ ev.event_datetime or "—" }}</td></tr>
+  <tr><th>Description</th><td>{{ ev.description or "—" }}</td></tr>
+  <tr><th>Substation</th><td>{{ ev.substation or ev.station_name or "—" }}</td></tr>
+  <tr><th>Bay</th><td>{{ ev.bay or "—" }}</td></tr>
+  <tr><th>Feeder / circuit</th><td>{{ ev.feeder or "—" }}</td></tr>
+  <tr><th>Nominal voltage</th><td>{% if ev.nominal_voltage_kv %}{{ ev.nominal_voltage_kv }} kV{% else %}—{% endif %}</td></tr>
+  <tr><th>Relay / IED tag</th><td>{{ ev.relay_tag or "—" }}</td></tr>
+  <tr><th>Recording device</th><td>{{ ev.recording_device or "—" }}</td></tr>
+  <tr><th>Event status</th><td>{{ ev.status or "—" }}</td></tr>
+</table>
+
+{# ——— 3. Record quality ——— #}
+<h2>3. COMTRADE Record Quality</h2>
+{% if ct %}
+<table class="kv">
+  <tr><th>Station (CFG)</th><td>{{ ct.station_name or "—" }}</td></tr>
+  <tr><th>Recording device</th><td>{{ ct.recording_device or "—" }}</td></tr>
+  <tr><th>Record start</th><td>{{ ct.start_timestamp or "—" }}</td></tr>
+  <tr><th>Sample rate</th><td>{% if ct.sample_rate_hz %}{{ ct.sample_rate_hz }} Hz{% else %}—{% endif %}</td></tr>
+  <tr><th>Samples</th><td>{{ ct.total_samples if ct.total_samples is not none else "—" }}</td></tr>
+  <tr><th>Analog / digital channels</th>
+      <td>{{ ct.analog_channel_count if ct.analog_channel_count is not none else "—" }} / {{ ct.digital_channel_count if ct.digital_channel_count is not none else "—" }}</td></tr>
+  <tr><th>Validation</th><td>{{ ct.validation_status or "—" }}</td></tr>
+  <tr><th>Data quality</th><td>{{ ct.data_quality or dq.event_data_quality or "—" }}</td></tr>
+  {% if ct.parse_warnings %}
+  <tr><th>Parse warnings</th><td>{{ ct.parse_warnings }}</td></tr>
+  {% endif %}
+</table>
+{% elif dq.event_data_quality and dq.event_data_quality != "NOT AVAILABLE" %}
+<table class="kv">
+  <tr><th>Data quality</th><td>{{ dq.event_data_quality }}</td></tr>
+  <tr><th>COMTRADE detail</th><td>Record-level CFG metadata not loaded — open COMTRADE tab or re-run analysis.</td></tr>
+</table>
+{% elif dq.status %}
+<p>{{ dq.status }}</p>
+{% else %}
+<p>NOT AVAILABLE — re-run analysis after COMTRADE parse.</p>
+{% endif %}
+
+{# ——— 4. Settings ——— #}
+<h2>4. Setting Reference (bound for this analysis)</h2>
+{% if settings.status %}
+<p>{{ settings.status }}{% if settings.hint %} — {{ settings.hint }}{% endif %}</p>
+{% else %}
+<table class="kv">
+  <tr><th>Source</th><td>{{ settings.setting_source_used or "—" }}</td></tr>
+  <tr><th>Version</th><td>{{ settings.setting_version or "—" }}</td></tr>
+  <tr><th>Setting group</th><td>{{ settings.setting_group or "—" }}</td></tr>
+  <tr><th>Active group</th><td>{{ settings.active_setting_group_verification or "—" }}</td></tr>
+  <tr><th>Approval</th><td>{{ settings.setting_approval or "—" }}</td></tr>
+  <tr><th>Settings file</th><td>{{ settings.setting_file or "—" }}</td></tr>
+  <tr><th>Parameters loaded</th><td>{{ settings.param_count if settings.param_count is not none else "—" }}</td></tr>
+</table>
+{% if settings.explanation %}<p class="meta">{{ settings.explanation }}</p>{% endif %}
+{% endif %}
+
+{# ——— 5. Sequence ——— #}
+<h2>5. Sequence of Operation</h2>
+{% if timing.pickup_to_trip_ms is defined and timing.pickup_to_trip_ms is not none or timing.trip_to_clear_ms is defined and timing.trip_to_clear_ms is not none %}
+<p class="meta">
+  {% if timing.pickup_to_trip_ms is defined and timing.pickup_to_trip_ms is not none %}
+    Pickup → trip: <strong>{{ timing.pickup_to_trip_ms }} ms</strong>
+  {% endif %}
+  {% if timing.trip_to_clear_ms is defined and timing.trip_to_clear_ms is not none %}
+    · Trip → current clear: <strong>{{ timing.trip_to_clear_ms }} ms</strong>
+  {% endif %}
+  · Breaker: <strong>{{ breaker.assessment or "—" }}</strong>
+</p>
+{% endif %}
+<table>
+  <tr><th>Step</th><th>Time (s)</th><th>Source</th><th>Confidence</th></tr>
+  {% for e in analysis.timeline or [] %}
+  <tr>
+    <td>{{ e.event_type_label or e.event_type }}{% if e.label %} <span class="meta">({{ e.label }})</span>{% endif %}</td>
+    <td>{{ "%.4f"|format(e.timestamp|float) if e.timestamp is not none else "—" }}</td>
+    <td>{{ e.source or "—" }}</td>
+    <td>{{ e.confidence or "—" }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">NOT AVAILABLE — re-run analysis to reconstruct the timeline from COMTRADE / SOE.</td></tr>
+  {% endfor %}
+</table>
+
+{# ——— 6. Electrical ——— #}
+<h2>6. Electrical Quantities</h2>
+{% if elec.sample_rate_hz or elec.nominal_frequency_hz %}
+<p class="meta">
+  {% if elec.sample_rate_hz %}Sample rate: {{ elec.sample_rate_hz }} Hz{% endif %}
+  {% if elec.nominal_frequency_hz %} · Nominal frequency: {{ elec.nominal_frequency_hz }} Hz{% endif %}
+</p>
+{% endif %}
+{% if elec.rms %}
+<table>
+  <tr><th>Channel</th><th>RMS</th><th>Unit</th><th>Status</th></tr>
+  {% for name, row in elec.rms.items() %}
+  <tr>
+    <td>{{ name }}</td>
+    <td>{% if row.value is not none %}{{ "%.3f"|format(row.value|float) if row.value is number else row.value }}{% else %}—{% endif %}</td>
+    <td>{{ row.unit or "" }}</td>
+    <td>{{ row.status or "" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>RMS summary NOT AVAILABLE — open Waveforms / Electrical after analysis.</p>
+{% endif %}
+
+{# ——— 7. Fault ——— #}
+<h2>7. Fault Classification &amp; Location</h2>
+<table class="kv">
+  <tr><th>Fault type</th><td>{{ fault.fault_type or "UNKNOWN" }}</td></tr>
+  <tr><th>Classification status</th><td>{{ fault.status or "—" }}</td></tr>
+  <tr><th>Confidence</th><td>{{ fault.confidence or "INCONCLUSIVE" }}</td></tr>
+  <tr>
+    <th>Fault location</th>
+    <td>
+      {% if fault.distance_display %}
+        {{ fault.distance_display }}
+      {% else %}
+        Not applicable / not calculated for this scheme
+      {% endif %}
+    </td>
+  </tr>
+</table>
+{% if fault.limitations %}
+<p class="meta">Notes: {{ fault.limitations | join("; ") }}</p>
+{% endif %}
+
+{# ——— 8. Protection ——— #}
+<h2>8. Protection Performance</h2>
+<table>
+  <tr>
+    <th>Element</th>
+    <th>Enabled</th>
+    <th>Pickup</th>
+    <th>Trip</th>
+    <th>Expected</th>
+    <th>Actual</th>
+    <th>Consistency</th>
+  </tr>
+  {% for a in analysis.protection_assessment or [] %}
+  <tr>
+    <td><strong>{{ a.element }}</strong></td>
+    <td>{{ a.enabled_display or a.enabled }}</td>
+    <td>{{ a.pickup_display or a.pickup }}</td>
+    <td>{{ a.trip_display or a.trip }}</td>
+    <td>{{ a.expected_operation or "—" }}</td>
+    <td>{{ a.actual_operation or "—" }}</td>
+    <td>{{ a.consistency or "—" }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="7">NOT AVAILABLE — re-run analysis after settings and COMTRADE digitals are loaded.</td></tr>
+  {% endfor %}
+</table>
+
+{# ——— 9. Consistency ——— #}
+<h2>9. Protection Consistency Check</h2>
+<table>
+  <tr><th>Element</th><th>Check</th><th>Status</th><th>Severity</th><th>Explanation</th></tr>
+  {% for f in analysis.consistency_findings or [] %}
+  <tr>
+    <td>{{ f.element }}</td>
+    <td>{{ f.check_label or f.check_type }}</td>
+    <td>{{ f.status }}</td>
+    <td>{{ f.severity }}</td>
+    <td>{{ f.explanation or "—" }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5">NOT AVAILABLE</td></tr>
+  {% endfor %}
+</table>
+
+{# ——— 10. RCA ——— #}
+<h2>10. Root Cause Assessment</h2>
+{% if primary %}
+<div class="callout">
+  <p><strong>Primary:</strong> {{ primary.title or primary.hypothesis_id }} —
+    <span class="badge {% if primary.status == 'CONFIRMED' %}badge-ok{% elif primary.status in ['PROBABLE','POSSIBLE'] %}badge-warn{% else %}badge-bad{% endif %}">{{ primary.status }}</span>
+    · score {{ primary.score or "—" }}
+  </p>
+  {% if primary.statement %}<p>{{ primary.statement }}</p>{% endif %}
+  {% if primary.supporting_evidence_labels %}
+  <p><strong>Supporting evidence:</strong> {{ primary.supporting_evidence_labels | join("; ") }}</p>
+  {% endif %}
+  {% if primary.missing_evidence_labels %}
+  <p><strong>Missing evidence:</strong> {{ primary.missing_evidence_labels | join("; ") }}</p>
+  {% else %}
+  <p class="meta">Missing evidence: none recorded</p>
+  {% endif %}
+</div>
+{% else %}
+<p>INCONCLUSIVE — no primary hypothesis ranked.</p>
+{% endif %}
+
+{% set alts = rca.hypotheses or [] %}
+{% if alts|length > 1 %}
+<h3>Alternative hypotheses</h3>
+<table>
+  <tr><th>Rank</th><th>Hypothesis</th><th>Status</th><th>Score</th><th>Missing / notes</th></tr>
+  {% for h in alts %}
+  {% if not loop.first %}
+  <tr>
+    <td>{{ loop.index }}</td>
+    <td>{{ h.title or h.hypothesis_id }}</td>
+    <td>{{ h.status }}</td>
+    <td>{{ h.score }}</td>
+    <td>{{ (h.missing_evidence_labels or h.missing_evidence or []) | join("; ") or "—" }}</td>
+  </tr>
+  {% endif %}
+  {% endfor %}
+</table>
+{% endif %}
+
+{# ——— 11. Actions ——— #}
+<h2>11. Recommended Verification</h2>
+<ul>
+{% for a in decision.recommended_actions or primary.recommended_actions or [] %}
+  <li>{{ a }}</li>
+{% else %}
+  <li>Verify active setting group against the event time</li>
+  <li>Review Consistency and Protection tables</li>
+  <li>Confirm channel mapping and DR targets</li>
+{% endfor %}
+</ul>
+
+{# ——— 12. Limitations ——— #}
+<h2>12. Limitations &amp; Confidence</h2>
+<p>Overall confidence: <strong>{{ decision.confidence or "INCONCLUSIVE" }}</strong></p>
+<div class="limitations">
+  <ul>
+  {% for lim in analysis.limitations or [] %}
+    <li>{{ lim }}</li>
+  {% else %}
+    <li>None recorded</li>
+  {% endfor %}
+  </ul>
+</div>
+
+{# ——— 13. Review ——— #}
+<h2>13. Engineer Review</h2>
+{% set er = analysis.engineer_review %}
+{% if er is mapping %}
   <p><strong>{{ er.action or "PENDING" }}</strong></p>
   {% if er.reviewed_at %}<p>Reviewed at: {{ er.reviewed_at }}</p>{% endif %}
   {% if er.decision_state %}<p>Decision state: {{ er.decision_state }}</p>{% endif %}
   {% if er.comments %}<p>Comments: {{ er.comments }}</p>{% endif %}
-  {% elif er %}
-  <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{ er }}</pre>
-  {% else %}
-  <p>PENDING</p>
-  {% endif %}
+{% elif er %}
+  <p style="white-space: pre-wrap; margin: 0;">{{ er }}</p>
+{% else %}
+  <p>PENDING — complete Review (ACCEPT / MODIFY / REJECT / …) after engineering check.</p>
+{% endif %}
+
+{# ——— 14. Files ——— #}
+<h2>14. Evidence Files</h2>
+{% if analysis.files %}
+<table>
+  <tr><th>Filename</th><th>Type</th><th>SHA-256 (prefix)</th></tr>
+  {% for f in analysis.files %}
+  <tr>
+    <td>{{ f.filename }}</td>
+    <td>{{ f.type }}</td>
+    <td>{{ f.sha256 }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No file inventory available.</p>
+{% endif %}
+
+<div class="footnote">
+  Report generated from structured analysis artefacts only. Conclusions distinguish OBSERVED /
+  CALCULATED / INFERRED / HYPOTHESIS. This system does not invent measurements, settings, or root
+  cause, and does not issue OT control commands.
+</div>
 </body>
 </html>

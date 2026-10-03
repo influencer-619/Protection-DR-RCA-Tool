@@ -137,9 +137,10 @@ export function CreateEventPage() {
     setBusy(true);
     setError(null);
     try {
-      const job = await api.startAnalysis(eventPk);
+      const job = await api.startAnalysis(eventPk, true);
       setJobId(job.id);
-      setStep(4);
+      // Conclude-first: land on one-page summary while pipeline runs
+      navigate(`/events/${eventPk}/summary`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to start analysis');
     } finally {
@@ -450,7 +451,7 @@ export function CreateEventPage() {
                 disabled={busy}
                 onClick={() => void startAnalysis()}
               >
-                {busy ? 'Starting…' : 'Start analysis'}
+                {busy ? 'Starting…' : 'Start analysis & open summary'}
               </button>
             </div>
           </div>

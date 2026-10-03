@@ -8,15 +8,12 @@ import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 import { StatusBadge } from '@/components/StatusBadge';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { FindingDetail } from '@/components/FindingDetail';
+import { formatCheckName, formatFindingValue } from '@/utils/findingValue';
 
 type FilterKey = 'all' | 'actionable' | 'inconsistent' | 'consistent' | 'unverifiable';
 
 function fmtCell(v: ConsistencyFinding['expected']): string {
-  if (v == null) return '—';
-  if (typeof v === 'string') return v;
-  return Object.entries(v)
-    .map(([k, val]) => `${k}=${val}`)
-    .join(', ');
+  return formatFindingValue(v);
 }
 
 export function ConsistencyPage() {
@@ -228,12 +225,12 @@ export function ConsistencyPage() {
                     onClick={() => setSelected(f)}
                     data-testid={`finding-${f.finding_id}`}
                   >
-                    <td className="mono">{f.element}</td>
-                    <td>{f.check_type.replace(/_/g, ' ')}</td>
-                    <td className="mono" style={{ fontSize: '0.75rem', maxWidth: 180 }}>
+                    <td className="mono">{f.element === 'GENERAL' ? 'General' : f.element}</td>
+                    <td>{formatCheckName(f.check_type)}</td>
+                    <td style={{ fontSize: '0.82rem', maxWidth: 280, lineHeight: 1.45, whiteSpace: 'normal' }}>
                       {fmtCell(f.expected)}
                     </td>
-                    <td className="mono" style={{ fontSize: '0.75rem', maxWidth: 180 }}>
+                    <td style={{ fontSize: '0.82rem', maxWidth: 360, lineHeight: 1.45, whiteSpace: 'normal' }}>
                       {fmtCell(f.observed)}
                     </td>
                     <td>

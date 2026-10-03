@@ -7,12 +7,17 @@ import { EventStatusCell } from '@/components/EventStatusCell';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
-import { getLastEvent, pruneRecentEvents, removeRecentEvent } from '@/utils/recentEvents';
+import {
+  getLastEvent,
+  syncRecentEvents,
+  removeRecentEvent,
+  recentEventLabel,
+} from '@/utils/recentEvents';
 
 const QUEUE_LABELS: Record<string, string> = {
   awaiting_analysis: 'Awaiting analysis',
   awaiting_review: 'Awaiting review',
-  completed_reports: 'Completed reports',
+  completed_reports: 'Events with reports',
   consistency_issues: 'Consistency issues',
   high_severity: 'High severity findings',
   rca_inconclusive: 'RCA inconclusive',
@@ -149,8 +154,8 @@ export function EventsListPage() {
 
   useEffect(() => {
     if (loading) return;
-    const pruned = pruneRecentEvents(events.map((e) => e.id));
-    setLast(pruned[0] ?? null);
+    const synced = syncRecentEvents(events);
+    setLast(synced[0] ?? null);
   }, [events, loading]);
 
   const onDelete = async () => {
@@ -185,10 +190,9 @@ export function EventsListPage() {
             <Link
               to={`/events/${last.id}/summary`}
               className="btn btn-primary"
-              title={last.event_id}
+              title={recentEventLabel(last)}
             >
-              Continue{' '}
-              {last.event_id.length > 12 ? `${last.event_id.slice(0, 12)}…` : last.event_id}
+              Continue {recentEventLabel(last)}
             </Link>
           )}
           <Link to="/plant" className="btn btn-primary">

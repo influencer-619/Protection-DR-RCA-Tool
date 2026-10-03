@@ -196,7 +196,7 @@ function EventLayoutInner() {
   }, [id, job?.status, analysisRevision]);
 
   useEffect(() => {
-    if (!event?.id) return;
+    if (!event?.id || !event.event_id) return;
     touchRecentEvent({
       id: event.id,
       event_id: event.event_id,

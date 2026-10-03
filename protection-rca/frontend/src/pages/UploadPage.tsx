@@ -1,7 +1,7 @@
 import { useState, type DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/services/api';
-import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT } from '@/utils/uploadAccept';
+import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT, hasComtradePackage } from '@/utils/uploadAccept';
 
 export function UploadPage() {
   const [dragging, setDragging] = useState(false);
@@ -28,6 +28,15 @@ export function UploadPage() {
         await api.uploadEventFiles(ev.id, files);
       }
       setCreatedId(ev.id);
+      if (hasComtradePackage(files.map((f) => f.name))) {
+        try {
+          await api.startAnalysis(ev.id, true);
+        } catch {
+          /* open summary anyway */
+        }
+        navigate(`/events/${ev.id}/summary`);
+        return;
+      }
       navigate(`/events/${ev.id}/files`);
     } finally {
       setBusy(false);

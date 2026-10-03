@@ -225,7 +225,11 @@ async def list_events(
 
         subq = (
             select(Report.event_id)
-            .where(Report.status.in_(("READY", "PUBLISHED", "COMPLETE", "GENERATED")))
+            .where(
+                Report.status.in_(
+                    ("READY", "PUBLISHED", "COMPLETE", "GENERATED", "FINAL")
+                )
+            )
             .distinct()
         )
         q = q.where(Event.id.in_(subq))

@@ -43,9 +43,9 @@ function patchScoresToPercent(html: string): string {
   out = out.replace(/\b(score\s+)(0\.\d+)\b/gi, (_m, a: string, num: string) => {
     return `${a}${toPct(parseFloat(num))}`;
   });
-  // RCA Assessment table only (section 13 → 14)
+  // RCA Assessment table (legacy §13 or current §10)
   out = out.replace(
-    /(13\.\s*RCA Assessment[\s\S]*?)(?=<h2>\s*14\.|$)/i,
+    /((?:10\.\s*Root Cause Assessment|13\.\s*RCA Assessment)[\s\S]*?)(?=<h2>\s*(?:11\.|14\.)|$)/i,
     (section) =>
       section.replace(/<td>\s*(0\.\d+)\s*<\/td>/gi, (_m, num: string) => {
         return `<td>${toPct(parseFloat(num))}</td>`;
@@ -74,32 +74,33 @@ function patchEngineerReview(html: string, review: ReviewRow | null): string {
   const block = `<pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">${escapeHtml(
     lines.join('\n'),
   )}</pre>`;
-  if (/19\.\s*Engineer Review/i.test(html)) {
+  if (/\d+\.\s*Engineer Review/i.test(html)) {
     return html.replace(
-      /(<h2>\s*19\.\s*Engineer Review\s*<\/h2>)([\s\S]*?)(?=<h2\b|<\/body>|$)/i,
+      /(<h2>\s*\d+\.\s*Engineer Review\s*<\/h2>)([\s\S]*?)(?=<h2\b|<\/body>|$)/i,
       `$1\n  ${block}\n  `,
     );
   }
-  // Fallback report without section 19 — append it
   return html.replace(
     /<\/body>/i,
-    `<h2>19. Engineer Review</h2>\n${block}\n</body>`,
+    `<h2>13. Engineer Review</h2>\n${block}\n</body>`,
   );
 }
 
 function looksSparse(html: string): boolean {
   if (!html || html.length < 500) return true;
+  // Old template dumped raw JSON for COMTRADE quality — force regenerate
+  if (html.includes('"event_data_quality"') && html.includes('<pre>')) return true;
+  if (html.includes('Upload batch —') && html.includes('.cfg')) return true;
   if (
     html.includes('<h2>1. Executive Summary</h2>') &&
     html.includes('<h2>Fault</h2>') &&
-    !html.includes('19. Engineer Review') &&
+    !html.includes('Engineer Review') &&
     !html.includes('Event Identification') &&
     !html.includes('2. Event Information')
   ) {
     return true;
   }
   return (
-    html.includes('re-run analysis to reconstruct') ||
     html.includes('NOT AVAILABLE — set relay') ||
     html.includes('NOT AVAILABLE — re-run analysis after settings') ||
     (html.includes('Decision: NOT AVAILABLE') && html.includes('COMTRADE Data Quality'))

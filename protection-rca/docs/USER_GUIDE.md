@@ -2,7 +2,7 @@
 
 **Audience:** Protection engineers, analysts, approvers, and administrators  
 **Product:** Protection Disturbance Record (DR) / COMTRADE analysis and Root Cause Analysis (RCA) platform  
-**Document version:** 0.7.0  
+**Document version:** 0.8.0  
 **Application:** Protection RCA web application (React + FastAPI)
 
 This guide explains how to launch the application (including the portable, no-install build), build the plant hierarchy, bring disturbance records in — either by **fetching them directly from the relay over IEC 61850** or by **manual upload** — analyse each event, interpret the results, generate reports, and complete engineer review. It reflects the **current implemented behaviour** of the platform.
@@ -11,32 +11,29 @@ This guide explains how to launch the application (including the portable, no-in
 
 ## Document revision — what is covered in this edition
 
-This edition (**0.7.0**) adds IEC 61850 acquisition, readable event numbers, the refreshed user interface, and a truly self-contained portable build:
+This edition (**0.8.0**) focuses on the day-to-day engineer loop after records are in: clearer dashboard KPIs, automatic analyse-and-land-on-Summary after a complete upload, professional PDF reports, and full Users administration.
 
 | Area | What changed |
 |------|----------------|
-| **Fetch from IED (IEC 61850)** | New **Fetch from IED** mode on every IED workspace. Connects read-only over MMS (port 102), identifies the relay from its nameplate, lists disturbance records on the relay, and pulls COMTRADE + settings + protection events + optional SCL into a new event. See [§10](#10-fetching-records-from-the-relay-iec-61850) |
-| **Vendor profiles** | Auto-detect plus ABB/Hitachi, Siemens, GE Vernova, Schneider, SEL, NR, Toshiba, ZIV and a generic profile — each knows where that vendor stores records |
-| **Automatic fetch** | Per-IED **Auto-fetch new records** switch. The server polls the relay on a schedule (1 min … 4 h), creates one event per new record, and can start analysis automatically — even when nobody has the page open. See [§11](#11-automatic-fetch-auto-fetch) |
-| **Event numbers** | New events get readable IDs **`EVT-YYYY-NNNNN`** (e.g. `EVT-2026-00042`). Older random (UUID) IDs are renumbered once at startup; the old ID is kept for traceability. See [§12](#12-event-numbers) |
-| **Application shell** | Collapsible left sidebar (remembered per browser), top bar with breadcrumb, theme toggle, user chip and sign-out |
-| **Plant page** | Level stat cards (1–5), inline “New … under …” add bar, tree filter, **Expand all / Collapse all**, event counts per IED |
-| **IED workspace** | Header with full plant path and tag / kV / IP chips, stats (Events · In review · Last event), **Fetch from IED / Manual upload** switch, drag-and-drop zone with file chips, event list for the relay |
-| **Event workspace** | New header band (breadcrumb, title, date, badges, Share / Start / Re-run / Delete), clickable pipeline lamps, one sticky tab bar, progress panel only while a job runs |
-| **Reports & summary** | Report preview and Summary sheet always render as a light “paper” page (readable in dark theme), without affecting the rest of the app |
-| **Audit** | Shows **usernames** instead of IDs (“system” for automatic actions), coloured action chips, text filter, entry count. New actions: `IEC61850_FETCH`, `IEC61850_AUTO_FETCH` |
-| **Portable build** | `portable-share\python\` now contains a **complete Python runtime** — the other PC needs **no Python, no Node, no install**. The launcher logs API start-up to `backend\logs\api-launch.log` and shows the log tail if the API fails to start |
+| **Dashboard KPIs** | **Events with reports** counts **distinct current events** that have a generated report — the number **rises** when a report is produced and **drops** when that event is deleted. Quality tiles show **Clear / None / Good** when the problem count is zero. Recent chips and the trend chart are more informative. KPIs refresh when you return to the Dashboard. See [§6](#6-dashboard-operations-console) |
+| **Upload → Summary** | On **Manual upload**, a complete package (COMTRADE **and** settings) starts analysis automatically and opens the event **Summary** tab (one-page story). Incomplete packages still create the event without forcing analysis. See [§9](#9-ied-workspace) and [§14](#14-uploading-files-manually) |
+| **Professional PDF** | **Download PDF** builds a structured engineering PDF from the analysis payload (Platypus / ReportLab) — not a raw HTML scrape. Sections align with Summary / Report content. See [§23](#23-reports-html-pdf-json) |
+| **Users CRUD** | Admins can **add**, **edit**, and **delete** local accounts on **Users**. Password is required on create; on edit it is **optional** (leave blank to keep the current password). You cannot delete your own account. See [§24](#24-users-sso-and-audit) |
+| **Overview Inputs** | Overview input chips summarise COMTRADE / settings / SOE presence in plain language so you can see at a glance what was loaded |
 
-Still valid from **0.6.0** (plant-first workflow):
+Still valid from **0.7.0** (IEC 61850 acquisition & portable):
 
 | Area | Summary |
 |------|---------|
-| **Plant-first workflow** | No global Create event / Upload menus. Build **Substation → Voltage level → Bay → Feeder → IED**, then work on the IED |
-| **All events** | Global list with live **Search** and **From / To** date filters, “X of Y events”, **Clear filters** |
-| **Protection column** | Operated elements (e.g. **51N, 87T, 21**) plus fault type where known |
-| **Dashboard** | Work inbox, Operations + Quality KPI rows, trend chart, Attention queue, DQ donut, Recent events |
-| **Dual SQLite DBs** | Users in `protection_rca_auth.db`; plant + events in `protection_rca_local.db` |
-| **Bootstrap admin** | Fresh install: **`admin` / `admin123`** (change in production) |
+| **Fetch from IED (IEC 61850)** | Read-only MMS fetch of COMTRADE + settings + SOE + optional SCL. See [§10](#10-fetching-records-from-the-relay-iec-61850) |
+| **Vendor profiles** | Auto-detect plus ABB/Hitachi, Siemens, GE Vernova, Schneider, SEL, NR, Toshiba, ZIV and generic |
+| **Automatic fetch** | Per-IED scheduled poll (1 min … 4 h). See [§11](#11-automatic-fetch-auto-fetch) |
+| **Event numbers** | Readable **`EVT-YYYY-NNNNN`**. See [§12](#12-event-numbers) |
+| **Application shell / Plant / IED / Event UI** | Collapsible sidebar, plant tree tooling, IED acquire panel, event header + tab bar |
+| **Audit** | Usernames (“system” for automatic), coloured chips; `IEC61850_FETCH` / `IEC61850_AUTO_FETCH` |
+| **Portable build** | Bundled Python runtime; API log at `backend\logs\api-launch.log` |
+
+Still valid from **0.6.0** (plant-first workflow): Plant-first (no global Create/Upload menus), All events search/date filters, Protection column, dual SQLite DBs, bootstrap **`admin` / `admin123`**.
 
 Still valid from **0.5.0** (engineering analysis): faulted-loop R–X / impedance, harmonics heatmap, 87 Id–Ir, through-fault exclusion, decision badges, settings auto-approve, Channel map, DR targets, background analysis, scheme library, cause enrichment, HTML/PDF/JSON reports, no generative AI, no OT control.
 
@@ -372,7 +369,7 @@ Higher roles include the rights of lower ones. Authorization is enforced on the 
 
 ## 6. Dashboard (operations console)
 
-The dashboard is the engineering operations console. It uses **live database values** — never fabricated demo events. Layout is **full width** of the main content area.
+The dashboard is the engineering operations console. It uses **live database values** — never fabricated demo events. Layout is **full width** of the main content area. Returning to the Dashboard (or focusing the browser tab) **refetches** the KPIs so counts stay aligned after you create or delete events elsewhere.
 
 ### Work inbox
 
@@ -382,7 +379,7 @@ Top banner summarises items needing attention (analyse · review · consistency 
 - **Consistency**
 - **Analyse**
 
-Recent locally opened events appear as quick links. **Continue \<event id\>** jumps back into the last worked event (stored in browser memory; cleared when that event is deleted or the events DB is empty).
+**Recent** chips show short, informative labels (event number, feeder / plant context, status) for locally opened events. **Continue \<event id\>** jumps back into the last worked event (stored in browser memory; pruned when that event is deleted or the events DB is empty).
 
 Header actions: **Continue** · **Compare** · **All events** · **Open Plant**.
 
@@ -394,25 +391,27 @@ Each tile opens **All events** with the matching filter (`?queue=…`):
 
 | KPI | Filter meaning |
 |-----|----------------|
-| Total Events | All events |
-| Awaiting Analysis | Uploaded / queued / analysing |
-| Awaiting Review | Analysed / review states |
-| Completed Reports | Events with ready reports |
+| Total events | All recorded disturbances |
+| Awaiting analysis | Uploaded / queued / analysing |
+| Awaiting review | Engineer disposition needed |
+| **Events with reports** | **Distinct events that still exist and have a ready report** (HTML / PDF / JSON). Not a count of every regenerated file. **Increases** when a report is generated for an event; **decreases** when that event is deleted |
 
 **Quality & findings**
 
-| KPI | Filter meaning |
-|-----|----------------|
-| Consistency Issues | Events with INCONSISTENT findings |
-| High Severity Findings | HIGH / CRITICAL consistency |
-| RCA Inconclusive | Decision INCONCLUSIVE / DATA_INSUFFICIENT |
-| Parser / DQ Issues | WARNING / POOR / INVALID data quality |
+These tiles are **problem counters**. A value of **0** is good — the tile shows a clear zero-state label instead of looking like “missing data”:
 
-Tiles re-flow automatically to the screen width.
+| KPI | When &gt; 0 | When 0 (healthy) |
+|-----|-------------|------------------|
+| Protection consistency | Events with INCONSISTENT findings | **Clear** |
+| High / critical findings | HIGH / CRITICAL consistency findings | **None** |
+| RCA inconclusive | Decision INCONCLUSIVE / DATA_INSUFFICIENT | **None** |
+| Parser / DQ issues | WARNING / POOR / INVALID data quality | **Good** |
+
+Tiles re-flow automatically to the screen width. Click any tile to open the matching event queue.
 
 ### Event trend (7 / 30 / 90 days)
 
-Stacked bars for **Analysed · Review · Issues**. Switch the window with **7d / 30d / 90d**. Leading empty days are trimmed so sparse data stays readable; bars stay centred and a sensible width even with few days.
+Stacked bars for **Analysed · Review · Issues**. Switch the window with **7d / 30d / 90d**. Sparse periods zoom to active days so bars stay readable; values and a peak marker help you spot busy days quickly.
 
 ### Attention required + Data quality
 
@@ -433,7 +432,7 @@ Events created by IEC 61850 fetch or auto-fetch appear here exactly like uploade
 
 When there are zero events:
 
-- All counters show **0**
+- All counters show **0** (Quality tiles show Clear / None / Good)
 - Banner: “No disturbance events yet”
 - Action: **Open Plant**
 - Checklist: Build Plant (SS → kV → Bay → Feeder → IED) → Fetch or upload on IED → Validate → Analyse → Consistency → RCA → Report
@@ -456,11 +455,12 @@ No fake demo events are seeded unless you explicitly enable a demo mode (not def
                          → tick record(s) → Fetch & create event
       b) or switch on Auto-fetch new records (server does it on schedule)
       c) or Manual upload → drop CFG+DAT / CFF / ZIP / vendor package
-8.  Confirm COMTRADE detection / validation
+8.  Confirm COMTRADE detection / validation (Overview Inputs chips help)
 9.  Setup → Channel map + DR targets (correct if auto-infer looks wrong)
 10. Start / Re-run analysis (background — watch the status lamps)
-      (fetched events with COMTRADE + settings start automatically)
-11. Inspect DR workspace / Waveforms / Sequence
+      (complete upload / fetch with COMTRADE + settings starts automatically
+       and lands on Summary)
+11. Read the one-page Summary, then Inspect DR workspace / Waveforms / Sequence
 12. Review Electrical + Fault + Location + Protection
 13. Study Consistency (setting source!)
 14. Study RCA + Evidence (+ cause enrichment if field evidence exists)
@@ -549,7 +549,14 @@ A segmented switch at the top of the panel selects how records come in:
 | **Fetch from IED** | The relay is reachable over the network (IEC 61850 / MMS). See [§10](#10-fetching-records-from-the-relay-iec-61850) and [§11](#11-automatic-fetch-auto-fetch) |
 | **Manual upload** | You have files exported from the relay tool, e-mail, USB, etc. See [§14](#14-uploading-files-manually) |
 
-**Manual upload** shows a drag-and-drop zone. Dropped or picked files appear as **file chips** (name + size, with × to remove) before you confirm; **Clear N files** empties the list. Clicking **Upload & create event** creates the event under this IED, starts analysis automatically when the package contains COMTRADE **and** settings, and opens the event’s **Files** tab.
+**Manual upload** shows a drag-and-drop zone. Dropped or picked files appear as **file chips** (name + size, with × to remove) before you confirm; **Clear N files** empties the list.
+
+| Package | Button label | What happens |
+|---------|--------------|--------------|
+| COMTRADE **and** settings present | **Upload, analyse & open summary** | Creates the event, starts analysis, opens the **Summary** tab |
+| Incomplete (e.g. CFG without DAT, or no settings) | **Upload & create event** | Creates the event only; a note asks for CFG + DAT (or CFF) and a settings file for automatic analysis |
+
+After a complete upload you land on **Summary** — the one-page disturbance story — not the Files tab. Use **Files** later if you need hashes or to add more attachments.
 
 ### Events for this IED
 
@@ -811,8 +818,9 @@ Event ID · Date/Time · Location (substation + bay) · Relay · **Fault / eleme
 1. **Plant** → expand to the IED → **Open**
 2. Select **Manual upload**
 3. Optionally type a description; drag and drop files (or click the zone to pick them); check the file chips
-4. Click **Upload & create event** — the event is created under that IED, analysis starts if COMTRADE + settings are present, and the Files tab opens
-5. Note **SHA-256** on the event **Files** tab (integrity / chain of custody)
+4. Click **Upload, analyse & open summary** (complete package) or **Upload & create event** (incomplete)
+5. For a complete package: analysis starts and the **Summary** tab opens. For incomplete: open **Files**, add the missing COMTRADE/settings members, then **Start analysis**
+6. Note **SHA-256** on the event **Files** tab when you need integrity / chain of custody
 
 Original files are stored **immutably** (content-addressed; not overwritten).
 
@@ -844,7 +852,7 @@ and SCL files from IEC 61850 fetch (`.cid .icd .scd`, stored as attachments).
 
 ### Deleting an event
 
-On **All events** → **Delete**, or open an event and click the **trash icon** (Delete event) in the header. Requires **ANALYST** (or higher). Confirm the dialog — the event and related DB records are removed. Stored file blobs remain content-addressed (immutable storage); they are not rewritten. Browser “Continue” memory for that event is cleared.
+On **All events** → **Delete**, or open an event and click the **trash icon** (Delete event) in the header. Requires **ANALYST** (or higher). Confirm the dialog — the event and related DB records (including reports) are removed. Stored file blobs remain content-addressed (immutable storage); they are not rewritten. Browser “Continue” memory for that event is cleared. The Dashboard **Events with reports** and **Total events** counts drop on the next Dashboard refresh.
 
 > Deleting an event that was created by IEC 61850 fetch does not delete anything on the relay.
 
@@ -965,6 +973,8 @@ Five engineering panels:
 4. **What is uncertain** — missing evidence, unverified settings, DQ, inconclusive items  
 5. **What should I verify** — deterministic recommended actions  
 
+**Inputs loaded** chips summarise what evidence files are present (COMTRADE package, settings, SOE / event report) in short engineer-readable phrases — useful before you trust protection timing or consistency.
+
 Plant labels (substation / bay / relay) and bay one-line context can be saved from Overview. Fault distance shows **NOT CALCULABLE** when inputs are missing (never invented).
 
 ### Files
@@ -1076,7 +1086,7 @@ RCA → Hypothesis → Finding → Calculation → Source → Raw data / file
 
 ### Summary / Report / Review
 
-**Summary** consolidates the event story on a printable sheet. **Report**: see [§23](#23-reports-html-pdf-json). Both always render as a light “paper” page, even in dark theme.
+**Summary** consolidates the event story on a printable one-page sheet (fault, protection, consistency, RCA, quality). After a complete **Manual upload** or package-ready fetch, the app often lands here first so you can read the story before drilling into tabs. **Report**: see [§23](#23-reports-html-pdf-json). Both always render as a light “paper” page, even in dark theme.
 
 | Review action | When to use |
 |--------|-------------|
@@ -1294,16 +1304,18 @@ Open event → **Report**.
 |--------|----------------|
 | **JSON** | Structured sections in the report record |
 | **HTML** | **Download HTML** — Jinja controlled templates / deterministic fallback |
-| **PDF** | **Download PDF** — ReportLab packaging of the engineering content |
+| **PDF** | **Download PDF** — professional multi-section PDF built from the **analysis payload** (ReportLab Platypus): cover, inputs, electrical / protection summary, consistency, RCA, quality. Layout uses consistent page frames and human-readable labels — not a scraped HTML print |
 
 The in-app preview is shown as a light page inside the workspace (its styles do not affect the rest of the application, and it stays readable in dark theme).
+
+Regenerating a report for the same event updates that event’s report artefacts; the Dashboard **Events with reports** KPI still counts the **event once** (not once per format or regeneration).
 
 API:
 
 - `POST /api/reports` with `format`: `JSON` | `HTML` | `PDF`  
 - `GET /api/reports/{id}/download`  
 
-Report statements distinguish **OBSERVED / CALCULATED / INFERRED / HYPOTHESIS**. Every conclusion must be traceable to structured data — no LLM prose.
+Report statements distinguish **OBSERVED / CALCULATED / INFERRED / HYPOTHESIS**. Every conclusion must be traceable to structured data — no LLM prose / generative AI.
 
 Print remains available via the browser print dialog.
 
@@ -1313,7 +1325,15 @@ Print remains available via the browser print dialog.
 
 ### Users
 
-Admins manage accounts and roles under **Users**.
+Admins open **Administration → Users** to manage local accounts (auth database).
+
+| Action | How |
+|--------|-----|
+| **Add user** | **Add user** → username, email, optional full name, role, active flag, password (min 8 characters) + confirm |
+| **Edit user** | Row **Edit** → change email, name, role, active. Password fields are **optional** — leave blank to keep the existing password; if you type a new password, confirm it (min 8 characters) |
+| **Delete user** | Row **Delete** → confirm. You **cannot** delete your own signed-in account. At least one admin should remain in operational use |
+
+Roles: **VIEWER**, **ANALYST**, **PROTECTION_ENGINEER**, **APPROVER**, **ADMIN** (see [§4](#4-roles-and-permissions)).
 
 ### SSO
 
@@ -1437,7 +1457,7 @@ Never treat fluent wording as stronger than status badges.
 A: Removed on purpose. Go to **Plant**, build Substation → Voltage → Bay → Feeder → IED, then **Open** the IED and use **Fetch from IED** or **Manual upload**.
 
 **Q: How do I create my first event?**  
-A: Plant → **+ Substation** → **+ Voltage** → **+ Bay** → **+ Feeder** → **+ IED** → **Open** → either Fetch from IED (IP → Test connection → Browse IED → Fetch & create event) or Manual upload (drop CFG/DAT or ZIP → Upload & create event).
+A: Plant → **+ Substation** → **+ Voltage** → **+ Bay** → **+ Feeder** → **+ IED** → **Open** → either Fetch from IED (IP → Test connection → Browse IED → Fetch & create event) or Manual upload (drop CFG/DAT + settings or ZIP → **Upload, analyse & open summary**).
 
 **Q: Default login?**  
 A: `admin` / `admin123` on a fresh auth database. Change it for production.
@@ -1445,8 +1465,8 @@ A: `admin` / `admin123` on a fresh auth database. Change it for production.
 **Q: Can the tool trip a breaker or change settings?**  
 A: No. OT control is disabled. IEC 61850 access is read-only.
 
-**Q: Does it use ChatGPT?**  
-A: No.
+**Q: Does it use ChatGPT / generative AI?**  
+A: No. Analysis and reports are deterministic / template-driven.
 
 ### IEC 61850 fetch
 
@@ -1489,10 +1509,13 @@ A: Upload / fetch under an IED so plant labels attach; complete analysis for fau
 A: Type any fragment of event number, station, bay, relay, fault, or protection code (e.g. `EVT-2026`, `IED-4`, `Bay 1`, `51N`). Use From/To for dates. **Clear filters** resets.
 
 **Q: Can I delete an event?**  
-A: Yes — All events **Delete**, or the trash icon in the event header (ANALYST+). Confirm first. Nothing on the relay is affected.
+A: Yes — All events **Delete**, or the trash icon in the event header (ANALYST+). Confirm first. Nothing on the relay is affected. Dashboard **Total events** and **Events with reports** drop after the next Dashboard refresh.
+
+**Q: Why did “Events with reports” change when I deleted an event?**  
+A: By design. The KPI counts **current events that have a report**, not historical file generations. Delete the event → its reports go with it → the count falls.
 
 **Q: KPI click does nothing useful**  
-A: It opens All events with a queue filter. Use **Clear filters** to reset.
+A: It opens All events with a queue filter (e.g. **Events with reports**). Use **Clear filters** to reset.
 
 **Q: Continue button still shows a deleted event**  
 A: Refresh the page after delete; the app prunes recent-event memory when the event is gone. You can also clear localStorage key `protection_rca_recent_events_v1`.
@@ -1536,7 +1559,13 @@ A: Setup → **Channel map**, correct roles, save, re-run.
 A: Yes where extractable (see [§14](#14-uploading-files-manually)). Opaque proprietary blobs stay unsupported — export CFG/DAT from the vendor tool.
 
 **Q: How do I get a PDF?**  
-A: Event → Report → **Download PDF**.
+A: Event → Report → **Download PDF**. The PDF is built from the analysis sections (professional layout), not a screenshot of the HTML page.
+
+**Q: After manual upload I landed on Summary — is that normal?**  
+A: Yes, when COMTRADE **and** settings were present. Analysis started automatically and Summary is the first place to read the story. Use the tab bar for Waveforms, Consistency, Report, etc.
+
+**Q: How do I add or remove users?**  
+A: ADMIN → **Users** → **Add user**, or **Edit** / **Delete** on a row. On edit, leave password blank to keep the current one. You cannot delete yourself.
 
 ### Portable / sharing
 
@@ -1691,14 +1720,18 @@ LOGIN      → admin / admin123 (bootstrap) or SSO if configured
 PLANT      → Substation → Voltage → Bay → Feeder → IED → Open
 FETCH      → IED → Fetch from IED → IP/Vendor → Test → Browse → tick → Fetch & create event
 AUTO       → IED → Auto-fetch new records → interval → (baseline first check)
-UPLOAD     → IED → Manual upload → drop CFG/DAT/CFF/ZIP/vendor → Upload & create event
+UPLOAD     → IED → Manual upload → CFG/DAT/CFF/ZIP + settings
+             → Upload, analyse & open summary (or Upload & create event)
 EVENT ID   → EVT-YYYY-NNNNN (auto) · legacy UUID → previous_event_id
 MAP        → Setup → Channel map + DR targets → save
-ANALYSE    → Start / Re-run analysis (background) → watch status lamps
+ANALYSE    → Auto on complete package, or Start / Re-run → status lamps
+SUMMARY    → One-page story (often first after upload)
 VERIFY     → Waveforms → Sequence → Consistency → RCA → Evidence
 CAUSE      → RCA cause enrichment (field evidence) → re-run
 FILTER     → All events: Search + From/To + Clear filters
-REPORT     → Download HTML or PDF
+DASHBOARD  → Events with reports = live events with a report
+REPORT     → Download HTML or professional PDF
+USERS      → ADMIN → Users → Add / Edit / Delete (password optional on edit)
 CLOSE-OUT  → Review (ACCEPT / MODIFY / REJECT / …)
 DELETE     → All events → Delete, or trash icon in event header (ANALYST+)
 AUDIT      → Administration → Audit (filter; "system" = automatic)
@@ -1708,4 +1741,4 @@ REMEMBER   → Read-only IEC 61850 · No invented data · No OT control · No ge
 
 ---
 
-*End of User Guide — Protection RCA Platform (document version 0.7.0)*
+*End of User Guide — Protection RCA Platform (document version 0.8.0)*

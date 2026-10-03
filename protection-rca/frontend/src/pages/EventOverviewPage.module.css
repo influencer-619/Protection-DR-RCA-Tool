@@ -1,0 +1,204 @@
+.brief {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 1200px) {
+  .brief {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .brief {
+    grid-template-columns: 1fr;
+  }
+}
+
+.card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  border-top: 3px solid var(--accent);
+  box-shadow: var(--shadow-panel, none);
+}
+
+.cardWhy {
+  border-top-color: #6b4ea2;
+}
+
+.cardSettings {
+  border-top-color: #2a7a9a;
+}
+
+.cardUncertain {
+  border-top-color: var(--sev-medium, #c48a1a);
+}
+
+.cardVerify {
+  border-top-color: #3d7a5a;
+}
+
+.label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 6px;
+  align-items: start;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.rowKey {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding-top: 2px;
+}
+
+.rowVal {
+  color: var(--text-primary);
+  font-weight: 600;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.headline {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.35;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.82rem;
+  font-style: italic;
+}
+
+.list {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.list li + li {
+  margin-top: 4px;
+}
+
+.listWarn {
+  color: var(--sev-medium, #a86b00);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.linkBtn {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--accent-bright, var(--accent));
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.linkBtn:hover {
+  background: var(--accent-soft, rgba(42, 122, 154, 0.12));
+}
+
+.files {
+  margin-bottom: 12px;
+  font-size: 0.82rem;
+}
+
+.files strong {
+  margin-right: 4px;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  max-width: min(100%, 22rem);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.chipLabel {
+  font-weight: 650;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.chipLabel::after {
+  content: ':';
+}
+
+.chipValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipOk {
+  color: var(--status-ok, #0b7a45);
+  background: color-mix(in srgb, var(--status-ok, #0b7a45) 10%, transparent);
+  border-color: color-mix(in srgb, var(--status-ok, #0b7a45) 28%, transparent);
+}
+
+.chipWarn {
+  color: var(--sev-medium, #a86b00);
+  background: color-mix(in srgb, var(--sev-medium, #a86b00) 12%, transparent);
+  border-color: color-mix(in srgb, var(--sev-medium, #a86b00) 30%, transparent);
+}

@@ -89,7 +89,6 @@ export function LoginPage() {
             Sign in with SSO (OIDC)
           </a>
         )}
-        <p className={styles.hint}>Engineering workstation access · JWT session · no generative AI</p>
       </div>
     </div>
   );

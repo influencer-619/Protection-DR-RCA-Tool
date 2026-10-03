@@ -213,6 +213,10 @@ def check_protection_sequence(
         if et in order and et not in times:
             times[et] = float(ev.get("timestamp", 0))
     present = [e for e in order if e in times]
+    expected = {
+        "order": "Pickup → Trip → Breaker → Interrupt",
+        "steps": ["protection_pickup", "protection_trip", "breaker_trip_command", "52a_change", "current_interruption"],
+    }
     if len(present) < 2:
         return new_finding(
             event_id=event_id,
@@ -220,8 +224,8 @@ def check_protection_sequence(
             check_type="protection_sequence",
             setting_source="N/A",
             setting_version="N/A",
-            expected="Pickup → Trip → Breaker → Current interruption",
-            observed=f"events present: {present}",
+            expected=expected,
+            observed={"present": present, "times_s": {}},
             status=ConsistencyStatus.UNVERIFIABLE.value,
             severity=Severity.LOW.value,
             explanation="Insufficient timeline events for sequence check",
@@ -237,8 +241,8 @@ def check_protection_sequence(
         check_type="protection_sequence",
         setting_source="N/A",
         setting_version="N/A",
-        expected="monotonic Pickup → Trip → Breaker → Interruption",
-        observed=str({k: times[k] for k in present}),
+        expected=expected,
+        observed={"times_s": {k: round(times[k], 4) for k in present}},
         status=(
             ConsistencyStatus.CONSISTENT.value
             if ok

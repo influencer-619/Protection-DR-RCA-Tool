@@ -73,6 +73,61 @@ _CHECK_LABELS = {
 }
 
 
+def _format_evidence_value(value: Any) -> str:
+    """Compact engineer-readable Expected/Observed for evidence summaries."""
+    if value is None:
+        return "—"
+    if isinstance(value, dict):
+        if "order" in value and isinstance(value.get("order"), str):
+            return str(value["order"]).removeprefix("monotonic ").strip()
+        times = value.get("times_s") if isinstance(value.get("times_s"), dict) else None
+        if times:
+            labels = {
+                "protection_pickup": "Pickup",
+                "protection_trip": "Trip",
+                "breaker_trip_command": "Trip command",
+                "52a_change": "Breaker (52a)",
+                "current_interruption": "Interrupt",
+            }
+            parts = []
+            for key, label in labels.items():
+                if key in times:
+                    try:
+                        parts.append(f"{label} {float(times[key]):.3f} s")
+                    except (TypeError, ValueError):
+                        parts.append(f"{label} {times[key]}")
+            if parts:
+                return " → ".join(parts)
+        if set(value.keys()) <= {
+            "protection_pickup",
+            "protection_trip",
+            "breaker_trip_command",
+            "52a_change",
+            "current_interruption",
+        }:
+            labels = {
+                "protection_pickup": "Pickup",
+                "protection_trip": "Trip",
+                "breaker_trip_command": "Trip command",
+                "52a_change": "Breaker (52a)",
+                "current_interruption": "Interrupt",
+            }
+            parts = []
+            for key, label in labels.items():
+                if key in value:
+                    try:
+                        parts.append(f"{label} {float(value[key]):.3f} s")
+                    except (TypeError, ValueError):
+                        parts.append(f"{label} {value[key]}")
+            if parts:
+                return " → ".join(parts)
+        if "value" in value and len(value) == 1:
+            return _format_evidence_value(value["value"])
+    text = str(value).strip()
+    text = text.removeprefix("monotonic ").strip()
+    return text
+
+
 def _humanize_evidence(ev: dict[str, Any]) -> tuple[str, str, str, str]:
     """Return (title, summary, polarity, evidence_key) for UI-friendly evidence rows."""
     param = str(ev.get("parameter") or ev.get("title") or "evidence")
@@ -82,18 +137,21 @@ def _humanize_evidence(ev: dict[str, Any]) -> tuple[str, str, str, str]:
 
     if param.startswith("rms:"):
         ch = param.split(":", 1)[1]
-        title = f"Measured RMS - channel {ch}"
+        title = f"Measured RMS — {ch}"
         unit = str(ev.get("unit") or "")
         val = ev.get("value")
-        summary = interp or (
-            f"Value {val} {unit}".strip() if val is not None else "RMS sample from COMTRADE"
-        )
-        polarity = "SUPPORTING" if "status=ok" in interp.lower() or not interp else "NEUTRAL"
+        if interp:
+            summary = interp.replace("status=", "Status: ").replace("status =", "Status:")
+        elif val is not None:
+            summary = f"Value {val} {unit}".strip()
+        else:
+            summary = "RMS sample from COMTRADE"
+        polarity = "SUPPORTING" if "status=ok" in interp.lower() or "status: ok" in summary.lower() or not interp else "NEUTRAL"
         return title, summary, polarity, key
 
     label = _CHECK_LABELS.get(param, param.replace("_", " ").title())
     if source == "PROTECTION_RULE":
-        title = f"Consistency check - {label}"
+        title = f"Consistency check — {label}"
     else:
         title = label
 
@@ -101,9 +159,11 @@ def _humanize_evidence(ev: dict[str, Any]) -> tuple[str, str, str, str]:
     observed = ev.get("observed")
     parts: list[str] = []
     if interp:
-        parts.append(interp)
+        parts.append(interp.removeprefix("monotonic ").strip())
     if expected is not None or observed is not None:
-        parts.append(f"Expected: {expected} · Observed: {observed}")
+        parts.append(
+            f"Expected: {_format_evidence_value(expected)} · Observed: {_format_evidence_value(observed)}"
+        )
     summary = " | ".join(parts) if parts else "Supporting calculation / rule output"
 
     low = summary.lower()
@@ -111,7 +171,7 @@ def _humanize_evidence(ev: dict[str, Any]) -> tuple[str, str, str, str]:
         polarity = "CONTRADICTING"
     elif "cannot verify" in low or "incomplete" in low or "not available" in low:
         polarity = "MISSING"
-    elif "consistent" in low or "status=ok" in low:
+    elif "consistent" in low or "status=ok" in low or "status: ok" in low:
         polarity = "SUPPORTING"
     else:
         polarity = "NEUTRAL"
@@ -413,6 +473,26 @@ async def persist_engineering_analysis(
         if relay_settings.get("_source_file"):
             extra["setting_file"] = relay_settings["_source_file"]
         extra["setting_param_count"] = len(setting_candidates)
+    def _side_status(payload: Any, *, kind: str) -> str:
+        if not payload:
+            return "NOT LOADED"
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, dict):
+            file_name = payload.get("file") or payload.get("filename") or kind
+            n = payload.get("events")
+            if n is None:
+                n = payload.get("n")
+            try:
+                count = int(n) if n is not None else None
+            except (TypeError, ValueError):
+                count = None
+            if count is not None:
+                unit = "event" if count == 1 else "events"
+                return f"{file_name} · {count} {unit}"
+            return str(file_name)
+        return str(payload)
+
     extra["file_processing"] = {
         "comtrade": "OK" if record.samples else "NO_SAMPLES",
         "settings": (
@@ -420,8 +500,8 @@ async def persist_engineering_analysis(
             if setting_candidates
             else "NOT LOADED"
         ),
-        "soe": side_summary.get("soe") or "NOT LOADED",
-        "event_report": side_summary.get("event_report") or "NOT LOADED",
+        "soe": _side_status(side_summary.get("soe"), kind="SOE"),
+        "event_report": _side_status(side_summary.get("event_report"), kind="event report"),
         "line_params": "OK" if line_params else "NOT LOADED",
         "ct_vt": "OK" if ct_vt_ratios else "NOT LOADED",
         "param_keys_detected": param_detected_keys or None,
