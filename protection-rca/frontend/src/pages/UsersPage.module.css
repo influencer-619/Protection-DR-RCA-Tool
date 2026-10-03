@@ -15,6 +15,26 @@
   text-align: center;
 }
 
+.activePill,
+.inactivePill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.activePill {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.inactivePill {
+  color: #64748b;
+  background: #eef2f6;
+}
+
 .formGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;

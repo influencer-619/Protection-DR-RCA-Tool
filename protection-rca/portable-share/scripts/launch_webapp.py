@@ -19,7 +19,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 
 API_BIND = os.environ.get("PROTECTION_RCA_HOST", "0.0.0.0").strip() or "0.0.0.0"
@@ -75,7 +75,25 @@ def wait_port(host: str, port: int, timeout_s: float = 90.0) -> bool:
     while time.time() < deadline:
         if port_open(host, port):
             return True
-        time.sleep(0.4)
+        time.sleep(0.15)
+    return False
+
+
+def wait_health(host: str, port: int, timeout_s: float = 90.0) -> bool:
+    """Wait until /api/health returns OK (API finished lifespan startup)."""
+    import urllib.error
+    import urllib.request
+
+    url = f"http://{host}:{port}/api/health"
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=0.8) as resp:
+                if getattr(resp, "status", 200) == 200:
+                    return True
+        except (urllib.error.URLError, TimeoutError, OSError):
+            pass
+        time.sleep(0.12)
     return False
 
 
@@ -470,6 +488,8 @@ def start_backend(root: Path, *, portable: bool) -> None:
         # Keep a Python installed on this PC (if any) out of the bundled runtime.
         env.pop("PYTHONHOME", None)
         env["PYTHONNOUSERSITE"] = "1"
+        # Prefer existing .pyc from portable compileall (faster cold start).
+        env.pop("PYTHONDONTWRITEBYTECODE", None)
     # Absolute sqlite path so relaunch / cwd changes don't orphan the DB
     db = backend / "protection_rca_local.db"
     env.setdefault(
@@ -551,67 +571,60 @@ def start_frontend(root: Path) -> None:
     )
 
 
-def run_control_window(*, portable: bool) -> None:
-    """Keep UI open until user closes it — then shut everything down."""
+def run_control_window(*, portable: bool, boot: Callable[[], None]) -> int:
+    """Show the control window immediately, boot services in a background thread."""
     import tkinter as tk
     from tkinter import font as tkfont
 
     local = local_ui_url(portable)
-    lan = network_urls(portable)
-    lan_text = "\n".join(f"  LAN: {u}" for u in lan[:3]) if lan else "  LAN: (no private IP detected)"
     mode = "Portable (API+UI on one port)" if portable else "Dev (Vite UI + API)"
     docs = f"http://127.0.0.1:{API_PORT}/docs"
+    exit_code = 0
 
-    root = tk.Tk()
-    root.title("Protection RCA")
-    root.geometry("520x320")
-    root.minsize(520, 300)
-    root.resizable(False, False)
-    root.configure(bg="#0f172a")
+    win = tk.Tk()
+    win.title("Protection RCA")
+    win.geometry("520x340")
+    win.minsize(520, 320)
+    win.resizable(False, False)
+    win.configure(bg="#0f172a")
 
     title_font = tkfont.Font(family="Segoe UI", size=14, weight="bold")
     body_font = tkfont.Font(family="Segoe UI", size=10)
     btn_font = tkfont.Font(family="Segoe UI", size=11, weight="bold")
 
-    tk.Label(
-        root,
-        text="Protection RCA is running",
+    title = tk.Label(
+        win,
+        text="Starting Protection RCA…",
         fg="#e2e8f0",
         bg="#0f172a",
         font=title_font,
-    ).pack(pady=(20, 6))
+    )
+    title.pack(pady=(20, 6))
 
-    tk.Label(
-        root,
-        text=(
-            f"{mode}\n\n"
-            f"This PC: {local}\n"
-            f"API docs: {docs}\n"
-            f"{lan_text}\n\n"
-            "Others on your network open a LAN URL above.\n"
-            "Allow Windows Firewall for the port if asked.\n"
-            "Close this window to shut everything down."
-        ),
+    body = tk.Label(
+        win,
+        text=f"{mode}\n\nStarting API on port {API_PORT}…\nPlease wait a few seconds.",
         fg="#94a3b8",
         bg="#0f172a",
         font=body_font,
         justify="left",
-    ).pack(padx=24)
+    )
+    body.pack(padx=24)
 
     def on_close() -> None:
         try:
-            root.withdraw()
+            win.withdraw()
         except Exception:
             pass
         shutdown_all()
         try:
-            root.destroy()
+            win.destroy()
         except Exception:
             pass
 
-    root.protocol("WM_DELETE_WINDOW", on_close)
+    win.protocol("WM_DELETE_WINDOW", on_close)
 
-    btn_wrap = tk.Frame(root, bg="#0f172a")
+    btn_wrap = tk.Frame(win, bg="#0f172a")
     btn_wrap.pack(pady=(12, 18))
     btn = tk.Label(
         btn_wrap,
@@ -627,21 +640,50 @@ def run_control_window(*, portable: bool) -> None:
         highlightthickness=0,
     )
     btn.pack()
+    btn.bind("<Enter>", lambda _: btn.configure(bg="#dc2626"))
+    btn.bind("<Leave>", lambda _: btn.configure(bg="#b91c1c"))
+    btn.bind("<Button-1>", lambda _: on_close())
 
-    def _btn_enter(_: object) -> None:
-        btn.configure(bg="#dc2626")
+    def set_ready() -> None:
+        nonlocal exit_code
+        lan = network_urls(portable)
+        lan_text = (
+            "\n".join(f"  LAN: {u}" for u in lan[:3]) if lan else "  LAN: (no private IP detected)"
+        )
+        title.configure(text="Protection RCA is running")
+        body.configure(
+            text=(
+                f"{mode}\n\n"
+                f"This PC: {local}\n"
+                f"API docs: {docs}\n"
+                f"{lan_text}\n\n"
+                "Others on your network open a LAN URL above.\n"
+                "Allow Windows Firewall for the port if asked.\n"
+                "Close this window to shut everything down."
+            )
+        )
+        try:
+            webbrowser.open(local)
+        except Exception:
+            pass
 
-    def _btn_leave(_: object) -> None:
-        btn.configure(bg="#b91c1c")
+    def set_failed(message: str) -> None:
+        nonlocal exit_code
+        exit_code = 1
+        title.configure(text="Startup failed")
+        body.configure(text=message[:900], fg="#fca5a5")
 
-    def _btn_click(_: object) -> None:
-        on_close()
+    def worker() -> None:
+        try:
+            boot()
+            win.after(0, set_ready)
+        except Exception as exc:
+            msg = str(exc)
+            win.after(0, lambda m=msg: set_failed(m))
 
-    btn.bind("<Enter>", _btn_enter)
-    btn.bind("<Leave>", _btn_leave)
-    btn.bind("<Button-1>", _btn_click)
-
-    root.mainloop()
+    threading.Thread(target=worker, daemon=True).start()
+    win.mainloop()
+    return exit_code
 
 
 def main() -> int:
@@ -691,31 +733,34 @@ def main() -> int:
             error_box("Protection RCA", problem)
             return 1
 
-    try:
+    def boot() -> None:
         start_backend(root, portable=portable)
-        if not wait_port(API_CHECK_HOST, API_PORT, 90):
-            log = api_log_path(root)
-            tail = log_tail(log)
-            raise RuntimeError(
-                f"API did not start on port {API_PORT}.\n\n"
-                + (f"Last lines of {log}:\n\n{tail}" if tail else f"No output in {log}.")
-            )
+        if not wait_health(API_CHECK_HOST, API_PORT, 90):
+            if not wait_port(API_CHECK_HOST, API_PORT, 5):
+                log = api_log_path(root)
+                tail = log_tail(log)
+                raise RuntimeError(
+                    f"API did not start on port {API_PORT}.\n\n"
+                    + (f"Last lines of {log}:\n\n{tail}" if tail else f"No output in {log}.")
+                )
+            # Port is up but health lagged — give health one more window.
+            if not wait_health(API_CHECK_HOST, API_PORT, 30):
+                log = api_log_path(root)
+                tail = log_tail(log)
+                raise RuntimeError(
+                    f"API port {API_PORT} opened but /api/health did not become ready.\n\n"
+                    + (f"Last lines of {log}:\n\n{tail}" if tail else f"No output in {log}.")
+                )
         if not portable:
             start_frontend(root)
             if not wait_port(UI_CHECK_HOST, UI_PORT, 120):
                 raise RuntimeError(f"UI did not start on port {UI_PORT}.")
-    except Exception as exc:
-        shutdown_all()
-        error_box("Protection RCA", str(exc))
-        return 1
 
-    open_url = local_ui_url(portable)
-    threading.Timer(0.4, lambda: webbrowser.open(open_url)).start()
     try:
-        run_control_window(portable=portable)
+        code = run_control_window(portable=portable, boot=boot)
     finally:
         shutdown_all()
-    return 0
+    return code
 
 
 if __name__ == "__main__":

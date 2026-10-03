@@ -25,6 +25,30 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         return response
 
 
+def _is_spa_asset(path: str) -> bool:
+    """Hashed frontend assets / public files — must not be rate-limited or no-store."""
+    if path.startswith("/assets/") or path.startswith("/assets"):
+        return True
+    lower = path.lower()
+    return lower.endswith(
+        (
+            ".js",
+            ".css",
+            ".map",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".svg",
+            ".ico",
+            ".webp",
+            ".md",
+        )
+    )
+
+
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add standard security headers. Read-only / analysis APIs only."""
 
@@ -33,7 +57,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Cache-Control"] = "no-store"
+        # API responses must not be cached; hashed SPA assets may be cached.
+        if _is_spa_asset(request.url.path):
+            response.headers.setdefault(
+                "Cache-Control", "public, max-age=31536000, immutable"
+            )
+        else:
+            response.headers["Cache-Control"] = "no-store"
         response.headers["X-XSS-Protection"] = "0"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
         # OT safety marker: this platform has no breaker/relay control endpoints
@@ -54,7 +84,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if request.method == "OPTIONS":
             return await call_next(request)
-        if request.url.path in ("/health", "/api/health", "/docs", "/openapi.json", "/redoc"):
+        path = request.url.path
+        if path in ("/health", "/api/health", "/docs", "/openapi.json", "/redoc"):
+            return await call_next(request)
+        # Never throttle SPA chunks — a 429 JSON body breaks lazy routes (blank page).
+        if _is_spa_asset(path):
             return await call_next(request)
 
         client = request.client.host if request.client else "unknown"

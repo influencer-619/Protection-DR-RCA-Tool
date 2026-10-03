@@ -5,10 +5,17 @@ Packaged from current backend .py, rules, frontend\dist,
 and ProtectionRCA.exe. Includes its own Python in python\
 (no Python / Visual Studio / pip install needed on this PC).
 
+DATABASE
+  Ships with a BLANK plant/events database. First start creates
+  empty SQLite files under backend\ and bootstrap admin:
+    username: admin
+    password: admin123
+  Change the password after first login.
+
 START
-  1. Copy this whole folder anywhere.
+  1. Copy this WHOLE folder anywhere (keep _internal next to the EXE).
   2. Double-click ProtectionRCA.exe
-  3. Browser opens http://127.0.0.1:8001/
+  3. Browser opens http://127.0.0.1:8001/ when the API is ready
   4. Keep the control window open while using the app.
 
 LAN SHARE

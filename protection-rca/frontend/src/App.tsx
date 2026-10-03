@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { Skeleton } from '@/components/Skeleton';
 import { AppLayout } from '@/layouts/AppLayout';
 import { EventLayout } from '@/layouts/EventLayout';
@@ -95,52 +96,54 @@ function RouteFallback() {
 
 export default function App() {
   return (
-    <Suspense fallback={<RouteFallback />}>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
+    <RouteErrorBoundary>
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
 
-        <Route element={<ProtectedRoute />}>
-          <Route path="/events/:id/waveforms/popout" element={<WaveformPage popout />} />
+          <Route element={<ProtectedRoute />}>
+            <Route path="/events/:id/waveforms/popout" element={<WaveformPage popout />} />
 
-          <Route element={<AppLayout />}>
-            <Route path="/" element={<Navigate to="/plant" replace />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
-            <Route path="/plant" element={<PlantPage />} />
-            <Route path="/plant/ieds/:iedId" element={<IedWorkspacePage />} />
-            <Route path="/events" element={<EventsListPage />} />
-            <Route path="/events/compare" element={<CompareEventsPage />} />
-            <Route path="/events/new" element={<Navigate to="/plant" replace />} />
-            <Route path="/upload" element={<Navigate to="/plant" replace />} />
-            <Route path="/help" element={<HelpPage />} />
-            <Route path="/users" element={<UsersPage />} />
-            <Route path="/audit" element={<AuditPage />} />
+            <Route element={<AppLayout />}>
+              <Route path="/" element={<Navigate to="/plant" replace />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/plant" element={<PlantPage />} />
+              <Route path="/plant/ieds/:iedId" element={<IedWorkspacePage />} />
+              <Route path="/events" element={<EventsListPage />} />
+              <Route path="/events/compare" element={<CompareEventsPage />} />
+              <Route path="/events/new" element={<Navigate to="/plant" replace />} />
+              <Route path="/upload" element={<Navigate to="/plant" replace />} />
+              <Route path="/help" element={<HelpPage />} />
+              <Route path="/users" element={<UsersPage />} />
+              <Route path="/audit" element={<AuditPage />} />
 
-            <Route path="/events/:id" element={<EventLayout />}>
-              <Route index element={<Navigate to="summary" replace />} />
-              <Route path="overview" element={<EventOverviewPage />} />
-              <Route path="summary" element={<EventSummaryPage />} />
-              <Route path="files" element={<EventFilesPage />} />
-              <Route path="comtrade" element={<EventComtradePage />} />
-              <Route path="channel-map" element={<ChannelMappingPage />} />
-              <Route path="digital-map" element={<DigitalTargetsPage />} />
-              <Route path="dr" element={<DrWorkspacePage />} />
-              <Route path="waveforms" element={<WaveformPage />} />
-              <Route path="timeline" element={<TimelinePage />} />
-              <Route path="fault-characteristics" element={<FaultCharacteristicsPage />} />
-              <Route path="fault-location" element={<FaultLocationPage />} />
-              <Route path="electrical" element={<ElectricalPage />} />
-              <Route path="protection" element={<ProtectionPage />} />
-              <Route path="consistency" element={<ConsistencyPage />} />
-              <Route path="rca" element={<RcaPage />} />
-              <Route path="evidence" element={<EvidencePage />} />
-              <Route path="report" element={<ReportPage />} />
-              <Route path="review" element={<ReviewPage />} />
+              <Route path="/events/:id" element={<EventLayout />}>
+                <Route index element={<Navigate to="summary" replace />} />
+                <Route path="overview" element={<EventOverviewPage />} />
+                <Route path="summary" element={<EventSummaryPage />} />
+                <Route path="files" element={<EventFilesPage />} />
+                <Route path="comtrade" element={<EventComtradePage />} />
+                <Route path="channel-map" element={<ChannelMappingPage />} />
+                <Route path="digital-map" element={<DigitalTargetsPage />} />
+                <Route path="dr" element={<DrWorkspacePage />} />
+                <Route path="waveforms" element={<WaveformPage />} />
+                <Route path="timeline" element={<TimelinePage />} />
+                <Route path="fault-characteristics" element={<FaultCharacteristicsPage />} />
+                <Route path="fault-location" element={<FaultLocationPage />} />
+                <Route path="electrical" element={<ElectricalPage />} />
+                <Route path="protection" element={<ProtectionPage />} />
+                <Route path="consistency" element={<ConsistencyPage />} />
+                <Route path="rca" element={<RcaPage />} />
+                <Route path="evidence" element={<EvidencePage />} />
+                <Route path="report" element={<ReportPage />} />
+                <Route path="review" element={<ReviewPage />} />
+              </Route>
             </Route>
           </Route>
-        </Route>
 
-        <Route path="*" element={<Navigate to="/plant" />} />
-      </Routes>
-    </Suspense>
+          <Route path="*" element={<Navigate to="/plant" />} />
+        </Routes>
+      </Suspense>
+    </RouteErrorBoundary>
   );
 }

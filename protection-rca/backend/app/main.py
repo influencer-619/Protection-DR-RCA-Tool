@@ -75,6 +75,8 @@ async def _renumber_legacy_events() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    import asyncio
+
     settings = get_settings()
     logger.info("starting", env=settings.app_env, version=settings.app_version)
     await init_db()
@@ -82,8 +84,21 @@ async def lifespan(_app: FastAPI):
     await _renumber_legacy_events()
     from app.services.iec61850 import auto_fetch
 
-    auto_fetch.start_scheduler()
+    # Defer auto-fetch so /api/health and the SPA become ready sooner.
+    async def _start_auto_fetch_later() -> None:
+        await asyncio.sleep(2.0)
+        try:
+            auto_fetch.start_scheduler()
+        except Exception as exc:  # noqa: BLE001 — never block shutdown path
+            logger.warning("auto_fetch_start_failed", error=str(exc))
+
+    af_task = asyncio.create_task(_start_auto_fetch_later())
     yield
+    af_task.cancel()
+    try:
+        await af_task
+    except asyncio.CancelledError:
+        pass
     await auto_fetch.stop_scheduler()
     logger.info("shutdown")
 

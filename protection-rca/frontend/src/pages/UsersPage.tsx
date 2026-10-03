@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from '@/services/api';
 import { useAuth } from '@/hooks/useAuth';
 import type { User, UserRole } from '@/types';
-import { StatusBadge } from '@/components/StatusBadge';
 import styles from './UsersPage.module.css';
 
 const ROLES: { value: UserRole; label: string }[] = [
@@ -160,7 +159,7 @@ export function UsersPage() {
     }
     if (
       !window.confirm(
-        `Delete user “${u.username}”?\n\nThis permanently removes the account. This cannot be undone.`,
+        `Delete user "${u.username}"?\n\nThis permanently removes the account. This cannot be undone.`,
       )
     ) {
       return;
@@ -232,14 +231,16 @@ export function UsersPage() {
                     <td>{r.email}</td>
                     <td className="mono">{r.role}</td>
                     <td>
-                      <StatusBadge
-                        status={r.is_active ? 'COMPLETED' : 'CANCELLED'}
-                        label={r.is_active ? 'ACTIVE' : 'INACTIVE'}
-                      />
+                      <span className={r.is_active ? styles.activePill : styles.inactivePill}>
+                        {r.is_active ? 'ACTIVE' : 'INACTIVE'}
+                      </span>
                     </td>
                     <td className="mono">
                       {r.last_login_at
-                        ? new Date(r.last_login_at).toLocaleString()
+                        ? (() => {
+                            const d = new Date(r.last_login_at);
+                            return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+                          })()
                         : '—'}
                     </td>
                     <td>

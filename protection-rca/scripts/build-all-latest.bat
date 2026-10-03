@@ -61,7 +61,7 @@ if errorlevel 1 (
 echo [2/3] Frontend OK
 
 echo.
-echo [3/3] ProtectionRCA.exe — rebuild launcher from latest scripts\launch_webapp.py ...
+echo [3/3] ProtectionRCA.exe — rebuild launcher ^(onedir = fast start, no extract^) ...
 REM Unlock previous EXE if still running (common Access denied cause)
 tasklist /FI "IMAGENAME eq ProtectionRCA.exe" 2>nul | find /I "ProtectionRCA.exe" >nul
 if not errorlevel 1 (
@@ -69,8 +69,10 @@ if not errorlevel 1 (
   taskkill /F /IM ProtectionRCA.exe >nul 2>&1
   timeout /t 2 /nobreak >nul
 )
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed --name ProtectionRCA ^
-  --distpath "%ROOT%" ^
+REM onedir: EXE + _internal next to app folders. onefile re-extracts ~12MB every start (slow).
+if exist "%ROOT%\scripts\build\dist\ProtectionRCA" rmdir /s /q "%ROOT%\scripts\build\dist\ProtectionRCA"
+"%PY%" -m PyInstaller --noconfirm --clean --onedir --windowed --name ProtectionRCA ^
+  --distpath "%ROOT%\scripts\build\dist" ^
   --workpath "%ROOT%\scripts\build\work" ^
   --specpath "%ROOT%\scripts\build" ^
   "%ROOT%\scripts\launch_webapp.py"
@@ -81,18 +83,30 @@ if errorlevel 1 (
   echo   Or run: taskkill /F /IM ProtectionRCA.exe
   exit /b 1
 )
+if not exist "%ROOT%\scripts\build\dist\ProtectionRCA\ProtectionRCA.exe" (
+  echo ERROR: onedir launcher not created.
+  exit /b 1
+)
+del /q "%ROOT%\ProtectionRCA.exe" 2>nul
+if exist "%ROOT%\_internal" rmdir /s /q "%ROOT%\_internal"
+copy /Y "%ROOT%\scripts\build\dist\ProtectionRCA\ProtectionRCA.exe" "%ROOT%\ProtectionRCA.exe" >nul
+robocopy "%ROOT%\scripts\build\dist\ProtectionRCA\_internal" "%ROOT%\_internal" /E /NFL /NDL /NJH /NJS /nc /ns /np >nul
 if not exist "%ROOT%\ProtectionRCA.exe" (
   echo ERROR: ProtectionRCA.exe not created.
   exit /b 1
 )
-echo [3/3] EXE OK — %ROOT%\ProtectionRCA.exe
+if not exist "%ROOT%\_internal" (
+  echo ERROR: _internal runtime folder missing next to ProtectionRCA.exe
+  exit /b 1
+)
+echo [3/3] EXE OK — %ROOT%\ProtectionRCA.exe + _internal\
 
 echo.
 echo ============================================================
 echo  ALL LATEST CODES READY
 echo    Backend : %ROOT%\backend  ^(latest .py; existing venv^)
 echo    UI      : %ROOT%\frontend\dist
-echo    EXE     : %ROOT%\ProtectionRCA.exe
+echo    EXE     : %ROOT%\ProtectionRCA.exe + _internal\
 echo    Rules   : %ROOT%\rules
 echo ============================================================
 endlocal

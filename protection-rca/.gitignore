@@ -15,8 +15,10 @@ htmlcov/
 .tools/
 scripts/build/
 
-# PyInstaller
+# PyInstaller launcher (onedir: EXE + _internal next to app)
 *.spec
+ProtectionRCA.exe
+_internal/
 
 # Storage / uploads
 backend/storage/
