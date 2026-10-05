@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from comtrade.canonical.model import (
     CanonicalDisturbanceRecord,
     DigitalChannel,
@@ -12,7 +14,12 @@ from protection.digital_targets import is_assert_transition, resolve_digital_tar
 from protection.engine import observations_from_timeline
 
 
-def _record_with_digitals(series_by_name: dict[str, list[int]], *, normal: int = 0):
+def _record_with_digitals(
+    series_by_name: dict[str, list[int]],
+    *,
+    normal: int = 0,
+    start_time: datetime | None = None,
+):
     n = max(len(v) for v in series_by_name.values())
     fs = 4000.0
     return CanonicalDisturbanceRecord(
@@ -23,6 +30,7 @@ def _record_with_digitals(series_by_name: dict[str, list[int]], *, normal: int =
         station="S",
         device="R",
         nominal_frequency=50.0,
+        start_time=start_time,
         timestamps=[int(i * (1e6 / fs)) for i in range(n)],
         sample_rates=[SampleRateSection(sample_rate_hz=fs, end_sample=n)],
         analog_channels=[],
@@ -83,7 +91,45 @@ def test_ignore_role_skips_channel():
     assert not any(e.source == "digital:TRIP_A" for e in events)
 
 
+def test_absolute_time_from_cfg_start_plus_relative():
+    """IEEE practice: absolute = CFG start_time + relative sample time."""
+    start = datetime(2026, 8, 19, 17, 5, 11, tzinfo=timezone.utc)
+    # assert at sample index 5 → t = 5/4000 = 0.00125 s
+    series = {"21_TRIP": [0] * 5 + [1] * 10}
+    record = _record_with_digitals(series, start_time=start)
+    events = reconstruct_timeline(record)
+    trips = [e for e in events if e.event_type == "protection_trip"]
+    assert len(trips) == 1
+    abs_s = trips[0].metadata.get("absolute_time")
+    assert abs_s
+    abs_dt = datetime.fromisoformat(str(abs_s).replace("Z", "+00:00"))
+    expected = start.timestamp() + trips[0].timestamp
+    assert abs(abs_dt.timestamp() - expected) < 1e-6
+
+
 def test_resolve_flat_map_syntax():
     role, el = resolve_digital_target("X", digital_map={"X": "PICKUP|51"})
     assert role == "PICKUP"
     assert el == "51"
+
+
+def test_orphan_trip_cmd_attributed_to_pickup_element():
+    """Shared TRIP_CMD (no ANSI in name) → trip on the element that picked up."""
+    series = {
+        "51P_PICKUP": [0] * 10 + [1] * 40,
+        "50P_INST_TRIP": [0] * 50,
+        "TRIP_CMD": [0] * 30 + [1] * 20,
+        "CB_52A_STATUS": [1] * 40 + [0] * 10,
+    }
+    record = _record_with_digitals(series)
+    events = reconstruct_timeline(record)
+    assert any(
+        e.event_type == "protection_trip" and e.source == "digital:TRIP_CMD" for e in events
+    )
+    obs = observations_from_timeline(events)
+    assert obs["51P"].pickup is True
+    assert obs["51P"].trip is True
+    assert obs["51P"].trip_time_s is not None
+    assert "TRIP_CMD" in obs["51P"].channel_evidence
+    # Instantaneous trip channel present but never asserted
+    assert obs.get("50P") is None or obs["50P"].trip is not True

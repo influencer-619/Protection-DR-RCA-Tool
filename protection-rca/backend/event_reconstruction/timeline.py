@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import numpy as np
@@ -74,6 +75,44 @@ def _rms_envelope(series: np.ndarray, fs: float, f0: float) -> np.ndarray:
     kernel = np.ones(window) / window
     mean_sq = np.convolve(series**2, kernel, mode="same")
     return np.sqrt(np.maximum(mean_sq, 0))
+
+
+def _cfg_start_for_absolute(record: CanonicalDisturbanceRecord) -> Optional[datetime]:
+    """COMTRADE CFG file start (first sample) — base for absolute sequence times."""
+    start = getattr(record, "start_time", None)
+    if start is None or not isinstance(start, datetime):
+        return None
+    # Treat missing / placeholder epochs as no absolute clock
+    if start.year < 1990:
+        return None
+    if start.tzinfo is None:
+        return start.replace(tzinfo=timezone.utc)
+    return start
+
+
+def stamp_absolute_times(
+    events: list[TimelineEvent],
+    record: CanonicalDisturbanceRecord,
+) -> list[TimelineEvent]:
+    """Set metadata.absolute_time = CFG start + relative seconds (IEEE C37.111).
+
+    Leaves existing absolute_time (e.g. from SOE) unchanged.
+    """
+    start = _cfg_start_for_absolute(record)
+    if start is None:
+        return events
+    for e in events:
+        meta = e.metadata if isinstance(e.metadata, dict) else {}
+        if meta.get("absolute_time"):
+            continue
+        try:
+            abs_dt = start + timedelta(seconds=float(e.timestamp))
+            meta = dict(meta)
+            meta["absolute_time"] = abs_dt.isoformat()
+            e.metadata = meta
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return events
 
 
 def reconstruct_timeline(
@@ -243,4 +282,5 @@ def reconstruct_timeline(
                 continue
             seen_fi = True
         deduped.append(e)
-    return deduped
+    # Absolute wall-clock from CFG start + relative sample time (standard practice)
+    return stamp_absolute_times(deduped, record)

@@ -817,7 +817,8 @@ export function DashboardPage() {
               <thead>
                 <tr>
                   <th>Event ID</th>
-                  <th>Date/Time</th>
+                  <th title="Relay disturbance / COMTRADE trigger time">DR time</th>
+                  <th title="When this event was created in Protection RCA">Created</th>
                   <th>Substation / Bay</th>
                   <th>Relay</th>
                   <th>Fault</th>
@@ -832,7 +833,7 @@ export function DashboardPage() {
               <tbody>
                 {recent.length === 0 && (
                   <tr>
-                    <td colSpan={11} className={styles.chartEmpty}>
+                    <td colSpan={12} className={styles.chartEmpty}>
                       No disturbance events yet. Create your first event by uploading a
                       disturbance package.
                     </td>
@@ -845,9 +846,14 @@ export function DashboardPage() {
                         {ev.event_id}
                       </Link>
                     </td>
-                    <td className="num">
+                    <td className="num" title="Relay disturbance / COMTRADE trigger time">
                       {ev.event_datetime
                         ? format(parseISO(ev.event_datetime), 'yyyy-MM-dd HH:mm')
+                        : '—'}
+                    </td>
+                    <td className="num" title="Created in this application">
+                      {ev.created_at
+                        ? format(parseISO(ev.created_at), 'yyyy-MM-dd HH:mm')
                         : '—'}
                     </td>
                     <td>{ev.location}</td>

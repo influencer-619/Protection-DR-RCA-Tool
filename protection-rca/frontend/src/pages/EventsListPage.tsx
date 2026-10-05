@@ -74,6 +74,7 @@ function parseLocalInput(value: string): Date | null {
 }
 
 function eventWhen(ev: Event): Date | null {
+  /** Prefer relay DR time for filters; fall back to system create time. */
   const raw = ev.event_datetime || ev.created_at;
   if (!raw) return null;
   try {
@@ -81,6 +82,16 @@ function eventWhen(ev: Event): Date | null {
     return isValid(d) ? d : null;
   } catch {
     return null;
+  }
+}
+
+function fmtStamp(raw?: string | null): string {
+  if (!raw) return '—';
+  try {
+    const d = parseISO(raw);
+    return isValid(d) ? format(d, 'yyyy-MM-dd HH:mm') : '—';
+  } catch {
+    return '—';
   }
 }
 
@@ -277,7 +288,8 @@ export function EventsListPage() {
             <thead>
               <tr>
                 <th>Event ID</th>
-                <th>Date/Time</th>
+                <th title="Disturbance time from the relay COMTRADE record">DR time</th>
+                <th title="When this event was created in Protection RCA">Created</th>
                 <th>Location</th>
                 <th>Relay</th>
                 <th>Fault / element</th>
@@ -291,7 +303,7 @@ export function EventsListPage() {
               {!loading && filtered.length === 0 && (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     style={{ textAlign: 'center', padding: 28, color: 'var(--text-muted)' }}
                   >
                     {events.length === 0 ? (
@@ -317,10 +329,11 @@ export function EventsListPage() {
                       {ev.event_id}
                     </Link>
                   </td>
-                  <td className="num">
-                    {ev.event_datetime
-                      ? format(new Date(ev.event_datetime), 'yyyy-MM-dd HH:mm')
-                      : '—'}
+                  <td className="num" title="Relay disturbance / COMTRADE trigger time">
+                    {fmtStamp(ev.event_datetime)}
+                  </td>
+                  <td className="num" title="Created in this application">
+                    {fmtStamp(ev.created_at)}
                   </td>
                   <td>
                     {ev.substation_name ??

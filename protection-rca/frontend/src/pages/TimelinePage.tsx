@@ -1,23 +1,53 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { format, isValid, parseISO } from 'date-fns';
 import { api } from '@/services/api';
 import type { TimelineEntry } from '@/types';
 import { EmptyState } from '@/components/EmptyState';
 import { SettingsObservedStrip } from '@/components/SettingsObservedStrip';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import {
+  buildTimelineCardInfo,
+  matchTimelineType,
+  timelineEventTitle,
+} from '@/utils/timelineCardInfo';
 import styles from './TimelinePage.module.css';
 
 function digitalId(e: TimelineEntry): string {
-  return e.label || e.event_type || '—';
+  const info = buildTimelineCardInfo(e);
+  return info.title || e.label || e.event_type || '—';
+}
+
+/** Wall-clock from CFG start + relative (DR) or SOE stamp. */
+function fmtAbsolute(raw?: string | null): string {
+  if (!raw) return '—';
+  try {
+    const d = parseISO(raw);
+    if (!isValid(d)) return raw;
+    return format(d, 'yyyy-MM-dd HH:mm:ss.SSS');
+  } catch {
+    return raw;
+  }
 }
 
 function assertedValue(e: TimelineEntry): string {
+  const info = buildTimelineCardInfo(e);
+  if (info.transition) return info.transition;
+  const state = info.facts.find((f) => f.label === 'State');
+  if (state) return state.value;
   const d = e.details as Record<string, unknown> | null | undefined;
   if (d && typeof d.value !== 'undefined') return String(d.value);
   if (d && typeof d.asserted !== 'undefined') return String(d.asserted);
   const t = (e.event_type || '').toUpperCase();
   if (t.includes('DROPOUT') || t.includes('RESET') || t.includes('DPO')) return 'False';
   return 'True';
+}
+
+function firstObservedSeconds(entries: TimelineEntry[], types: string[]): number | null {
+  const hit = [...entries]
+    .filter((t) => matchTimelineType(t.event_type || '', types))
+    .sort((a, b) => (a.t_us ?? Number.MAX_SAFE_INTEGER) - (b.t_us ?? Number.MAX_SAFE_INTEGER))[0];
+  return hit?.t_us != null ? Number(hit.t_us) / 1e6 : null;
 }
 
 export function TimelinePage() {
@@ -55,18 +85,15 @@ export function TimelinePage() {
     [entries],
   );
 
-  const observed = useMemo(() => {
-    const find = (types: string[]) => {
-      const hit = entries.find((t) => types.includes(String(t.event_type || '').toLowerCase()));
-      return hit?.t_us != null ? Number(hit.t_us) / 1e6 : null;
-    };
-    return {
-      pickup_s: find(['protection_pickup']),
-      trip_s: find(['protection_trip', 'breaker_trip_command']),
-      breaker_s: find(['52a_change', '52b_change']),
-      interrupt_s: find(['current_interruption']),
-    };
-  }, [entries]);
+  const observed = useMemo(
+    () => ({
+      pickup_s: firstObservedSeconds(entries, ['protection_pickup']),
+      trip_s: firstObservedSeconds(entries, ['protection_trip', 'breaker_trip_command']),
+      breaker_s: firstObservedSeconds(entries, ['52a_change', '52b_change']),
+      interrupt_s: firstObservedSeconds(entries, ['current_interruption']),
+    }),
+    [entries],
+  );
 
   const expected = useMemo(() => {
     const extra = (event?.extra || {}) as Record<string, unknown>;
@@ -136,7 +163,9 @@ export function TimelinePage() {
               <thead>
                 <tr>
                   <th>Time (rel)</th>
-                  <th>Absolute time</th>
+                  <th title="CFG start + relative sample time (DR), or SOE wall-clock">
+                    Absolute time
+                  </th>
                   <th>Relay / device</th>
                   <th>Digital / event</th>
                   <th>Type</th>
@@ -150,13 +179,17 @@ export function TimelinePage() {
                     <td className="mono">
                       {e.t_us != null ? `${(e.t_us / 1000).toFixed(3)} ms` : '—'}
                     </td>
-                    <td className="mono" style={{ fontSize: '0.75rem' }}>
-                      {e.absolute_time ?? '—'}
+                    <td
+                      className="mono"
+                      style={{ fontSize: '0.75rem' }}
+                      title={e.absolute_time ?? undefined}
+                    >
+                      {fmtAbsolute(e.absolute_time)}
                     </td>
                     <td className="mono">{device}</td>
                     <td>{digitalId(e)}</td>
                     <td className="mono" style={{ fontSize: '0.75rem' }}>
-                      {e.event_type.replace(/_/g, ' ')}
+                      {timelineEventTitle(e.event_type)}
                     </td>
                     <td className="mono">{assertedValue(e)}</td>
                     <td style={{ fontSize: '0.75rem' }}>{e.source ?? '—'}</td>
@@ -168,28 +201,48 @@ export function TimelinePage() {
         </div>
       ) : (
         <ol className={styles.timeline}>
-          {sorted.map((e) => (
-            <li key={e.id} className={styles.item}>
-              <div className={styles.marker} />
-              <div className={styles.card}>
-                <div className={styles.top}>
-                  <span className={`mono ${styles.t}`}>
-                    {e.t_us != null ? `t = ${(e.t_us / 1000).toFixed(2)} ms` : '—'}
-                  </span>
-                  <span className={styles.type}>{e.event_type.replace(/_/g, ' ')}</span>
-                  {e.confidence != null && (
-                    <span className={`mono ${styles.conf}`}>{(e.confidence * 100).toFixed(0)}%</span>
+          {sorted.map((e) => {
+            const info = buildTimelineCardInfo(e);
+            return (
+              <li key={e.id} className={styles.item}>
+                <div className={styles.marker} />
+                <div className={styles.card}>
+                  <div className={styles.top}>
+                    <span className={`mono ${styles.t}`}>
+                      {e.t_us != null ? `t = ${(e.t_us / 1000).toFixed(2)} ms` : '—'}
+                    </span>
+                    <span className={styles.type}>{timelineEventTitle(e.event_type)}</span>
+                    {e.confidence != null && (
+                      <span className={`mono ${styles.conf}`}>
+                        {(e.confidence * 100).toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                  <div className={styles.label}>{info.title}</div>
+                  {info.summary && <p className={styles.desc}>{info.summary}</p>}
+                  {info.facts.length > 0 && (
+                    <dl className={styles.facts}>
+                      {info.facts.map((f) => (
+                        <div key={`${e.id}-${f.label}`} className={styles.fact}>
+                          <dt>{f.label}</dt>
+                          <dd className="mono">{f.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
                   )}
+                  <div className={styles.meta}>
+                    {e.absolute_time && (
+                      <span className="mono" title="Absolute time (CFG start + relative, or SOE)">
+                        {fmtAbsolute(e.absolute_time)}
+                      </span>
+                    )}
+                    {e.source && <span>Source: {e.source}</span>}
+                    {device !== '—' && <span>Device: {device}</span>}
+                  </div>
                 </div>
-                <div className={styles.label}>{e.label}</div>
-                {e.description && <p className={styles.desc}>{e.description}</p>}
-                <div className={styles.meta}>
-                  {e.absolute_time && <span className="mono">{e.absolute_time}</span>}
-                  {e.source && <span>Source: {e.source}</span>}
-                </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>

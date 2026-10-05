@@ -158,7 +158,8 @@
   <p class="sub">Deterministic engineering report · COMTRADE / DR analysis</p>
   <table class="kv">
     <tr><th>Event</th><td><strong>{{ ev.event_id or "NOT AVAILABLE" }}</strong></td></tr>
-    <tr><th>Date / time</th><td>{{ ev.event_datetime or "NOT AVAILABLE" }}</td></tr>
+    <tr><th>DR time (relay)</th><td>{{ ev.event_datetime or "NOT AVAILABLE" }}</td></tr>
+    <tr><th>Created in app</th><td>{{ ev.created_at or "—" }}</td></tr>
     <tr>
       <th>Location</th>
       <td>
@@ -242,7 +243,8 @@
 <h2>2. Event Identification</h2>
 <table class="kv">
   <tr><th>Event ID</th><td>{{ ev.event_id or "—" }}</td></tr>
-  <tr><th>Event date / time</th><td>{{ ev.event_datetime or "—" }}</td></tr>
+  <tr><th>DR time (relay)</th><td>{{ ev.event_datetime or "—" }}</td></tr>
+  <tr><th>Created in app</th><td>{{ ev.created_at or "—" }}</td></tr>
   <tr><th>Description</th><td>{{ ev.description or "—" }}</td></tr>
   <tr><th>Substation</th><td>{{ ev.substation or ev.station_name or "—" }}</td></tr>
   <tr><th>Bay</th><td>{{ ev.bay or "—" }}</td></tr>

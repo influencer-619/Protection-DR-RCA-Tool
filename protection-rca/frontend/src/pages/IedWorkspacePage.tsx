@@ -85,7 +85,7 @@ export function IedWorkspacePage() {
       const created = await api.createEvent({
         relay_id: iedId,
         description: description.trim() || undefined,
-        event_datetime: new Date().toISOString(),
+        // Leave event_datetime empty — analysis fills relay DR time from COMTRADE.
       });
       await api.uploadEventFiles(created.id, files);
       const names = files.map((f) => f.name);
@@ -377,7 +377,19 @@ export function IedWorkspacePage() {
                       <EventStatusCell event={ev} />
                     </div>
                     <div className={styles.eventMeta}>
-                      <span className="mono">{format(eventTime(ev), 'yyyy-MM-dd HH:mm')}</span>
+                      <span className="mono" title="Relay DR time (COMTRADE)">
+                        DR{' '}
+                        {ev.event_datetime
+                          ? format(new Date(ev.event_datetime), 'yyyy-MM-dd HH:mm')
+                          : '—'}
+                      </span>
+                      <span
+                        className="mono"
+                        style={{ opacity: 0.75 }}
+                        title="Created in this application"
+                      >
+                        Created {format(new Date(ev.created_at), 'yyyy-MM-dd HH:mm')}
+                      </span>
                       {(ev.protection_summary || ev.fault_type) && (
                         <span className={styles.eventElem}>
                           {[ev.protection_summary, ev.fault_type].filter(Boolean).join(' · ')}

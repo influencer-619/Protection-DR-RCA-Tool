@@ -388,9 +388,22 @@ function EventLayoutInner() {
               </h1>
               <div className={styles.badges}>
                 {loading && <span className={styles.loading}>Loading…</span>}
-                {event?.event_datetime && (
-                  <span className={`mono ${styles.when}`}>
-                    {new Date(event.event_datetime).toLocaleString()}
+                <span
+                  className={`mono ${styles.when}`}
+                  title="Relay disturbance time from COMTRADE (DR)"
+                >
+                  DR{' '}
+                  {event?.event_datetime
+                    ? new Date(event.event_datetime).toLocaleString()
+                    : '—'}
+                </span>
+                {event?.created_at && (
+                  <span
+                    className={`mono ${styles.when}`}
+                    title="Created in this application"
+                    style={{ opacity: 0.85 }}
+                  >
+                    Created {new Date(event.created_at).toLocaleString()}
                   </span>
                 )}
                 {event?.status && (

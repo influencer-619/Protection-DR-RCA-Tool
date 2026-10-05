@@ -479,6 +479,8 @@ export interface TimelineEntry {
   description?: string | null;
   confidence?: number | null;
   evidence_ids?: string[] | null;
+  /** Full timeline event dict from analysis (preferred over truncated description). */
+  payload?: Record<string, unknown> | null;
   details?: Record<string, unknown> | null;
 }
 
@@ -680,7 +682,10 @@ export interface DashboardAttentionItem {
 export interface DashboardRecentEvent {
   id: string;
   event_id: string;
+  /** Relay disturbance / COMTRADE trigger time (not upload time). */
   event_datetime?: string | null;
+  /** When the event was created in this application. */
+  created_at?: string | null;
   location: string;
   relay: string;
   fault_type?: string | null;

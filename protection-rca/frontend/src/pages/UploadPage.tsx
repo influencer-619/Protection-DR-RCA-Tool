@@ -22,7 +22,7 @@ export function UploadPage() {
       const ev = await api.createEvent({
         event_id: `EVT-${Date.now()}`,
         description: `Upload batch: ${files.map((f) => f.name).join(', ')}`,
-        event_datetime: new Date().toISOString(),
+        // DR time comes from COMTRADE after analysis; created_at is upload time.
       });
       if (files.length) {
         await api.uploadEventFiles(ev.id, files);

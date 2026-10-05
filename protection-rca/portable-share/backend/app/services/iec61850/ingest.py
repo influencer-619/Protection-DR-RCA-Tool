@@ -92,7 +92,9 @@ async def create_events(
             EventCreate(
                 relay_id=relay.id,
                 description=desc[:1000],
-                event_datetime=when or datetime.now(timezone.utc),
+                # Only stamp relay DR time when the IED provided a record timestamp.
+                # Otherwise leave null — analysis fills from COMTRADE trigger/start.
+                event_datetime=when,
                 extra={
                     "acquisition": {
                         "method": "IEC61850_MMS",

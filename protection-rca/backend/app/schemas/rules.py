@@ -106,7 +106,10 @@ class DashboardAttentionItem(BaseModel):
 class DashboardRecentEvent(BaseModel):
     id: str
     event_id: str
+    # Relay disturbance time (COMTRADE). Never fall back to created_at here.
     event_datetime: Optional[str] = None
+    # When the event was entered in this application.
+    created_at: Optional[str] = None
     location: str = "—"
     relay: str = "—"
     fault_type: Optional[str] = None

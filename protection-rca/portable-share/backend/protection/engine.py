@@ -91,6 +91,50 @@ def _match_element_from_channel(name: str) -> Optional[str]:
     return None
 
 
+def _attribute_orphan_trips(
+    obs: dict[str, ElementObservation],
+    orphan_trips: list[TimelineEvent],
+) -> None:
+    """Map general trip contacts (TRIP_CMD, TRIP) onto the element that picked up.
+
+    Vendor COMTRADE often records a shared trip output without an ANSI code in
+    the channel name. Attribute that assert to the most recent pickup that has
+    not already been given a trip (pickup_time <= trip_time).
+    """
+    for ev in orphan_trips:
+        src = getattr(ev, "source", "") or ""
+        channel = src.split(":", 1)[1] if src.startswith("digital:") else ""
+        t_trip = float(ev.timestamp)
+        candidates = [
+            o
+            for o in obs.values()
+            if o.pickup
+            and not o.trip
+            and (o.pickup_time_s is None or float(o.pickup_time_s) <= t_trip + 1e-9)
+        ]
+        if not candidates:
+            candidates = [
+                o
+                for o in obs.values()
+                if o.pickup
+                and (o.pickup_time_s is None or float(o.pickup_time_s) <= t_trip + 1e-9)
+            ]
+        if not candidates:
+            continue
+        candidates.sort(
+            key=lambda o: (
+                o.pickup_time_s is not None,
+                float(o.pickup_time_s) if o.pickup_time_s is not None else 0.0,
+            ),
+            reverse=True,
+        )
+        o = candidates[0]
+        o.trip = True
+        o.trip_time_s = t_trip
+        if channel and channel not in o.channel_evidence:
+            o.channel_evidence.append(channel)
+
+
 def observations_from_timeline(
     timeline: list[TimelineEvent],
     *,
@@ -100,6 +144,7 @@ def observations_from_timeline(
     from protection.digital_targets import resolve_digital_target
 
     obs: dict[str, ElementObservation] = {}
+    orphan_trips: list[TimelineEvent] = []
     for ev in timeline:
         src = ev.source
         channel = ""
@@ -113,6 +158,8 @@ def observations_from_timeline(
         if not code and channel:
             code = _match_element_from_channel(channel)
         if code is None:
+            if ev.event_type in ("protection_trip", "breaker_trip_command"):
+                orphan_trips.append(ev)
             continue
         o = obs.setdefault(code, ElementObservation(element=code))
         if channel and channel not in o.channel_evidence:
@@ -129,6 +176,7 @@ def observations_from_timeline(
         elif ev.event_type == "lockout" and code == "86":
             o.trip = True
             o.trip_time_s = ev.timestamp
+    _attribute_orphan_trips(obs, orphan_trips)
     return obs
 
 

@@ -654,9 +654,11 @@ def _rebuild_analysis_from_db(
     bay = plant_labels.get("bay_name") or extra.get("bay_name")
     relay_tag = plant_labels.get("relay_tag") or extra.get("relay_tag")
     ct0 = comtrades[0] if comtrades else None
+    # DR time = relay disturbance only (event_datetime or COMTRADE start). Never use created_at.
     event_when = _fmt_report_dt(event.event_datetime) or (
         _fmt_report_dt(ct0.start_timestamp) if ct0 else None
-    ) or _fmt_report_dt(event.created_at)
+    )
+    created_when = _fmt_report_dt(event.created_at)
 
     if not desc:
         ft = (fault_dict or {}).get("fault_type")
@@ -674,6 +676,7 @@ def _rebuild_analysis_from_db(
             "data_quality": event.data_quality,
             "description": desc,
             "event_datetime": event_when,
+            "created_at": created_when,
             "feeder": event.feeder,
             "nominal_voltage_kv": event.nominal_voltage_kv,
             "nominal_frequency_hz": event.nominal_frequency_hz,
@@ -1245,7 +1248,8 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
     loc = " · ".join(str(x) for x in loc_parts if x) or "NOT AVAILABLE"
     cover_rows = [
         [Paragraph("<b>Event</b>", cell_label), P(_pdf_dash(ev.get("event_id"), "NOT AVAILABLE"), cell)],
-        [Paragraph("<b>Date / time</b>", cell_label), P(_pdf_dash(ev.get("event_datetime"), "NOT AVAILABLE"), cell)],
+        [Paragraph("<b>DR time</b>", cell_label), P(_pdf_dash(ev.get("event_datetime"), "NOT AVAILABLE"), cell)],
+        [Paragraph("<b>Created (app)</b>", cell_label), P(_pdf_dash(ev.get("created_at"), "—"), cell)],
         [Paragraph("<b>Location</b>", cell_label), P(loc, cell)],
         [
             Paragraph("<b>Relay / IED</b>", cell_label),
@@ -1415,7 +1419,8 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
         kv_table(
             [
                 ("Event ID", ev.get("event_id")),
-                ("Event date / time", ev.get("event_datetime")),
+                ("DR time (relay)", ev.get("event_datetime")),
+                ("Created in app", ev.get("created_at")),
                 ("Description", ev.get("description")),
                 ("Substation", ev.get("substation") or ev.get("station_name")),
                 ("Bay", ev.get("bay")),

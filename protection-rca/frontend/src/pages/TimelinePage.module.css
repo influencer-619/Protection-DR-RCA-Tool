@@ -65,10 +65,45 @@
   margin: 4px 0 0;
   font-size: 0.85rem;
   color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 6px 14px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  background: var(--bg-app, rgba(0, 0, 0, 0.03));
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.fact dt {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.fact dd {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-primary, inherit);
+  word-break: break-word;
 }
 
 .meta {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   margin-top: 8px;
   font-size: 0.75rem;

@@ -93,9 +93,15 @@ function SideCard({ side, label }: { side: Side; label: string }) {
             </td>
           </tr>
           <tr>
-            <th>When</th>
-            <td className="mono">
+            <th>DR time</th>
+            <td className="mono" title="Relay disturbance / COMTRADE trigger time">
               {ev.event_datetime ? new Date(ev.event_datetime).toLocaleString() : '—'}
+            </td>
+          </tr>
+          <tr>
+            <th>Created</th>
+            <td className="mono" title="Created in this application">
+              {ev.created_at ? new Date(ev.created_at).toLocaleString() : '—'}
             </td>
           </tr>
           <tr>

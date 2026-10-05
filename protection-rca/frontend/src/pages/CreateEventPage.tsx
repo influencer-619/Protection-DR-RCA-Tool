@@ -34,7 +34,7 @@ const emptyForm = (): PlantForm => ({
   asset_name: '',
   relay_tag: '',
   breaker_tag: '',
-  event_datetime: new Date().toISOString().slice(0, 16),
+  event_datetime: '',
   nominal_voltage_kv: '',
   nominal_frequency_hz: '50',
   description: '',
@@ -77,9 +77,10 @@ export function CreateEventPage() {
         nominal_frequency_hz: form.nominal_frequency_hz
           ? Number(form.nominal_frequency_hz)
           : 50,
+        // Optional DR time; leave unset so analysis can fill from COMTRADE.
         event_datetime: form.event_datetime
           ? new Date(form.event_datetime).toISOString()
-          : new Date().toISOString(),
+          : undefined,
         substation_name: form.substation_name.trim() || 'UNKNOWN',
         bay_name: form.bay_name.trim() || 'NOT VERIFIED',
         relay_tag: form.relay_tag.trim() || 'NOT VERIFIED',
@@ -270,13 +271,16 @@ export function CreateEventPage() {
               />
             </label>
             <label>
-              Event date/time
+              DR / disturbance time (optional)
               <input
                 className="form-control"
                 type="datetime-local"
                 value={form.event_datetime}
                 onChange={(e) => setField('event_datetime', e.target.value)}
               />
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                Leave blank if unknown — filled from COMTRADE after analysis.
+              </span>
             </label>
             <label>
               Nominal voltage (kV)

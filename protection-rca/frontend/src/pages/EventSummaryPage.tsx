@@ -114,9 +114,14 @@ export function EventSummaryPage() {
   const trips = protection.filter(
     (p) => p.asserted && (p.operation_type || '').toUpperCase().includes('TRIP'),
   );
-  const pickups = protection.filter(
-    (p) => p.asserted && (p.operation_type || '').toUpperCase().includes('PICKUP'),
-  );
+  // TRIP rows still carry pickup in details — keep Pickups visible after trip attribution
+  const pickups = protection.filter((p) => {
+    if (!p.asserted) return false;
+    const ot = (p.operation_type || '').toUpperCase();
+    if (ot.includes('PICKUP')) return true;
+    const d = p.details as { pickup?: boolean } | null | undefined;
+    return d?.pickup === true;
+  });
   const inconsistent = findings.filter((f) => f.status === 'INCONSISTENT');
   const plantExtra = (event?.extra as Record<string, string> | undefined) ?? {};
   const plantLabels =
@@ -227,7 +232,9 @@ export function EventSummaryPage() {
               <div className={styles.meta}>
                 {substation} · {bay} · <span className="mono">{relay}</span>
                 <br />
-                {fmtWhen(event.event_datetime)}
+                DR {fmtWhen(event.event_datetime)}
+                {' · '}
+                Created {fmtWhen(event.created_at)}
                 {event.nominal_voltage_kv != null && (
                   <>
                     {' '}

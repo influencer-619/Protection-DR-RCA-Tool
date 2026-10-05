@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import delete, select
@@ -741,7 +741,16 @@ async def persist_engineering_analysis(
                 )
             )
 
-    # Timeline
+    # Timeline — absolute_time from SOE metadata or CFG start + relative (COMTRADE)
+    cfg_start = None
+    if getattr(record, "start_time", None) is not None:
+        cfg_start = record.start_time
+        if isinstance(cfg_start, datetime) and cfg_start.year >= 1990:
+            if cfg_start.tzinfo is None:
+                cfg_start = cfg_start.replace(tzinfo=timezone.utc)
+        else:
+            cfg_start = None
+
     for i, te in enumerate(result.timeline or []):
         t_s = te.get("timestamp")
         t_us = int(float(t_s) * 1_000_000) if t_s is not None else None
@@ -754,6 +763,11 @@ async def persist_engineering_analysis(
                 s = str(abs_t).replace("Z", "+00:00")
                 abs_dt = datetime.fromisoformat(s)
             except ValueError:
+                abs_dt = None
+        if abs_dt is None and cfg_start is not None and t_s is not None:
+            try:
+                abs_dt = cfg_start + timedelta(seconds=float(t_s))
+            except (TypeError, ValueError, OverflowError):
                 abs_dt = None
         db.add(
             EventTimeline(
@@ -1032,17 +1046,17 @@ async def persist_engineering_analysis(
         fault_type=ft,
         fault_status=str(fault.get("status") or ""),
     )
-    # Event datetime from COMTRADE trigger / start when wizard left it empty
-    if event.event_datetime is None:
-        ts = record.trigger_time or record.start_time
-        if ts is not None:
-            try:
-                if hasattr(ts, "tzinfo"):
-                    event.event_datetime = ts
-                else:
-                    event.event_datetime = datetime.fromtimestamp(float(ts), tz=timezone.utc)
-            except Exception:  # noqa: BLE001
-                pass
+    # Disturbance time from COMTRADE trigger / start (relay DR time, not upload time).
+    # Always prefer COMTRADE when present so manual uploads that stamped "now" get corrected.
+    ts = record.trigger_time or record.start_time
+    if ts is not None:
+        try:
+            if hasattr(ts, "tzinfo"):
+                event.event_datetime = ts
+            else:
+                event.event_datetime = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+        except Exception:  # noqa: BLE001
+            pass
 
     if result.limitations:
         lims = list(result.limitations[:20])

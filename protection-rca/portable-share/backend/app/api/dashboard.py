@@ -364,7 +364,8 @@ async def dashboard_stats(
             DashboardRecentEvent(
                 id=e.id,
                 event_id=e.event_id,
-                event_datetime=_iso(e.event_datetime or e.created_at),
+                event_datetime=_iso(e.event_datetime),
+                created_at=_iso(e.created_at),
                 location=loc,
                 relay=relay_label,
                 fault_type=fault.fault_type if fault else None,
