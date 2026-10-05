@@ -46,6 +46,7 @@ def _connection_out(relay: Relay) -> Iec61850ConnectionOut:
         host=relay.ip_address,
         port=int(s.get("port") or 102),
         vendor_profile=s.get("vendor_profile") or "AUTO",
+        remote_directory=s.get("remote_directory") or None,
         connect_timeout_s=float(s.get("connect_timeout_s") or 10.0),
         request_timeout_s=float(s.get("request_timeout_s") or 20.0),
         last_nameplate=s.get("last_nameplate"),
@@ -74,12 +75,18 @@ def _resolve(relay: Relay, body: Iec61850Connection) -> acq.Connection:
     host = body.host or saved.host
     if not host:
         raise HTTPException(status_code=400, detail="Enter the IED IP address first")
+    # Explicit empty string from client clears a saved path; None keeps saved.
+    if "remote_directory" in body.model_fields_set:
+        remote = body.remote_directory
+    else:
+        remote = saved.remote_directory
     return acq.Connection(
         host=host,
         port=body.port or saved.port,
         profile_id=(body.vendor_profile or saved.vendor_profile or "AUTO").upper(),
         connect_timeout_s=body.connect_timeout_s or saved.connect_timeout_s,
         request_timeout_s=body.request_timeout_s or saved.request_timeout_s,
+        remote_directory=remote,
     )
 
 
@@ -96,7 +103,16 @@ async def _run(fn, *args, **kwargs):
 async def iec61850_info(user: CurrentUser) -> Iec61850InfoOut:
     return Iec61850InfoOut(
         library=library_status(),
-        vendors=[VendorProfileOut(id=p.id, label=p.label, families=p.families, notes=p.notes) for p in PROFILES],
+        vendors=[
+            VendorProfileOut(
+                id=p.id,
+                label=p.label,
+                families=p.families,
+                notes=p.notes,
+                comtrade_dirs=list(p.dr_dirs),
+            )
+            for p in PROFILES
+        ],
     )
 
 

@@ -12,8 +12,80 @@ from app.schemas.events import EventCreate
 from app.services import event_service, file_service
 from app.services.audit_service import write_audit
 from app.services.iec61850 import acquire as acq
+from app.services.side_files import (
+    dr_soe_window,
+    filter_soe_csv_bytes,
+    soe_file_matches_record,
+)
 
 MAX_FETCHED_INDEX = 500
+# Fallback window when CFG trigger time is unknown (seconds around file mtime)
+_DEFAULT_DR_DURATION_S = 2.0
+
+
+def _shared_for_record(
+    shared: list[acq.Payload],
+    *,
+    record_key: Optional[str],
+    record_when: Optional[datetime],
+) -> list[acq.Payload]:
+    """Attach settings to every DR; keep only SOE/event rows that match this DR.
+
+    Matching (market-tool style):
+    1. Filename contains the COMTRADE record stem → belong to that DR only
+    2. Else SOE CSV → keep rows inside [DR − 5 s … DR end + 30 s]
+    3. Settings / SCL → always shared
+    """
+    if not shared:
+        return []
+    out: list[acq.Payload] = []
+    window = None
+    if record_when is not None:
+        window = dr_soe_window(record_when, duration_s=_DEFAULT_DR_DURATION_S)
+
+    for p in shared:
+        st = (p.source_type or "").upper()
+        name = (p.filename or "").lower()
+
+        always = st in ("SETTINGS", "ATTACHMENT") or name.endswith(
+            (".set", ".rdb", ".xrio", ".rio", ".cid", ".icd", ".scd", ".iid", ".ssd")
+        ) or (name.endswith(".json") and "soe" not in name and "ser" not in name)
+        if always:
+            out.append(p)
+            continue
+
+        if record_key and soe_file_matches_record(p.filename or "", record_key):
+            out.append(p)
+            continue
+
+        is_soe = st == "SOE" or name.endswith(".csv") or "soe" in name or "ser" in name
+        if is_soe and window is not None and (
+            name.endswith(".csv") or st == "SOE" or "soe" in name or "ser" in name
+        ):
+            try:
+                sliced = filter_soe_csv_bytes(
+                    p.data, window_start=window[0], window_end=window[1]
+                )
+            except Exception:  # noqa: BLE001
+                sliced = p.data
+            out.append(
+                acq.Payload(
+                    filename=p.filename,
+                    data=sliced,
+                    remote_path=p.remote_path,
+                    source_type=p.source_type or "SOE",
+                )
+            )
+            continue
+
+        # Untimed / unmatched event logs: do not copy the whole IED history onto every DR
+        if is_soe or st == "RELAY_EVENT_REPORT":
+            if window is None and not record_key:
+                out.append(p)
+            continue
+
+        out.append(p)
+    return out
 
 
 def saved_config(relay: Relay) -> dict[str, Any]:
@@ -35,6 +107,7 @@ def persist_connection(relay: Relay, conn: acq.Connection) -> None:
         relay,
         port=conn.port,
         vendor_profile=conn.profile_id,
+        remote_directory=conn.remote_directory or "",
         connect_timeout_s=conn.connect_timeout_s,
         request_timeout_s=conn.request_timeout_s,
     )
@@ -113,7 +186,8 @@ async def create_events(
         )
         stored_names: list[str] = []
         source_types: set[str] = set()
-        for p in [*payloads, *result.shared]:
+        side = _shared_for_record(result.shared, record_key=key, record_when=when)
+        for p in [*payloads, *side]:
             efs = await file_service.store_acquired_bytes(
                 db,
                 event,

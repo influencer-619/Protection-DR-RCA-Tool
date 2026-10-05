@@ -84,6 +84,7 @@ def _connection(relay: Relay) -> Optional[acq.Connection]:
         profile_id=str(saved.get("vendor_profile") or "AUTO").upper(),
         connect_timeout_s=float(saved.get("connect_timeout_s") or 10.0),
         request_timeout_s=float(saved.get("request_timeout_s") or 20.0),
+        remote_directory=(saved.get("remote_directory") or None) or None,
     )
 
 

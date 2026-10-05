@@ -14,12 +14,132 @@ import csv
 import io
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import PurePosixPath
 from typing import Any, Optional
 
 from event_reconstruction.timeline import TimelineEvent
 
 logger = logging.getLogger(__name__)
+
+# Match SOE / SER rows to a DR the way Digsi / SIGRA / station tools do:
+# keep only points near the disturbance (not the whole IED history).
+DEFAULT_SOE_PRE_S = 5.0
+DEFAULT_SOE_POST_S = 30.0
+
+
+def dr_soe_window(
+    dr_start: datetime,
+    *,
+    duration_s: float = 1.0,
+    pre_s: float = DEFAULT_SOE_PRE_S,
+    post_s: float = DEFAULT_SOE_POST_S,
+) -> tuple[datetime, datetime]:
+    """Absolute [start, end] window for SOE rows that belong to this DR."""
+    if dr_start.tzinfo is None:
+        dr_start = dr_start.replace(tzinfo=timezone.utc)
+    dur = max(0.0, float(duration_s or 0.0))
+    return (
+        dr_start - timedelta(seconds=max(0.0, pre_s)),
+        dr_start + timedelta(seconds=dur + max(0.0, post_s)),
+    )
+
+
+def record_duration_s(record: Any) -> float:
+    """Best-effort COMTRADE length in seconds."""
+    try:
+        ts = getattr(record, "timestamps", None) or []
+        if len(ts) >= 2:
+            return max(0.0, (float(ts[-1]) - float(ts[0])) / 1e6)
+    except (TypeError, ValueError):
+        pass
+    try:
+        n = int(getattr(record, "samples", 0) or 0)
+        rates = getattr(record, "sample_rates", None) or []
+        hz = float(rates[0].sample_rate_hz) if rates else 0.0
+        if n > 0 and hz > 0:
+            return n / hz
+    except (TypeError, ValueError, AttributeError, IndexError):
+        pass
+    return 1.0
+
+
+def _aware(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def filter_soe_csv_bytes(
+    data: bytes,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+) -> bytes:
+    """Keep only SOE CSV rows whose timestamp falls in [window_start, window_end]."""
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return data
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return data
+    fields = {(h or "").strip().lower(): h for h in reader.fieldnames}
+
+    def _pick(*names: str) -> Optional[str]:
+        for n in names:
+            if n in fields:
+                return fields[n]
+        return None
+
+    ts_key = _pick(
+        "timestamp_utc",
+        "timestamp",
+        "datetime",
+        "date_time",
+        "event_time",
+        "occurred",
+    )
+    date_key = _pick("date", "event_date")
+    time_key = _pick("time", "time_only", "tod", "t")
+    if date_key and time_key:
+        ts_key = None
+    elif not ts_key:
+        ts_key = _pick("time", "t")
+
+    w0, w1 = _aware(window_start), _aware(window_end)
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(reader.fieldnames), lineterminator="\n")
+    writer.writeheader()
+    kept = 0
+    for row in reader:
+        if ts_key:
+            dt = _parse_ts(str(row.get(ts_key) or ""))
+        else:
+            dt = _parse_ts(f"{row.get(date_key) or ''} {row.get(time_key) or ''}".strip())
+        if dt is None:
+            continue
+        dt = _aware(dt)
+        if w0 <= dt <= w1:
+            writer.writerow(row)
+            kept += 1
+    if kept == 0:
+        # Keep header-only file so analysis still sees an SOE attachment
+        return out.getvalue().encode("utf-8")
+    return out.getvalue().encode("utf-8")
+
+
+def soe_file_matches_record(filename: str, record_key: Optional[str]) -> bool:
+    """True when an event/SOE filename clearly belongs to one COMTRADE record stem."""
+    if not record_key or not filename:
+        return False
+    stem = PurePosixPath(record_key).name
+    # record_key may be a path without extension
+    for part in (stem, PurePosixPath(stem).stem):
+        p = (part or "").lower()
+        if len(p) >= 4 and p in filename.lower():
+            return True
+    return False
 
 _SIGNAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"INCEPTION|FAULT\s*START|FAULT\s*INCEPT", re.I), "fault_inception"),
@@ -159,8 +279,15 @@ def parse_soe_csv(
     *,
     source_name: str = "soe.csv",
     t0: Optional[datetime] = None,
+    window_start: Optional[datetime] = None,
+    window_end: Optional[datetime] = None,
 ) -> list[TimelineEvent]:
-    """Parse SOE / SER CSV → TimelineEvent list."""
+    """Parse SOE / SER CSV → TimelineEvent list.
+
+    When ``window_start`` / ``window_end`` are set (DR-matched), only rows inside
+    that absolute window are kept. ``t0`` is the DR CFG start for relative times;
+    defaults to the first kept row when omitted.
+    """
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         return []
@@ -198,6 +325,7 @@ def parse_soe_csv(
         "bit",
         "name",
         "status_text",
+        "point_tag",
     )
     val_key = _pick("value", "state", "status", "new_state", "val")
     src_key = _pick("source", "device", "relay", "ied", "bay")
@@ -208,6 +336,9 @@ def parse_soe_csv(
         logger.warning("SOE CSV %s missing timestamp columns", source_name)
         return []
 
+    w0 = _aware(window_start) if window_start else None
+    w1 = _aware(window_end) if window_end else None
+
     rows: list[tuple[datetime, str, str, Any]] = []
     for row in reader:
         if ts_key:
@@ -216,6 +347,11 @@ def parse_soe_csv(
             dt = _parse_ts(f"{row.get(date_key) or ''} {row.get(time_key) or ''}".strip())
         sig = str(row.get(sig_key) or "").strip()
         if dt is None or not sig:
+            continue
+        dt = _aware(dt)
+        if w0 is not None and dt < w0:
+            continue
+        if w1 is not None and dt > w1:
             continue
         val = row.get(val_key) if val_key else None
         src = str(row.get(src_key) or source_name)
@@ -227,6 +363,8 @@ def parse_soe_csv(
     if t0 is None:
         first = rows[0][0]
         t0 = first.replace(microsecond=0)
+    else:
+        t0 = _aware(t0)
 
     out: list[TimelineEvent] = []
     for dt, sig, src, val in rows:
@@ -246,7 +384,8 @@ def parse_soe_csv(
         if "52A" in sig.upper() and str(val) in ("0", "0.0"):
             etype = "52a_change"
         rel = (dt - t0).total_seconds()
-        if rel < -1:
+        # Without an explicit DR window, drop SOE long before the first row clock
+        if w0 is None and rel < -1:
             continue
         out.append(
             TimelineEvent(
@@ -394,10 +533,32 @@ def _is_event_report_file(name: str, source_type: Optional[str]) -> bool:
     return False
 
 
-def load_side_timeline_from_files(storage: Any, files: list[Any]) -> tuple[list[TimelineEvent], dict[str, Any]]:
-    """Load SOE + event-report timeline events from uploaded EventFile rows."""
+def load_side_timeline_from_files(
+    storage: Any,
+    files: list[Any],
+    *,
+    dr_start: Optional[datetime] = None,
+    duration_s: Optional[float] = None,
+) -> tuple[list[TimelineEvent], dict[str, Any]]:
+    """Load SOE + event-report timeline events from uploaded EventFile rows.
+
+    When ``dr_start`` is provided, SOE rows are restricted to the DR time window
+    (CFG start − pre … end + post) so a large station SER does not flood the
+    wrong disturbance.
+    """
     events: list[TimelineEvent] = []
     summary: dict[str, Any] = {"soe": None, "event_report": None, "files_tried": []}
+    window_start = window_end = None
+    if dr_start is not None:
+        window_start, window_end = dr_soe_window(
+            dr_start, duration_s=float(duration_s if duration_s is not None else 1.0)
+        )
+        summary["soe_window"] = {
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+            "dr_start": _aware(dr_start).isoformat(),
+            "duration_s": float(duration_s if duration_s is not None else 1.0),
+        }
 
     for ef in files:
         name = (ef.original_filename or "").lower()
@@ -410,13 +571,27 @@ def load_side_timeline_from_files(storage: Any, files: list[Any]) -> tuple[list[
             continue
 
         if _is_soe_file(name, st, text):
-            parsed = parse_soe_csv(text, source_name=ef.original_filename or name)
+            parsed = parse_soe_csv(
+                text,
+                source_name=ef.original_filename or name,
+                t0=dr_start,
+                window_start=window_start,
+                window_end=window_end,
+            )
             events.extend(parsed)
             summary["soe"] = {
                 "file": ef.original_filename,
                 "events": len(parsed),
+                "matched_to_dr": dr_start is not None,
             }
-            summary["files_tried"].append({"file": ef.original_filename, "kind": "SOE", "n": len(parsed)})
+            summary["files_tried"].append(
+                {
+                    "file": ef.original_filename,
+                    "kind": "SOE",
+                    "n": len(parsed),
+                    "matched_to_dr": dr_start is not None,
+                }
+            )
         elif _is_event_report_file(name, st):
             # Skip binary-ish CEV
             if name.endswith(".cev") and "\x00" in text[:200]:

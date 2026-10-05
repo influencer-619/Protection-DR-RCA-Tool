@@ -185,6 +185,7 @@ export interface Iec61850Vendor {
   label: string;
   families: string;
   notes: string;
+  comtrade_dirs?: string[];
 }
 
 export interface Iec61850Info {
@@ -205,6 +206,8 @@ export interface Iec61850Connection {
   host?: string | null;
   port: number;
   vendor_profile: string;
+  /** Optional COMTRADE path on the IED (market-tool style override). */
+  remote_directory?: string | null;
   connect_timeout_s: number;
   request_timeout_s: number;
   last_nameplate?: Iec61850Nameplate | null;
@@ -246,6 +249,10 @@ export interface Iec61850Browse {
   logical_devices: string[];
   profile: string;
   profile_label: string;
+  profile_notes?: string | null;
+  remote_directory?: string | null;
+  searched_dirs?: string[];
+  discovered_dirs?: string[];
   records: Iec61850Record[];
   settings_files: Iec61850RemoteFile[];
   event_files: Iec61850RemoteFile[];
@@ -293,6 +300,8 @@ export interface Iec61850ConnectionInput {
   host?: string;
   port?: number;
   vendor_profile?: string;
+  /** Empty string clears a saved path. */
+  remote_directory?: string | null;
 }
 
 export interface PlantIedNode {

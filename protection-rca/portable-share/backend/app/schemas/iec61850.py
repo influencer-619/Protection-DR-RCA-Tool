@@ -13,6 +13,13 @@ class Iec61850Connection(BaseModel):
     host: Optional[str] = Field(None, description="IED IP address or hostname")
     port: Optional[int] = Field(None, ge=1, le=65535, description="MMS TCP port (default 102)")
     vendor_profile: Optional[str] = Field(None, description="AUTO, ABB, SIEMENS, GE, SCHNEIDER, SEL, …")
+    remote_directory: Optional[str] = Field(
+        None,
+        description=(
+            "Optional COMTRADE / disturbance path on the IED (same idea as ABB 800xA / Elipse). "
+            "Leave empty to auto-walk /COMTRADE and the file store root."
+        ),
+    )
     connect_timeout_s: Optional[float] = Field(None, ge=1, le=120)
     request_timeout_s: Optional[float] = Field(None, ge=1, le=300)
 
@@ -26,6 +33,18 @@ class Iec61850Connection(BaseModel):
             return None
         if any(ch in v for ch in " /\\?#@") or len(v) > 253:
             raise ValueError("host must be an IP address or hostname")
+        return v
+
+    @field_validator("remote_directory")
+    @classmethod
+    def _remote_dir(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip().replace("\\", "/")
+        if not v:
+            return None
+        if len(v) > 256 or ".." in v or any(ch in v for ch in "*?<>|\0"):
+            raise ValueError("remote_directory looks invalid")
         return v
 
 
@@ -73,6 +92,7 @@ class VendorProfileOut(BaseModel):
     label: str
     families: str
     notes: str = ""
+    comtrade_dirs: list[str] = Field(default_factory=list)
 
 
 class Iec61850InfoOut(BaseModel):
@@ -84,6 +104,7 @@ class Iec61850ConnectionOut(BaseModel):
     host: Optional[str] = None
     port: int = 102
     vendor_profile: str = "AUTO"
+    remote_directory: Optional[str] = None
     connect_timeout_s: float = 10.0
     request_timeout_s: float = 20.0
     last_nameplate: Optional[dict[str, Any]] = None

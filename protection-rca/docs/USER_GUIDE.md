@@ -2,7 +2,7 @@
 
 **Audience:** Protection engineers, analysts, approvers, and administrators  
 **Product:** Protection Disturbance Record (DR) / COMTRADE analysis and Root Cause Analysis (RCA) platform  
-**Document version:** 0.8.0  
+**Document version:** 0.9.0  
 **Application:** Protection RCA web application (React + FastAPI)
 
 This guide explains how to launch the application (including the portable, no-install build), build the plant hierarchy, bring disturbance records in — either by **fetching them directly from the relay over IEC 61850** or by **manual upload** — analyse each event, interpret the results, generate reports, and complete engineer review. It reflects the **current implemented behaviour** of the platform.
@@ -11,31 +11,27 @@ This guide explains how to launch the application (including the portable, no-in
 
 ## Document revision — what is covered in this edition
 
-This edition (**0.8.0**) focuses on the day-to-day engineer loop after records are in: clearer dashboard KPIs, automatic analyse-and-land-on-Summary after a complete upload, professional PDF reports, and full Users administration.
+This edition (**0.9.0**) expands **IEC 61850 acquisition** and day-to-day DR review so the product behaves like market tools (Digsi / PCM600 / SCADA COMTRADE pollers): multi-DR fetch, optional COMTRADE path, auto-fetch with settings/SOE, and SOE matched to each DR by time.
 
 | Area | What changed |
 |------|----------------|
-| **Dashboard KPIs** | **Events with reports** counts **distinct current events** that have a generated report — the number **rises** when a report is produced and **drops** when that event is deleted. Quality tiles show **Clear / None / Good** when the problem count is zero. Recent chips and the trend chart are more informative. KPIs refresh when you return to the Dashboard. See [§6](#6-dashboard-operations-console) |
-| **Upload → Summary** | On **Manual upload**, a complete package (COMTRADE **and** settings) starts analysis automatically and opens the event **Summary** tab (one-page story). Incomplete packages still create the event without forcing analysis. See [§9](#9-ied-workspace) and [§14](#14-uploading-files-manually) |
-| **Professional PDF** | **Download PDF** builds a structured engineering PDF from the analysis payload (Platypus / ReportLab) — not a raw HTML scrape. Sections align with Summary / Report content. See [§23](#23-reports-html-pdf-json) |
-| **Users CRUD** | Admins can **add**, **edit**, and **delete** local accounts on **Users**. Password is required on create; on edit it is **optional** (leave blank to keep the current password). You cannot delete your own account. See [§24](#24-users-sso-and-audit) |
-| **Overview Inputs** | Overview input chips summarise COMTRADE / settings / SOE presence in plain language so you can see at a glance what was loaded |
+| **Manual Fetch from IED** | **List records** → select one or many DRs → **Fetch DR + settings / events**. Optional **COMTRADE path on IED**. Incomplete CFG/DAT pairs are not fetched. See [§10](#10-fetching-records-from-the-relay-iec-61850) |
+| **Multi-DR** | Tick several records (or **Select all new**); **one event per DR**. Or skip the list and Fetch — all new complete DRs are taken. See [§10.4](#104-list-and-select-disturbance-records-multi-dr) |
+| **Auto-fetch + multi-DR** | Each poll imports up to **10 new** complete DRs (oldest first), one event each, with Settings/Events toggles. Baseline vs import-existing explained. See [§11](#11-automatic-fetch-auto-fetch) |
+| **SOE / events matched to DR** | Large SER/SOE files are **time-windowed** to each DR (CFG start − 5 s … end + 30 s), or by matching filename to the COMTRADE stem. Settings stay shared. See [§10.7](#107-matching-soe--events-to-the-right-dr) |
+| **Sequence cards** | Engineer-readable facts (element, channel, state `0 → 1`, baseline/threshold) instead of raw JSON. Absolute time = CFG start + relative (DR) or SOE wall-clock. See [§17](#17-event-analysis-workspace-detailed) |
+| **Trips on Summary** | Shared trip contacts such as `TRIP_CMD` (no ANSI in the name) are attributed to the element that picked up before the trip — Summary shows **Trips** correctly. See FAQ |
 
-Still valid from **0.7.0** (IEC 61850 acquisition & portable):
+Still valid from **0.8.0** (dashboard / upload→Summary / PDF / Users):
 
-| Area | Summary |
-|------|---------|
-| **Fetch from IED (IEC 61850)** | Read-only MMS fetch of COMTRADE + settings + SOE + optional SCL. See [§10](#10-fetching-records-from-the-relay-iec-61850) |
-| **Vendor profiles** | Auto-detect plus ABB/Hitachi, Siemens, GE Vernova, Schneider, SEL, NR, Toshiba, ZIV and generic |
-| **Automatic fetch** | Per-IED scheduled poll (1 min … 4 h). See [§11](#11-automatic-fetch-auto-fetch) |
-| **Event numbers** | Readable **`EVT-YYYY-NNNNN`**. See [§12](#12-event-numbers) |
-| **Application shell / Plant / IED / Event UI** | Collapsible sidebar, plant tree tooling, IED acquire panel, event header + tab bar |
-| **Audit** | Usernames (“system” for automatic), coloured chips; `IEC61850_FETCH` / `IEC61850_AUTO_FETCH` |
-| **Portable build** | Bundled Python runtime; API log at `backend\logs\api-launch.log` |
+| Area | What changed |
+|------|----------------|
+| **Dashboard KPIs** | **Events with reports** counts distinct live events with a report. See [§6](#6-dashboard-operations-console) |
+| **Upload → Summary** | Complete package opens **Summary** after auto-analyse. See [§9](#9-ied-workspace) |
+| **Professional PDF** | Structured engineering PDF (ReportLab). See [§23](#23-reports-html-pdf-json) |
+| **Users CRUD** | Add / edit / delete local accounts. See [§24](#24-users-sso-and-audit) |
 
-Still valid from **0.6.0** (plant-first workflow): Plant-first (no global Create/Upload menus), All events search/date filters, Protection column, dual SQLite DBs, bootstrap **`admin` / `admin123`**.
-
-Still valid from **0.5.0** (engineering analysis): faulted-loop R–X / impedance, harmonics heatmap, 87 Id–Ir, through-fault exclusion, decision badges, settings auto-approve, Channel map, DR targets, background analysis, scheme library, cause enrichment, HTML/PDF/JSON reports, no generative AI, no OT control.
+Still valid from **0.7.0** (IEC 61850 & portable) and earlier plant / engineering editions — see previous tables in git history if needed.
 
 ---
 
@@ -568,7 +564,9 @@ Events are always created with a **relay_id** (IED). There is no “orphan” up
 
 ## 10. Fetching records from the relay (IEC 61850)
 
-The **Fetch from IED** mode pulls disturbance records straight from the relay using the IEC 61850 **MMS** protocol. It is **read-only**: the platform only reads directory listings, files and data attributes. It never operates controls, never writes settings and never deletes files on the IED.
+The **Fetch from IED** mode pulls disturbance records straight from the relay using the IEC 61850 **MMS** protocol — the same class of workflow as Digsi, PCM600, AcSELerator, and SCADA COMTRADE pollers (GeoSCADA, WinCC OA, Elipse, ABB 800xA).
+
+It is **read-only**: the platform only reads directory listings, files and data attributes. It never operates controls, never writes settings and never deletes files on the IED.
 
 ### 10.1 Prerequisites
 
@@ -582,169 +580,190 @@ The **Fetch from IED** mode pulls disturbance records straight from the relay us
 
 ### 10.2 Relay connection
 
-The **Relay connection** block holds:
-
 | Field | Default | Notes |
 |-------|---------|-------|
 | **IP address** | (empty) | Relay station-bus IP (or host name) |
 | **Port** | `102` | Standard MMS port |
-| **Vendor** | Auto-detect | Profile that tells the platform where this vendor stores records (see table below) |
+| **Vendor** | Auto-detect | Hints which folders to search first (see [§10.3](#103-vendor-profiles)) |
+| **COMTRADE path on IED (optional)** | (empty) | Same idea as ABB 800xA / Elipse “remote COMTRADE directory”. Leave blank to auto-walk `/COMTRADE/` and the file store. Paste a path from the relay tool or manual when Browse finds nothing |
 
-After any successful test, browse or fetch, the IP, port and vendor are **saved on the IED** and pre-filled next time. The IP address also appears as a chip in the IED header.
+After any successful test, browse or fetch, the IP, port, vendor and COMTRADE path are **saved on the IED** and pre-filled next time. The IP also appears as a chip in the IED header.
 
-Click **Test connection**. On success the panel shows one line:
+Click **Test connection**. On success the panel shows nameplate, detected profile, logical-device count, whether **file services** are available, and round-trip time.
 
-```text
-Connected to 10.0.0.21:102 · ABB REL670 · fw 2.2.4 · S/N 1234 · profile ABB / Hitachi Energy ·
-5 logical device(s) · file services available · 420 ms
-```
+- **Nameplate** is read from `LPHD.PhyNam` / `LLN0.NamPlt`
+- **file services NOT available** means records cannot be listed or downloaded (settings/status can still be read)
+- Connect timeout **10 s**, per-request timeout **20 s**
 
-- **Nameplate** (vendor, model, firmware `fw …`, serial `S/N …`) is read from `LPHD.PhyNam` / `LLN0.NamPlt`
-- **profile** is the vendor profile in use — with **Auto-detect** it is chosen from the nameplate
-- **file services NOT available** means records cannot be listed or downloaded (settings and status can still be read); the reason is shown underneath
-- The IP / port / vendor are saved on the IED
-
-Connection limits: connect timeout **10 s**, per-request timeout **20 s**.
+> **Where do COMTRADE paths come from?** Not from the internet. Market tools either **browse the IED** or let you set the path from the vendor configuration tool / IED manual. This product does the same.
 
 ### 10.3 Vendor profiles
 
 | Profile | Families (examples) | Where records are looked for |
 |---------|---------------------|------------------------------|
-| **Auto-detect (read nameplate)** | Any IEC 61850 Ed1 / Ed2 / Ed2.1 server with MMS file services | `/COMTRADE/` then vendor folders once detected |
-| **ABB / Hitachi Energy** | Relion 605/611/615/620/630/640, 650/670 (REL/RED/RET/REB/REC/REF/REM) | `/COMTRADE/`, `/DR/`; events `/EVENTS/` |
-| **Siemens** | SIPROTEC 5 (7SA/7SD/7SL/7UT/7SJ/7VK/6MD), SIPROTEC 4 with EN100, Reyrolle 7SR5 | `/COMTRADE/<LD>/`, `/FAULTREC/`, `/REC/`; log `/LOG/` |
-| **GE Vernova (Multilin)** | UR / UR+ (D60, L90, T60, F60, B30, C60 …), 8 Series (850/869/889), MiCOM Alstom legacy | `/COMTRADE/`, `/OSCILLOGRAPHY/`, root `OSC*.CFG`; events `/EVENTS/`, `/FAULTREPORT/` |
-| **Schneider Electric** | MiCOM Px40 / Agile, Easergy P3/P5, Sepam 80/40 (ACE850) | `/COMTRADE/`, `/DR/`, `/DISTURBANCE/`; events `/EVENTS/`, `/FAULT/` |
-| **Schweitzer (SEL)** | SEL-411L/421/487, SEL-751/787, SEL-2440, RTAC | `/COMTRADE/`, `/EVENTS/`; settings `/SETTINGS/` (`SET_*.TXT`) |
-| **NR Electric** | PCS-931/902/978/915 | `/COMTRADE/`, `/RECORD/`, `/WAVE/`; events `/EVENT/` |
-| **Toshiba** | GRL100 / GRZ100 / GRT100 / GRD200 | `/COMTRADE/` |
-| **ZIV / Hitachi Energy Spain** | ZLV / DLX / IDV | `/COMTRADE/`, `/OSCILO/` |
-| **Other vendor (generic)** | Ingeteam, Arteche, Efacec, Sifang, XJ, Woodward, Beckwith, Eaton, Hyosung … | `/COMTRADE/`, `/DR/`, `/RECORDS/`; events `/EVENTS/`, `/LOG/` |
+| **Auto-detect** | Any IEC 61850 Ed1 / Ed2 / Ed2.1 with MMS file services | `/COMTRADE/` then vendor folders once nameplate is known |
+| **ABB / Hitachi Energy** | Relion 605…670 series | `/COMTRADE/`, `/DR/`, … ; events `/EVENTS/` |
+| **Siemens** | SIPROTEC 5 / 4 EN100, Reyrolle 7SR5 | `/COMTRADE/<LD>/`, `/FAULTREC/`, `/REC/` |
+| **GE Vernova (Multilin)** | UR / UR+, 8 Series | `/COMTRADE/`, `/OSCILLOGRAPHY/`, root `OSC*.CFG` |
+| **Schneider Electric** | MiCOM / Easergy / Sepam | `/COMTRADE/`, `/DR/`, `/DISTURBANCE/` |
+| **Schweitzer (SEL)** | 4xx / 7xx / RTAC | `/COMTRADE/`, `/EVENTS/`; settings `/SETTINGS/` |
+| **NR Electric** | PCS-9xx | `/COMTRADE/`, `/RECORD/`, `/WAVE/` |
+| **Toshiba / ZIV / Other** | GR / ZLV / generic | `/COMTRADE/` plus vendor-specific folders |
 
-The panel shows a short vendor hint (for example the PCM600 file-transfer note for ABB) under the selector.
+Auto-detect is enough for most relays. If Browse is empty, set **COMTRADE path** (e.g. `/COMTRADE/`) or pick the vendor explicitly.
 
-### 10.4 Browse the records on the relay
+### 10.4 List and select disturbance records (multi-DR)
 
-Click **Browse IED** (later **Refresh list**). The platform lists the relay’s file store and groups files into disturbance records by base name. The table shows:
+1. Click **List records on IED** (later **Refresh list**).
+2. The table lists every COMTRADE-style record found:
 
 | Column | Meaning |
 |--------|---------|
 | (checkbox) | Select the record(s) to fetch |
-| **Record** | Record name (usually the COMTRADE base name) |
-| **Recorded** | Date/time from the file store |
-| **Files** | Members found (CFG, DAT, HDR, INF, CFF …) |
+| **Record** | Base name + directory on the IED |
+| **Recorded** | File-store time |
+| **Files** | Members (CFG, DAT, HDR, INF, CFF, …) |
 | **Size** | Total size |
-| **Status** | **Complete** (CFG + DAT or CFF present) · **Incomplete** (e.g. DAT missing — cannot be analysed) · **Already fetched** (link to the event created earlier) |
+| **Status** | **Complete** · **Incomplete** · **Already fetched** (link to the existing event) |
 
-The newest complete record that has not yet been fetched is **pre-selected**. Browsing is limited to about **90 s**; very large file stores may need a vendor profile instead of Auto-detect.
+3. **All new complete** records are pre-selected. Use **Select all new** / **Clear**, or tick individually.
+4. Click **Fetch DR + settings / events**.
 
-Counts of extra files found (settings files, event files, SCL files) are shown next to the options.
+**Multiple DRs → multiple events:** each selected complete record becomes its **own** event (`EVT-YYYY-NNNNN`), with that record’s COMTRADE files. Settings/SOE ride along (see [§10.7](#107-matching-soe--events-to-the-right-dr)).
 
-### 10.5 Fetch options
+**Shortcut:** you can click **Fetch** without listing first — the app lists the IED and takes **all new complete** DRs.
+
+Browsing is limited to about **90 s**. After a successful list, **Found under:** shows directories where records were discovered (click to set as COMTRADE path).
+
+### 10.5 Fetch options (with every DR)
 
 | Option | Default | What it does |
 |--------|---------|--------------|
-| **Settings (read from data model)** | On | Reads protection settings from the relay data model and any settings files in the file store |
-| **Events (protection start/trip status)** | On | Reads start/trip/operate status with timestamps and breaker position, plus event files in the file store |
-| **SCL configuration (CID/ICD)** | Off | Downloads the relay’s SCL file if the file store exposes one (kept as an attachment for reference) |
-| Description | — | Optional text for the event; default “IEC 61850 fetch from *host:port* — *record*” |
+| **Also fetch settings** | On | Settings files from the store **and** SP/SG/CF reads on protection LNs → `iec61850_settings_<tag>.json` |
+| **Also fetch events / SOE** | On | Event/log files **and** start/trip/breaker status → `iec61850_soe_<tag>.csv` (then matched to each DR) |
+| **Also fetch SCL (CID/ICD)** | Off | SCL as attachment only (manual fetch; **not** in auto-fetch) |
+| Description | — | Optional text stored on the created event(s) |
 
-Buttons:
+The primary button is always **Fetch DR + settings / events** (wording adjusts with how many DRs are selected). Disturbance records are **always** included when complete ones exist — this is not a settings-only path when DRs are available.
 
-- **Fetch & create event** — one record selected
-- **Fetch N records & create events** — several records selected; **one event per record**
-- **Fetch settings / events only** — no record selected; creates an event holding just settings and/or status (useful for a settings snapshot)
+Acquisition time budget ≈ **240 s**. Warnings appear under “*N warning(s) during fetch*”; the event still holds whatever was retrieved.
 
-The whole acquisition is limited to about **240 s**. Warnings (for example a file that could not be read) are listed under “*N warning(s) during fetch*” — the event is still created with whatever was retrieved.
-
-### 10.6 What gets created
-
-For each fetched record the platform creates a new event under this IED (with an `EVT-YYYY-NNNNN` number, see [§12](#12-event-numbers)) and stores:
+### 10.6 What gets created per DR
 
 | File on the event | Content |
 |-------------------|---------|
-| Record files (`*.cfg`, `*.dat`, `*.hdr`, `*.inf`, `*.cff`) | Exactly as read from the relay — SHA-256 hashed, immutable |
-| `iec61850_settings_<tag>.json` | Settings read from the data model, mapped to the platform’s setting blocks (pickups, time dials, curves, zone reaches, CT/VT ratios, enable flags …) plus all raw values under `iec61850_raw` |
-| `iec61850_soe_<tag>.csv` | Sequence of events: protection start / trip / operate status changes with IED timestamps and breaker position |
-| Vendor settings / event files | Any settings or event files found in the file store (e.g. SEL `SET_*.TXT`) |
-| SCL (`*.cid` / `*.icd` / `*.scd`) | Attached for reference when the SCL option is ticked |
+| `*.cfg` / `*.dat` / `*.hdr` / `*.inf` / `*.cff` / `*.cev` | Immutable COMTRADE members (SHA-256) |
+| `iec61850_settings_<tag>.json` | Mapped settings + `iec61850_raw` |
+| `iec61850_soe_<tag>.csv` | SOE rows **for this DR’s time window** (or full snapshot if untimed) |
+| Vendor settings / event files | When present and matched |
+| SCL | If SCL option ticked |
 
-How settings are read:
+Settings are read from protection **P\*** / related **R\*** LNs, **TCTR** / **TVTR** / **XCBR**, FCs **SP / SG / CF**, active group `LLN0.SGCB.ActSG`.
 
-- Logical nodes: protection **P\*** (PDIS, PTOC, PDIF, PTOV, PTUV, …), related **R\*** (RREC, RBRF, RDIR, …), plus **TCTR**, **TVTR**, **XCBR**
-- Functional constraints: **SP**, **SG**, **CF** (setting / setting-group / configuration values)
-- Active setting group from `LLN0.SGCB.ActSG`
-- Values are **as reported by the relay**; nothing is guessed. Unmapped attributes stay in `iec61850_raw` for inspection.
+**DR time** on the event prefers the COMTRADE trigger/start from the CFG; otherwise the file-store “Recorded” time. Acquisition metadata (method `IEC61850_MMS`, MANUAL/AUTO, host, record key, nameplate) is stored on the event. Audit: **`IEC61850_FETCH`**.
 
-The event date/time is the record time reported by the relay’s file store (the **Recorded** column); if the relay gives none, the fetch time is used. The acquisition details (method IEC 61850 MMS, manual/auto trigger, host, record, nameplate) are stored with the event, and the audit trail logs **`IEC61850_FETCH`**. Auto-fetched events get the description “IEC 61850 auto-fetch from *host:port* — *record*”.
+### 10.7 Matching SOE / events to the right DR
 
-### 10.7 After the fetch
+When the IED has a **large** sequential-event (SER) history, the platform must not attach every row to every disturbance.
 
-- If exactly **one** event was created, the app opens its **Files** tab.
-- If several were created, the IED event list refreshes.
-- Events that are **package ready** (COMTRADE **and** settings present) **start analysis automatically**. Events without settings wait for you to add settings (Files tab) and click **Start analysis**.
-- Browsing again marks those records as **Already fetched** with a link to their event — you will not create duplicates by accident.
+| Priority | Rule |
+|----------|------|
+| **1. DR digitals** | COMTRADE pickup / trip / 52a on that record = primary evidence |
+| **2. Filename** | Event/SOE file name contains the COMTRADE record stem → that DR only |
+| **3. Time window** | Keep SOE CSV rows in **DR start − 5 s … DR end + 30 s** (CFG start + record duration) |
+| **4. Settings / SCL** | Shared to every DR package (not time-sliced) |
 
-### 10.8 Good practice
+During analysis the Sequence tab merges SOE into the timeline using the same window, so Summary / Sequence stay focused on **this** fault.
 
-- Run **Test connection** first; the nameplate confirms you are talking to the right relay before downloading anything.
-- Keep **Settings** ticked: consistency and RCA need the settings that were active when the record was made. Fetch soon after the event if settings might change.
-- Always check **Channel map** and **DR targets** on the first event from a new relay type; later events from the same relay usually map the same way.
-- If a record shows **Incomplete**, wait a minute (the relay may still be writing it) and **Refresh list**.
+### 10.8 After the fetch
+
+- One event created → often opens **Summary** (or Files, depending on package readiness / UI path).
+- Several events → IED event list refreshes.
+- **Package ready** (COMTRADE **and** settings) → analysis can start automatically.
+- Browse again → those records show **Already fetched** (no accidental duplicates).
+
+### 10.9 Good practice
+
+- **Test connection** first (correct relay / nameplate).
+- Keep **Settings** and **Events** on for consistency and Sequence enrichment.
+- Map **Channel map** and **DR targets** once per new relay type.
+- **Incomplete** record → wait and **Refresh list** (relay may still be writing).
+- Empty Browse → enable MMS file transfer; set **COMTRADE path**; pick vendor.
 
 ---
 
 ## 11. Automatic fetch (auto-fetch)
 
-The **Automatic fetch** card (in Fetch from IED mode) lets the server watch the relay and import every **new** disturbance record without anyone opening the page.
+The **Automatic fetch** card lets the **server** watch the relay and import every **new** disturbance record without the browser staying open — like SCADA COMTRADE polling.
 
 ### 11.1 Switching it on
 
-1. Enter the **IP address** (and vendor) in Relay connection and preferably run **Test connection** once.
-2. Choose the options (below).
-3. Turn on **Auto-fetch new records** and pick the interval (**every 1 min, 2 min, 5 min, 10 min, 15 min, 30 min, 1 h, 2 h or 4 h**).
+1. Enter **IP** (and vendor / COMTRADE path) and preferably **Test connection**.
+2. Set options (below) — options lock while auto-fetch is **on**.
+3. Turn on **Auto-fetch new records** and choose the interval (**1 min … 4 h**).
 
-Auto-fetch cannot be enabled without an IP address. Settings are saved immediately on the IED.
+Cannot enable without an IP. Settings save immediately on the IED.
 
 ### 11.2 Options
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| **Settings** | On | Read settings with every new record |
-| **Events** | On | Read protection start/trip status with every new record |
-| **Start analysis automatically** | On | Queue analysis as soon as the event is created (when COMTRADE + settings are present) |
-| **Also import records already on the IED** | Off | Only editable while auto-fetch is **off**. When ticked, the first check imports records that are already stored on the relay too |
+| **Settings** | On | Download / read settings **with every new DR** |
+| **Events** | On | Download / read SOE / protection status **with every new DR** (then matched per [§10.7](#107-matching-soe--events-to-the-right-dr)) |
+| **Start analysis automatically** | On | Queue analysis when COMTRADE + settings are present |
+| **Also import records already on the IED** | Off | Editable only while auto-fetch is **off**. First cycle also imports the backlog (still max 10 per cycle) |
 
-### 11.3 How it behaves
+**SCL is not fetched by auto-fetch** (use manual Fetch if needed).
 
-- **Baseline:** by default, the first check after switching on only **records what is already on the relay** and imports nothing. From then on, only records that appear later are imported. (Tick *Also import records already on the IED* before switching on if you want the backlog.)
-- A background scheduler on the server wakes every **30 s** and checks each IED whose interval has elapsed. Up to **4 IEDs** are checked in parallel.
-- Each check imports at most **10 new records**; any remaining ones are picked up on the next check.
-- **One event per record**, exactly as with manual fetch, logged in the audit trail as **`IEC61850_AUTO_FETCH`** (user shown as “system”).
-- A record that fails to download **3 times** is skipped from then on so one damaged record cannot block the rest.
-- Switching auto-fetch off and on again takes a **fresh baseline**.
+### 11.3 Multi-DR behaviour each poll
 
-### 11.4 Status shown on the card
+1. List complete COMTRADE records on the IED.  
+2. Skip already-fetched keys (and the first-run **baseline**, unless import-existing is on).  
+3. Sort remaining by oldest first.  
+4. Import up to **10** new DRs this cycle.  
+5. **One event per DR**, with settings/SOE according to the toggles.  
+6. Optionally start analysis on each package-ready event.  
+7. Any leftover new DRs wait for the **next** interval.
+
+| Situation | What happens |
+|-----------|----------------|
+| First enable (default) | **Baseline** — remember what is already on the IED; import **nothing** yet |
+| New fault after baseline | Next poll creates event(s) for the new DR(s) |
+| 25 new DRs at once | 10 this cycle, 10 next, 5 after that |
+| Same DR again | Skipped (already in the fetched index) |
+| Record fails 3 times | Skipped thereafter (fetch manually to see warnings) |
+
+Off → on again → **fresh baseline**.
+
+### 11.4 Scheduler
+
+- Server wakes about every **30 s** and runs IEDs whose interval has elapsed (up to **4 IEDs** in parallel).
+- Runs **inside the API process** — stops when you close `ProtectionRCA.exe` / the PC sleeps; resumes when the app starts again.
+- **Check now** forces one cycle immediately (409 if that IED is already checking).
+
+### 11.5 Status on the card
 
 | Line | Meaning |
 |------|---------|
-| **Last check** | How long ago; with “*N new · M record(s) on IED*” when it succeeded |
-| **Next check** | When the scheduler will look again (“within 30 s” right after enabling) |
-| **Events created by auto-fetch** | Running total, with the time of the latest one |
-| Baseline note | Shown until the first check has run |
-| **Last check failed: …** | The error from the last attempt (unreachable, timeout, access denied, …) |
-| Scheduler warning | “Background scheduler is not running on the server” — see below |
+| **Last check** | Age; “*N new · M record(s) on IED*” when OK |
+| **Next check** | Next due time |
+| **Events created by auto-fetch** | Running total |
+| Baseline note | Until first check completes |
+| **Last check failed** | Last error text |
+| Scheduler warning | `IEC61850_AUTO_FETCH` false or library missing — **Check now** may still work |
 
-**Check now** runs a check immediately. If a check for that IED is already running you get “already running” (HTTP 409) — wait for it to finish.
+### 11.6 Manual Fetch vs Auto-fetch
 
-### 11.5 Requirements and limits
-
-- Auto-fetch runs **inside the application server**. It stops when you close the launcher window / shut down the server, and resumes when it starts again.
-- The server setting `IEC61850_AUTO_FETCH` (default **true**) enables the scheduler. If it is false, or the IEC 61850 client library is missing, the card shows the scheduler warning — **Check now** still works manually (library permitting).
-- Choose sensible intervals: most relays keep a limited number of records; checking every 5–15 min is enough for most sites and keeps load on the relay low.
+| | Manual Fetch | Auto-fetch |
+|--|--------------|------------|
+| Who picks DRs | You (checkboxes) or “all new” on Fetch | Server: all **new** complete |
+| Settings / SOE | Checkboxes | Checkboxes (defaults on) |
+| SCL | Optional | No |
+| Page open? | Yes | No |
+| Multi-DR cap | Your selection | **10** per cycle |
+| Audit | `IEC61850_FETCH` | `IEC61850_AUTO_FETCH` (user **system**) |
 
 ---
-
 ## 12. Event numbers
 
 Every event has a readable, sequential identifier:
@@ -1021,7 +1040,23 @@ Inspect individual sample values — not smoothed-only curves.
 
 ### Sequence (timeline)
 
-Chronological reconstruction (inception → pickup → trip → breaker → interruption → reclose/lockout when evidence exists). Digitals follow the **DR targets** map. Missing signals → **NOT AVAILABLE**. External SOE / event-report events merge when parsers succeed — including the **IEC 61850 status SOE** (`iec61850_soe_<tag>.csv`) captured during fetch.
+Chronological reconstruction (inception → pickup → trip → breaker → interruption → reclose/lockout when evidence exists).
+
+| View | Use |
+|------|-----|
+| **Table** | Relative time, **Absolute time**, device, digital/event, type, value, source |
+| **Cards** | Engineer facts: element, target role, channel, state (`0 → 1`), baseline/threshold with units — not raw JSON dumps |
+
+**Absolute time**
+
+- **COMTRADE / DR digitals:** CFG `start_time` + relative sample time (IEEE practice).  
+- **SOE rows:** wall-clock from the SOE file (already absolute).
+
+**Settings vs observed timing** strip at the top uses the earliest pickup / trip / 52a / interrupt from the timeline (case-insensitive). Expected columns stay blank when settings do not provide those times — values are never invented.
+
+Digitals follow the **DR targets** map. Shared trip contacts such as **`TRIP_CMD`** (no ANSI code in the name) are attributed to the element that picked up just before the trip, so Summary **Trips** and Protection **TRIP** rows stay consistent with the DR.
+
+External SOE / event-report points merge when parsers succeed — including `iec61850_soe_<tag>.csv` — **only inside the DR time window** (see [§10.7](#107-matching-soe--events-to-the-right-dr)).
 
 ### Electrical
 
@@ -1086,7 +1121,16 @@ RCA → Hypothesis → Finding → Calculation → Source → Raw data / file
 
 ### Summary / Report / Review
 
-**Summary** consolidates the event story on a printable one-page sheet (fault, protection, consistency, RCA, quality). After a complete **Manual upload** or package-ready fetch, the app often lands here first so you can read the story before drilling into tabs. **Report**: see [§23](#23-reports-html-pdf-json). Both always render as a light “paper” page, even in dark theme.
+**Summary** consolidates the event story on a printable one-page sheet (fault, protection, consistency, RCA, quality).
+
+| Field | Source |
+|-------|--------|
+| **DR time** | Relay disturbance time (COMTRADE trigger/start or stamped event time) — not upload/created time |
+| **Created** | When the event was created in this app |
+| **Pickups / Trips** | Asserted protection operations from analysis (`PICKUP` / `TRIP`). A row that tripped still shows as a trip; pickup remains visible from assessment details |
+| **OPERATED** | Elements with trip asserted |
+
+After a complete **Manual upload** or package-ready fetch, the app often lands here first. **Report**: see [§23](#23-reports-html-pdf-json). Both always render as a light “paper” page, even in dark theme.
 
 | Review action | When to use |
 |--------|-------------|
@@ -1561,6 +1605,24 @@ A: Yes where extractable (see [§14](#14-uploading-files-manually)). Opaque prop
 **Q: How do I get a PDF?**  
 A: Event → Report → **Download PDF**. The PDF is built from the analysis sections (professional layout), not a screenshot of the HTML page.
 
+**Q: How do I fetch several disturbance records at once?**  
+A: **List records on IED** → tick the ones you want (or **Select all new**) → **Fetch DR + settings / events**. Or click Fetch without listing — all new complete DRs are taken. **One event per DR.**
+
+**Q: Does auto-fetch also pull settings and SOE?**  
+A: Yes, when the **Settings** and **Events** toggles are on (defaults). Each new DR gets its own event with COMTRADE + those extras. SCL is manual-fetch only. See [§11](#11-automatic-fetch-auto-fetch).
+
+**Q: The IED has a huge SOE — will every row land on my event?**  
+A: No. SOE is matched to the DR by filename and/or time window (CFG start − 5 s … end + 30 s). See [§10.7](#107-matching-soe--events-to-the-right-dr).
+
+**Q: Browse finds no COMTRADE — how do I set the path?**  
+A: Enable MMS file transfer in the relay tool, then set **COMTRADE path on IED** (often `/COMTRADE/`) from that tool or the manual. Paths are not downloaded from the internet.
+
+**Q: Summary says Trips “None asserted” but the Sequence shows TRIP_CMD**  
+A: Re-run analysis on a build that attributes shared trip contacts to the picking-up element. Map opaque channels under **DR targets** if needed.
+
+**Q: DR time vs Created on Summary / dashboard?**  
+A: **DR time** = disturbance on the relay (COMTRADE). **Created** = when this app created the event.
+
 **Q: After manual upload I landed on Summary — is that normal?**  
 A: Yes, when COMTRADE **and** settings were present. Analysis started automatically and Summary is the first place to read the story. Use the tab bar for Waveforms, Consistency, Report, etc.
 
@@ -1612,28 +1674,31 @@ A: OIDC not enabled on the API (`AUTH_MODE` still `local`).
 
 | Symptom | What to check |
 |---------|----------------|
-| Panel warns the IEC 61850 library is missing / HTTP **503** | Install `pyiec61850-ng` in the backend environment (`pip install -r backend\requirements.txt`) or use a current portable build |
-| **Test connection** times out / refused (HTTP **502**) | Wrong IP; relay not reachable (ping, VLAN, firewall); TCP **102** blocked; relay’s MMS client slots all in use; relay IEC 61850 server disabled |
-| Access denied / authentication error | Relay requires MMS authentication or restricts clients by IP — allow the host PC’s IP in the relay configuration |
-| Browse finds no records | Enable **MMS file transfer** in the relay tool (e.g. PCM600); choose the correct **Vendor** profile; confirm the relay has records |
-| Browse takes very long / times out (~90 s) | Large file store — choose the vendor profile instead of Auto-detect |
-| Record **Incomplete** | CFG/DAT missing or still being written — **Refresh list** later |
-| Fetch completes with warnings | Open “*N warning(s) during fetch*” — typical: one file unreadable, settings node not present. The event holds whatever was retrieved |
-| “Nothing was retrieved from the IED” (404) | No selected record and nothing readable for settings/events. Check file transfer and the vendor profile |
-| Settings JSON almost empty | Relay exposes few settings via the data model (some vendors keep them only in their tool). Upload the vendor settings export on the Files tab |
+| Panel warns the IEC 61850 library is missing / HTTP **503** | Install `pyiec61850-ng` (`pip install -r backend\requirements.txt`) or use a current portable build |
+| **Test connection** times out / refused (HTTP **502**) | Wrong IP; VLAN/firewall; TCP **102** blocked; MMS client slots full; IEC 61850 server disabled on the relay |
+| Access denied | Allow the host PC’s IP / MMS auth in the relay tool |
+| Browse finds no records | Enable **MMS file transfer**; set **COMTRADE path on IED**; choose **Vendor**; confirm the relay has records |
+| Browse takes very long / times out (~90 s) | Large file store — set COMTRADE path or vendor profile |
+| Record **Incomplete** | CFG/DAT still writing — **Refresh list** later |
+| Fetch completes with warnings | Open the warnings list; event still holds what was retrieved |
+| “No complete disturbance records…” | Nothing complete to fetch with settings/events — list first and check Status |
+| Settings JSON almost empty | Upload vendor settings export on Files if the data model exposes little |
 | Event did not auto-analyse | Settings missing → add settings, **Start analysis** |
+| Wrong SOE on an event | Confirm DR time; re-fetch / re-analyse so the time window applies ([§10.7](#107-matching-soe--events-to-the-right-dr)) |
 
 ### Auto-fetch
 
 | Symptom | What to check |
 |---------|----------------|
-| “Enter the IED IP address before enabling auto-fetch” | Fill IP in Relay connection first |
-| “Background scheduler is not running on the server” | `IEC61850_AUTO_FETCH` is false or the library is missing. Use **Check now** meanwhile |
-| Nothing imported after enabling | Expected on the first check (baseline). New records after that are imported. Use *Also import records already on the IED* for backlog |
-| **Last check failed: …** | Same causes as Test connection; auto-fetch retries on the next interval |
-| A record is never imported | It failed 3 times and is skipped — fetch it manually to see the warning |
-| “already running” on Check now (409) | A check for that IED is in progress; wait |
-| Auto-fetch stopped overnight | The launcher / PC was closed or went to sleep — auto-fetch only runs while the server runs |
+| “Enter the IED IP address before enabling…” | Fill IP in Relay connection first |
+| “Background scheduler is not running…” | `IEC61850_AUTO_FETCH` false or library missing — use **Check now** |
+| Nothing imported after enabling | Expected (**baseline**). New DRs after that import. Use *Also import records already on the IED* for backlog |
+| Only some of many new DRs appeared | Max **10 per cycle** — wait for the next interval |
+| Settings/SOE missing on auto events | Turn **Settings** / **Events** on (only editable while auto-fetch is off) |
+| **Last check failed** | Same as Test connection; retries next interval |
+| A record is never imported | Failed 3 times — fetch manually |
+| “already running” (409) | Wait for the in-flight check |
+| Auto-fetch stopped overnight | Launcher/PC off or asleep — server must stay running |
 
 ### Analysis and data
 
@@ -1685,10 +1750,10 @@ IEC 61850 REST endpoints (see `/docs` for schemas):
 | Method + path | Purpose |
 |---------------|---------|
 | `GET /api/iec61850/info` | Library availability, vendor profiles |
-| `GET` / `PUT /api/ieds/{id}/iec61850` | Saved connection (IP, port, vendor) |
+| `GET` / `PUT /api/ieds/{id}/iec61850` | Saved connection (IP, port, vendor, **remote_directory**) |
 | `POST /api/ieds/{id}/iec61850/test` | Connect + nameplate |
-| `POST /api/ieds/{id}/iec61850/browse` | List records |
-| `POST /api/ieds/{id}/iec61850/fetch` | Fetch and create event(s) |
+| `POST /api/ieds/{id}/iec61850/browse` | List records (+ searched / discovered dirs) |
+| `POST /api/ieds/{id}/iec61850/fetch` | Fetch DRs + optional settings/SOE/SCL; create event(s) |
 | `GET` / `PUT /api/ieds/{id}/iec61850/auto-fetch` | Auto-fetch settings and status |
 | `POST /api/ieds/{id}/iec61850/auto-fetch/run-now` | Check now |
 
@@ -1718,14 +1783,18 @@ API FAIL   → Read log tail / backend\logs\api-launch.log
 LAN        → Others open http://<host-IP>:8001/ (Firewall allow)
 LOGIN      → admin / admin123 (bootstrap) or SSO if configured
 PLANT      → Substation → Voltage → Bay → Feeder → IED → Open
-FETCH      → IED → Fetch from IED → IP/Vendor → Test → Browse → tick → Fetch & create event
-AUTO       → IED → Auto-fetch new records → interval → (baseline first check)
+FETCH      → IED → Fetch from IED → IP [/ COMTRADE path] → Test
+             → List records → tick (Select all new) → Fetch DR + settings / events
+             → One event per DR; SOE matched by time / filename
+AUTO       → Auto-fetch ON → interval → baseline first, then new DRs (max 10/cycle)
+             → Settings + Events toggles ride with each DR
 UPLOAD     → IED → Manual upload → CFG/DAT/CFF/ZIP + settings
              → Upload, analyse & open summary (or Upload & create event)
 EVENT ID   → EVT-YYYY-NNNNN (auto) · legacy UUID → previous_event_id
 MAP        → Setup → Channel map + DR targets → save
 ANALYSE    → Auto on complete package, or Start / Re-run → status lamps
-SUMMARY    → One-page story (often first after upload)
+SUMMARY    → DR time vs Created · Pickups / Trips · one-page story
+SEQUENCE   → Table or Cards · Absolute = CFG start + relative (DR)
 VERIFY     → Waveforms → Sequence → Consistency → RCA → Evidence
 CAUSE      → RCA cause enrichment (field evidence) → re-run
 FILTER     → All events: Search + From/To + Clear filters
@@ -1741,4 +1810,4 @@ REMEMBER   → Read-only IEC 61850 · No invented data · No OT control · No ge
 
 ---
 
-*End of User Guide — Protection RCA Platform (document version 0.8.0)*
+*End of User Guide — Protection RCA Platform (document version 0.9.0)*

@@ -32,6 +32,8 @@ class Connection:
     profile_id: str = "AUTO"
     connect_timeout_s: float = 10.0
     request_timeout_s: float = 20.0
+    # Engineer override — same idea as ABB 800xA / Elipse “COMTRADE path on device”
+    remote_directory: Optional[str] = None
 
     def session(self) -> MmsSession:
         return MmsSession(
@@ -40,6 +42,9 @@ class Connection:
             connect_timeout_s=self.connect_timeout_s,
             request_timeout_s=self.request_timeout_s,
         )
+
+    def dir_hints(self) -> list[str]:
+        return [self.remote_directory] if self.remote_directory else []
 
 
 @dataclass
@@ -145,17 +150,31 @@ def identify(conn: Connection) -> dict[str, Any]:
 
 def browse(conn: Connection, *, time_budget_s: float = 90.0) -> dict[str, Any]:
     deadline = time.monotonic() + time_budget_s
+    profile: VendorProfile
+    dirs: list[str]
     with conn.session() as s:
         lds = s.logical_devices()
         nameplate = s.nameplate(lds)
         profile = _resolve_profile(conn, nameplate)
-        entries = s.walk(search_dirs(profile), deadline=deadline)
+        dirs = search_dirs(profile, extra=conn.dir_hints())
+        entries = s.walk(dirs, deadline=deadline)
     c = classify(entries)
+    discovered = sorted(
+        {
+            str(r["directory"] or "/")
+            for r in c["records"]
+            if r.get("directory") is not None
+        }
+    )
     return {
         "nameplate": nameplate,
         "logical_devices": lds,
         "profile": profile.id,
         "profile_label": profile.label,
+        "profile_notes": profile.notes,
+        "remote_directory": conn.remote_directory,
+        "searched_dirs": dirs,
+        "discovered_dirs": discovered,
         "records": c["records"],
         "settings_files": [_file_dict(e) for e in c["settings_files"]],
         "event_files": [_file_dict(e) for e in c["event_files"]],
@@ -295,7 +314,7 @@ def acquire(
         lds = s.logical_devices()
         res.nameplate = s.nameplate(lds)
         res.profile = _resolve_profile(conn, res.nameplate)
-        entries = s.walk(search_dirs(res.profile), deadline=deadline)
+        entries = s.walk(search_dirs(res.profile, extra=conn.dir_hints()), deadline=deadline)
         c = classify(entries)
         by_path = {e.path: e for e in entries}
 

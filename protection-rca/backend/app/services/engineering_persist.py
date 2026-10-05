@@ -271,6 +271,7 @@ async def persist_engineering_analysis(
 
     from app.services.side_files import (
         load_side_timeline_from_files,
+        record_duration_s,
     )
 
     line_params: dict[str, Any] = {}
@@ -326,7 +327,12 @@ async def persist_engineering_analysis(
             ct_vt_ratios = det.get("ct_vt") or {}
         param_detected_keys.update(det.get("detected_keys") or {})
 
-    extra_timeline, side_summary = load_side_timeline_from_files(storage, list(files))
+    extra_timeline, side_summary = load_side_timeline_from_files(
+        storage,
+        list(files),
+        dr_start=record.start_time or record.trigger_time,
+        duration_s=record_duration_s(record),
+    )
 
     # Enrich plant labels from CFG when wizard left UNKNOWN
     extra = dict(event.extra) if isinstance(event.extra, dict) else {}
