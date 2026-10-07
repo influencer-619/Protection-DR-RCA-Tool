@@ -6,7 +6,8 @@ interface Props {
   source: SettingSourceInfo;
 }
 
-function plainActive(status: string | undefined): string {
+function plainActive(status: string | undefined, sourceMissing: boolean): string {
+  if (sourceMissing) return 'No settings file bound — upload settings to enable checks';
   const s = (status || 'NOT VERIFIED').toUpperCase();
   if (s === 'VERIFIED') return 'Confirmed by engineer or file';
   return 'Uploaded settings are treated as APPROVED automatically';
@@ -15,6 +16,13 @@ function plainActive(status: string | undefined): string {
 export function SettingSourceBanner({ source }: Props) {
   const active =
     source.active_group_status ?? source.verification_state ?? 'NOT VERIFIED';
+  const src = String(source.source || '').toUpperCase();
+  const sourceMissing =
+    !src ||
+    src === 'NOT AVAILABLE' ||
+    src === 'NOT_AVAILABLE' ||
+    src === 'NOT VERIFIED' ||
+    src === 'UNKNOWN';
 
   return (
     <div className={styles.banner} role="status">
@@ -34,7 +42,7 @@ export function SettingSourceBanner({ source }: Props) {
         <div>
           <span className={styles.label}>Active group</span>
           <span className={`mono ${styles.value}`}>{active}</span>
-          <div className={styles.hint}>{plainActive(active)}</div>
+          <div className={styles.hint}>{plainActive(active, sourceMissing)}</div>
         </div>
         <div>
           <span className={styles.label}>Approval</span>

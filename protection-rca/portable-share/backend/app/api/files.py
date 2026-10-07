@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 
+from app.core.config import get_settings
 from app.core.security import Role
 from app.dependencies.auth import CurrentUser, DbSession, require_role
 from app.models import EventFile, User
@@ -57,15 +59,37 @@ async def upload_event_files(
         raise HTTPException(status_code=404, detail="Event not found")
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
+    allowed = set(get_settings().allowed_extensions)
     stored: list[EventFileOut] = []
+    skipped: list[str] = []
     for f in files:
-        efs = await file_service.store_event_file(
-            db,
-            event,
-            f,
-            source_type=source_type,
-            uploaded_by=user.id,
-            request_id=getattr(request.state, "request_id", None),
-        )
+        name = f.filename or "upload.bin"
+        ext = Path(name).suffix.lower()
+        if ext not in allowed:
+            skipped.append(f"{name} ({ext or 'no extension'})")
+            continue
+        try:
+            efs = await file_service.store_event_file(
+                db,
+                event,
+                f,
+                source_type=source_type,
+                uploaded_by=user.id,
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except HTTPException as exc:
+            # Do not fail the whole DIGSI/MiCOM folder drop for one side file
+            if exc.status_code in (
+                status.HTTP_400_BAD_REQUEST,
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            ):
+                skipped.append(f"{name}: {exc.detail}")
+                continue
+            raise
         stored.extend(EventFileOut.model_validate(ef) for ef in efs)
+    if not stored:
+        detail = "No allowed files uploaded"
+        if skipped:
+            detail += " — skipped: " + "; ".join(skipped[:8])
+        raise HTTPException(status_code=400, detail=detail)
     return stored

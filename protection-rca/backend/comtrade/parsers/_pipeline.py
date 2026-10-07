@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Sequence
 
-from comtrade.canonical.model import CanonicalDisturbanceRecord
+from comtrade.canonical.model import CanonicalDisturbanceRecord, SampleRateSection
 from comtrade.parsers.ascii.parser import (
     AsciiDatParser,
     ParsedDat,
@@ -62,13 +62,27 @@ class RecordBuilder:
         parser_version: str = "1.0.0",
         extra_unsupported: Optional[list[str]] = None,
     ) -> CanonicalDisturbanceRecord:
-        rate = cfg.sample_rates[0].sample_rate_hz if cfg.sample_rates else None
+        sample_rates = list(cfg.sample_rates)
+        rate = sample_rates[0].sample_rate_hz if sample_rates else None
         ts_assessment = self.timestamps.assess(
             dat.timestamps,
             timemult=cfg.time_multiplier,
-            sample_rate_hz=rate,
+            sample_rate_hz=rate if rate and rate > 0 else None,
         )
         normalized_ts = ts_assessment.normalized_us
+
+        # CFG may omit / zero nrates (common vendor quirk). Recover from DAT Δt.
+        if (rate is None or rate <= 0) and len(normalized_ts) >= 2:
+            inferred = self.timestamps.infer_sample_rate_hz(normalized_ts)
+            if inferred and inferred > 0:
+                end = int(dat.sample_count or len(normalized_ts))
+                sample_rates = [
+                    SampleRateSection(sample_rate_hz=float(inferred), end_sample=end)
+                ]
+                rate = float(inferred)
+                cfg.warnings.append(
+                    f"sample rate recovered from DAT timestamps: {inferred:.3f} Hz"
+                )
 
         # Scale analogs
         scaled = self.scaling.scale_all(dat.analog_raw, cfg.analog_channels)
@@ -122,7 +136,7 @@ class RecordBuilder:
             nominal_frequency=cfg.nominal_frequency,
             start_time=cfg.start_time,
             trigger_time=cfg.trigger_time,
-            sample_rates=list(cfg.sample_rates),
+            sample_rates=sample_rates,
             analog_channels=list(cfg.analog_channels),
             digital_channels=list(cfg.digital_channels),
             samples=dat.sample_count,

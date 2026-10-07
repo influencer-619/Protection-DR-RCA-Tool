@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isDistanceApplicable } from '@/utils/schemeContext';
+import {
+  bayFaultTypeFromAnalysis,
+  baySchemeHintFromProtection,
+  isDistanceApplicable,
+  resolveBaySchemeHint,
+  resolveDistanceApplicable,
+  resolveFaultType,
+  schemeHintFromReportAnalysis,
+} from '@/utils/schemeContext';
 import type { FaultClassification, ProtectionOperation } from '@/types';
 
 function fault(partial: Partial<FaultClassification>): FaultClassification {
@@ -14,14 +22,20 @@ function fault(partial: Partial<FaultClassification>): FaultClassification {
 }
 
 function op(partial: Partial<ProtectionOperation>): ProtectionOperation {
-  return {
+  const base = {
     id: 'p1',
     event_id: 'e1',
     element: '87B',
     operation_type: 'TRIP',
     asserted: true,
+    details: { evidence_ids: ['CH1'] },
     ...partial,
-  } as ProtectionOperation;
+  };
+  // Keep caller details but ensure evidence when asserted trip/pickup
+  if (base.asserted && !(base.details as { evidence_ids?: unknown[] } | undefined)?.evidence_ids) {
+    base.details = { ...(base.details as object), evidence_ids: ['CH1'] };
+  }
+  return base as ProtectionOperation;
 }
 
 describe('isDistanceApplicable', () => {
@@ -89,5 +103,94 @@ describe('isDistanceApplicable', () => {
         protection: [op({ element: '51', asserted: true })],
       }),
     ).toBe(false);
+  });
+});
+
+describe('bay one-line analysis sync', () => {
+  it('prefers live fault classification over event.fault_type', () => {
+    expect(bayFaultTypeFromAnalysis(fault({ fault_type: 'ABC' }), 'UNKNOWN')).toBe('ABC');
+    expect(bayFaultTypeFromAnalysis(null, 'AG')).toBe('AG');
+  });
+
+  it('builds scheme hint with pickup/trip like Protect table', () => {
+    expect(
+      baySchemeHintFromProtection([
+        op({ element: '87T', operation_type: 'PICKUP', asserted: true }),
+        op({ element: '87G', operation_type: 'PICKUP', asserted: true }),
+      ]),
+    ).toBe('87T PICKUP 87G PICKUP');
+  });
+
+  it('reads scheme hint from protection_assessment not wrong nested key', () => {
+    expect(
+      schemeHintFromReportAnalysis({
+        protection: { assessments: [] },
+        protection_assessment: [
+          { element: '87T', pickup: true, trip: false },
+        ],
+      }),
+    ).toBe('87T PICKUP');
+  });
+
+  it('resolveBaySchemeHint prefers live protection over report_analysis', () => {
+    expect(
+      resolveBaySchemeHint({
+        protection: [op({ element: '87T', operation_type: 'PICKUP', asserted: true })],
+        reportAnalysis: {
+          protection_assessment: [{ element: '51', pickup: true, trip: true }],
+        },
+      }),
+    ).toBe('87T PICKUP');
+  });
+
+  it('resolveFaultType prefers live fault then report_analysis then event', () => {
+    expect(
+      resolveFaultType({
+        fault: fault({ fault_type: 'AB' }),
+        eventFaultType: 'AG',
+        reportAnalysis: { fault_classification: { fault_type: 'BC' } },
+      }),
+    ).toBe('AB');
+    expect(
+      resolveFaultType({
+        fault: null,
+        eventFaultType: 'AG',
+        reportAnalysis: { fault_classification: { fault_type: 'UNKNOWN' } },
+      }),
+    ).toBe('UNKNOWN');
+    expect(
+      resolveFaultType({
+        fault: null,
+        eventFaultType: 'AG',
+        reportAnalysis: {},
+      }),
+    ).toBe('AG');
+  });
+
+  it('resolveDistanceApplicable uses report_analysis flag consistently', () => {
+    expect(
+      resolveDistanceApplicable({
+        fault: fault({ features: {} }),
+        protection: [op({ element: '51' })],
+        reportAnalysis: {
+          fault_classification: {
+            evidence: { distance_applicable: false },
+            distance: { status: 'NOT_APPLICABLE' },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      resolveDistanceApplicable({
+        fault: fault({ features: {} }),
+        protection: [op({ element: '21', asserted: true })],
+        reportAnalysis: {
+          fault_classification: {
+            evidence: { distance_applicable: true },
+            distance: { status: 'OK', value_km: 1.2 },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });

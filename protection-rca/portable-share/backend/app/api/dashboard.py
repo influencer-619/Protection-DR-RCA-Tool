@@ -31,11 +31,9 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 def _iso(dt: datetime | None) -> str | None:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.isoformat()
+    from app.core.datetime_iso import to_utc_iso
+
+    return to_utc_iso(dt)
 
 
 @router.get("/stats", response_model=DashboardStats)
@@ -312,12 +310,27 @@ async def dashboard_stats(
                     ProtectionOperation.operation_type.in_(("TRIP", "trip", "PICKUP", "pickup")),
                     ProtectionOperation.asserted.is_(True),
                 )
-                .limit(5)
+                .limit(12)
             )
         ).scalars().all()
-        prot = ", ".join(
-            sorted({(p.element or p.function_code or "?").strip() for p in trips if p.element or p.function_code})
-        ) or "—"
+        # Prefer event.extra.protection_summary (built with channel-evidence rules);
+        # fall back only to asserted ops that still carry digital evidence in details.
+        from protection.operate_evidence import assessment_has_operate_evidence
+
+        extra_e = e.extra if isinstance(e.extra, dict) else {}
+        stored_prot = extra_e.get("protection_summary")
+        if isinstance(stored_prot, str) and stored_prot.strip():
+            prot = stored_prot.strip()
+        else:
+            codes = {
+                (p.element or p.function_code or "").strip()
+                for p in trips
+                if (p.element or p.function_code)
+                and assessment_has_operate_evidence(
+                    p.details if isinstance(p.details, dict) else {}
+                )
+            }
+            prot = ", ".join(sorted(codes)) or "—"
 
         inconsist = int(
             (

@@ -3,16 +3,19 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 9px;
+  max-width: 100%;
+  padding: 2px 8px;
   border-radius: 999px;
   font-family: var(--font-sans);
-  font-size: 0.67rem;
+  font-size: 0.66rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  white-space: nowrap;
-  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
-  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border: 1px solid color-mix(in srgb, var(--tone) 40%, transparent);
+  line-height: 1.35;
 }
 
 .shape {
@@ -47,7 +50,7 @@
 
 .running {
   --tone: var(--accent);
-  color: var(--accent-bright);
+  color: var(--accent-dim);
   background: var(--accent-soft);
 }
 

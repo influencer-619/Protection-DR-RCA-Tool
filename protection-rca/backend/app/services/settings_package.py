@@ -373,11 +373,13 @@ def load_relay_settings_from_files(storage: Any, files: list[Any]) -> tuple[dict
         is_settings = st == "SETTINGS" or any(
             x in name for x in ("setting", "relay", "param", "set_all", "set_", "xrio")
         )
-        if not is_settings and not name.endswith((".set", ".xrio")):
+        if not is_settings and not name.endswith((".set", ".xrio", ".pdf", ".docx", ".doc")):
             continue
         if name.endswith((".cfg", ".dat", ".cff")) and "setting" not in name:
             continue
-        if not name.endswith((".txt", ".csv", ".set", ".cfg", ".xml", ".xrio", ".json")):
+        if not name.endswith(
+            (".txt", ".csv", ".set", ".cfg", ".xml", ".xrio", ".json", ".pdf", ".docx", ".doc")
+        ):
             continue
         # JSON already handled above; skip unless SETTINGS-tagged and empty earlier
         if name.endswith(".json"):
@@ -397,7 +399,7 @@ def load_relay_settings_from_files(storage: Any, files: list[Any]) -> tuple[dict
         if best is None or score > best[0]:
             best = (score, flat, records)
 
-    if best and best[2]:
+    if best and (best[2] or best[1].get("ct_ratio") or best[1].get("vt_ratio")):
         logger.info(
             "Loaded %d setting parameters via vendor ingest from %s",
             len(best[2]),

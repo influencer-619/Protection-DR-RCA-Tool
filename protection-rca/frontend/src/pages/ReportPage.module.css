@@ -14,7 +14,7 @@
   margin: 0 0 10px;
   font-size: 1.3rem;
   color: #2c4658;
-  border-bottom: 2px solid #2a7a9a;
+  border-bottom: 2px solid var(--accent);
   padding-bottom: 6px;
 }
 

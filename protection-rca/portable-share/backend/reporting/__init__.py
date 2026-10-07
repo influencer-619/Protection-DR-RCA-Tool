@@ -40,6 +40,48 @@ def _as_pct_filter(value: Any) -> str:
     return f"{f:.1f}%"
 
 
+_HUMANIZE_LABELS = {
+    "ANALYSIS_COMPLETE": "Analysis complete",
+    "ANALYSIS_COMPLETE_WITH_WARNINGS": "Complete (warnings)",
+    "ENGINEER_REVIEW_REQUIRED": "Review required",
+    "DATA_INSUFFICIENT": "Data insufficient",
+    "UNSUPPORTED_FORMAT": "Unsupported format",
+    "INCONCLUSIVE": "Inconclusive",
+    "UNLIKELY": "Unlikely",
+    "PROBABLE": "Probable",
+    "POSSIBLE": "Possible",
+    "CONFIRMED": "Confirmed",
+    "CONSISTENT": "Consistent",
+    "INCONSISTENT": "Inconsistent",
+    "ACCEPTABLE": "Acceptable",
+    "NOT_VERIFIED": "Not verified",
+    "NOT VERIFIED": "Not verified",
+    "NOT_AVAILABLE": "Not available",
+    "NOT AVAILABLE": "Not available",
+    "UNKNOWN": "Unknown",
+    "MOTOR_START": "Motor start / starting current",
+    "SWITCHING_TRANSIENT": "Transformer energization / switching",
+    "INTERNAL_FEEDER_FAULT": "Feeder / local circuit fault",
+}
+
+
+def _humanize_label_filter(value: Any) -> str:
+    """Jinja filter: compact labels for narrow KPI cells (no raw ENUM_STYLE overflow)."""
+    if value is None:
+        return "—"
+    text = str(value).strip()
+    if not text or text in ("—", "-"):
+        return "—"
+    if text in _HUMANIZE_LABELS:
+        return _HUMANIZE_LABELS[text]
+    upper = text.upper()
+    if upper in _HUMANIZE_LABELS:
+        return _HUMANIZE_LABELS[upper]
+    if "_" in text and text.upper() == text:
+        return text.replace("_", " ").title()
+    return text
+
+
 @dataclass
 class ReportStatement:
     kind: str  # OBSERVED | CALCULATED | INFERRED | HYPOTHESIS
@@ -88,13 +130,50 @@ class ReportGenerator:
             auto_reload=True,
         )
         self.env.filters["as_pct"] = _as_pct_filter
+        self.env.filters["humanize_label"] = _humanize_label_filter
 
     def build_statements(self, analysis: dict[str, Any]) -> list[ReportStatement]:
         stmts: list[ReportStatement] = []
         fault = analysis.get("fault_classification") or {}
         ft = fault.get("fault_type")
         st = fault.get("status")
-        if st == "CLASSIFIED" and ft and ft != "UNKNOWN":
+        ec = fault.get("event_class")
+        if not ec:
+            evc = (fault.get("evidence") or {}).get("event_classification")
+            if isinstance(evc, dict):
+                ec = evc.get("event_class")
+        ecs = fault.get("event_class_status") or "INCONCLUSIVE"
+        if ec and str(ec) != "FAULT":
+            stmts.append(
+                ReportStatement(
+                    "INFERRED",
+                    self.sentences.get(
+                        "fault",
+                        "event_class_non_fault",
+                        event_class=ec,
+                        status=ecs,
+                    ),
+                    "DFR Event Class",
+                )
+            )
+            stmts.append(
+                ReportStatement(
+                    "INFERRED",
+                    self.sentences.get("fault", "inconclusive"),
+                    "Fault Classification",
+                )
+            )
+        elif st == "CLASSIFIED" and ft and ft != "UNKNOWN":
+            if ec:
+                stmts.append(
+                    ReportStatement(
+                        "OBSERVED",
+                        self.sentences.get(
+                            "fault", "event_class_fault", status=ecs
+                        ),
+                        "DFR Event Class",
+                    )
+                )
             stmts.append(
                 ReportStatement(
                     "OBSERVED",
@@ -103,6 +182,16 @@ class ReportGenerator:
                 )
             )
         elif st == "PROBABLE" and ft:
+            if ec:
+                stmts.append(
+                    ReportStatement(
+                        "INFERRED",
+                        self.sentences.get(
+                            "fault", "event_class_fault", status=ecs
+                        ),
+                        "DFR Event Class",
+                    )
+                )
             stmts.append(
                 ReportStatement(
                     "INFERRED",

@@ -15,11 +15,77 @@ from electrical_analysis import ElectricalAnalysisResult, analyze_electrical
 from event_reconstruction import TimelineEvent, reconstruct_timeline
 from evidence import Evidence, EvidenceGraphBuilder, make_evidence
 from fault_analysis import FaultClassificationResult, classify_fault
+from fault_analysis.event_class import EventClass
 from protection import ProtectionRuleEngine, ProtectionEngineResult
 from rca import HypothesisEngine, RCAResult
 from reporting import ReportGenerator, ReportBundle
 from settings.hierarchy.resolver import SettingRecord, SettingResolution, resolve_setting
 from similarity import SimilarityResult, SimilarityService
+
+
+def _reconcile_event_class_with_rca(
+    fault_dict: dict[str, Any],
+    *,
+    rca: RCAResult,
+    electrical_flags: dict[str, Any],
+) -> dict[str, Any]:
+    """Align DFR event_class with primary RCA for non-fault causes.
+
+    - EVT-18: RCA energization/switching but event_class UNKNOWN
+    - EVT-17: RCA motor start but event_class FAULT (V sag + I rise, pickup-only)
+    """
+    out = dict(fault_dict)
+    ec = str(out.get("event_class") or "").upper()
+
+    primary = rca.primary
+    hid = str(getattr(primary, "hypothesis_id", "") or "") if primary else ""
+    det = electrical_flags.get("detectors") if isinstance(electrical_flags.get("detectors"), dict) else {}
+    inrush = det.get("magnetizing_inrush") if isinstance(det, dict) else None
+    inrush_ok = electrical_flags.get("magnetizing_inrush") or (
+        isinstance(inrush, dict) and str(inrush.get("status") or "").upper() == "POSSIBLE"
+    )
+    no_trip = not bool(electrical_flags.get("trip_command"))
+
+    new_ec: Optional[str] = None
+    if hid == "MOTOR_START" or electrical_flags.get("motor_start"):
+        new_ec = EventClass.MOTOR_START
+    elif hid == "SWITCHING_TRANSIENT":
+        new_ec = EventClass.ENERGIZATION if inrush_ok else EventClass.SWITCHING
+    elif inrush_ok and no_trip:
+        new_ec = EventClass.ENERGIZATION
+
+    if not new_ec:
+        return out
+
+    # Apply when UNKNOWN, or demote false FAULT when no trip + non-fault RCA
+    if ec not in (EventClass.UNKNOWN, "", EventClass.FAULT):
+        return out
+    if ec == EventClass.FAULT and not no_trip:
+        return out  # real trip — keep FAULT
+    if ec == EventClass.FAULT and new_ec == EventClass.FAULT:
+        return out
+
+    out["event_class"] = new_ec
+    out["event_class_status"] = "PROBABLE"
+    feat = dict(out.get("evidence") or {})
+    evc = dict(feat.get("event_classification") or {})
+    evc["event_class"] = new_ec
+    evc["status"] = "PROBABLE"
+    reasons = list(evc.get("reasons") or [])
+    reasons.append(f"Aligned with primary RCA ({hid or 'non-fault evidence'})")
+    evc["reasons"] = reasons
+    feat["event_classification"] = evc
+    feat["event_class"] = new_ec
+    feat["event_class_status"] = "PROBABLE"
+    feat["ground"] = None
+    feat["ground_applicable"] = False
+    feat["Ia_elevated"] = None
+    feat["Ib_elevated"] = None
+    feat["Ic_elevated"] = None
+    out["evidence"] = feat
+    out["fault_type"] = "UNKNOWN"
+    out["status"] = "INCONCLUSIVE"
+    return out
 
 
 @dataclass
@@ -162,6 +228,15 @@ class AnalysisPipeline:
             digital_map = event_meta["extra"].get("digital_map")
         elec = analyze_electrical(record, channel_map=channel_map)
         limitations.extend(elec.limitations)
+        # MiCOM / default epoch clocks (1990–1994) are not real event times
+        st = getattr(record, "start_time", None)
+        if st is not None and getattr(st, "year", None) is not None and 1980 <= int(st.year) <= 1994:
+            limitations.append(
+                f"DR clock suspect/default ({st.isoformat()}) — do not use as event time"
+            )
+            q = dict(record.quality or {})
+            q["clock_suspect"] = True
+            record.quality = q
 
         if record.samples == 0 and not record.scaled_values:
             decision = self.decision.decide(data_insufficient=True)
@@ -262,6 +337,11 @@ class AnalysisPipeline:
             assessments=prot.assessments,
             elec_remote=elec_remote if hasattr(elec_remote, "phasors") else None,
             sync_offset_us=sync_offset,
+            timeline=timeline,
+            digital_channel_names=[
+                getattr(ch, "name", None) or str(ch)
+                for ch in (getattr(record, "digital_channels", None) or [])
+            ],
         )
         limitations.extend(fault.limitations)
         if not (fault.evidence or {}).get("distance_applicable"):
@@ -289,8 +369,32 @@ class AnalysisPipeline:
         # Similarity
         sim = self.similarity.find_similar(event_id=event_id)
 
+        # IEEE/PSRC DFR event class → RCA electrical flags (gate before fault typing)
+        ec = fault.event_class
+        ecs = fault.event_class_status
+        if not ec:
+            ec_feat = (fault.evidence or {}).get("event_classification")
+            if isinstance(ec_feat, dict):
+                ec = ec_feat.get("event_class")
+                ecs = ecs or ec_feat.get("status")
+        if ec:
+            electrical_flags["event_class"] = str(ec)
+            if ecs:
+                electrical_flags["event_class_status"] = str(ecs)
+            if str(ec) != "FAULT":
+                electrical_flags["no_fault"] = True
+                electrical_flags["fault_indicated"] = False
+                if str(ec) == "ENERGIZATION":
+                    electrical_flags["magnetizing_inrush"] = True
+                    electrical_flags["switching_correlated"] = True
+                elif str(ec) == "MOTOR_START":
+                    electrical_flags["motor_start"] = True
+                    electrical_flags["switching_correlated"] = True
+                elif str(ec) == "SWITCHING":
+                    electrical_flags["switching_correlated"] = True
+
         # Enrich electrical flags from fault evidence before RCA (available-data scoring)
-        if fault.status in ("CLASSIFIED", "PROBABLE"):
+        if str(ec or "") == "FAULT" and fault.status in ("CLASSIFIED", "PROBABLE"):
             electrical_flags["fault_indicated"] = True
             feat = fault.evidence if isinstance(fault.evidence, dict) else {}
             if feat.get("available") or any(
@@ -348,6 +452,11 @@ class AnalysisPipeline:
         if "reclose" in tl_types:
             electrical_flags["switching_correlated"] = True
 
+        electrical_flags["digital_channel_names"] = [
+            getattr(ch, "name", None) or str(ch)
+            for ch in (getattr(record, "digital_channels", None) or [])
+        ]
+
         extra = event_meta.get("extra") if isinstance(event_meta.get("extra"), dict) else {}
         cause_ev = event_meta.get("cause_evidence")
         if cause_ev is None:
@@ -383,6 +492,13 @@ class AnalysisPipeline:
             },
         )
         limitations.extend(rca.limitations)
+
+        # Align event_class with RCA when DFR gate stayed UNKNOWN (e.g. EVT-18)
+        fault_dict = _reconcile_event_class_with_rca(
+            fault.to_dict(),
+            rca=rca,
+            electrical_flags=electrical_flags,
+        )
 
         # Evidence
         stages.append(JobStage.EVIDENCE.value)
@@ -437,7 +553,7 @@ class AnalysisPipeline:
             "timeline": [e.to_dict() for e in timeline],
             "protection_assessment": [a.to_dict() for a in prot.assessments],
             "consistency_findings": [f.to_dict() for f in cons.findings],
-            "fault_classification": fault.to_dict(),
+            "fault_classification": fault_dict,
             "breaker_analysis": breaker,
             "rca_hypotheses": rca.to_dict(),
             "evidence": [e.to_dict() for e in evidence_items],
@@ -471,7 +587,7 @@ class AnalysisPipeline:
             timeline=[e.to_dict() for e in timeline],
             protection_assessment=[a.to_dict() for a in prot.assessments],
             consistency_findings=[f.to_dict() for f in cons.findings],
-            fault_classification=fault.to_dict(),
+            fault_classification=fault_dict,
             breaker_analysis=breaker,
             anomalies=anom.to_dict(),
             rca_hypotheses=rca.to_dict(),

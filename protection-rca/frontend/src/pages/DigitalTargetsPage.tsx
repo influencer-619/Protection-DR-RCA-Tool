@@ -5,7 +5,19 @@ import { Skeleton } from '@/components/Skeleton';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 import styles from './ChannelMappingPage.module.css';
 
-const ROLE_COLS = ['PICKUP', 'TRIP', '52A', '52B', 'RECLOSE', 'LOCKOUT', 'UNKNOWN'] as const;
+const ROLE_COLS = [
+  'PICKUP',
+  'TRIP',
+  '52A',
+  '52B',
+  'BLOCK',
+  'BF',
+  'RECLOSE',
+  'LOCKOUT',
+  'ALARM',
+  'IGNORE',
+  'UNKNOWN',
+] as const;
 
 interface DigitalRow {
   name: string;

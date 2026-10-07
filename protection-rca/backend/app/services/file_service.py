@@ -37,6 +37,12 @@ SOURCE_BY_EXT = {
     ".eve": "RELAY_EVENT_REPORT",
     ".cev": "COMTRADE",  # converted to CFG/DAT on ingest
     ".pdf": "ATTACHMENT",
+    ".docx": "ATTACHMENT",
+    ".doc": "ATTACHMENT",
+    ".dg4": "ATTACHMENT",  # DIGSI 4 disturbance companion (not COMTRADE)
+    ".xmlu": "ATTACHMENT",  # DIGSI unit / device XML side-car
+    ".reh": "ATTACHMENT",
+    ".rev": "ATTACHMENT",
     ".cid": "ATTACHMENT",
     ".icd": "ATTACHMENT",
     ".scd": "ATTACHMENT",
@@ -44,6 +50,7 @@ SOURCE_BY_EXT = {
     ".zip": "PACKAGE",
     ".dz5": "PACKAGE",
     ".dex5": "PACKAGE",
+    ".dex": "PACKAGE",
     ".d5z": "PACKAGE",
     ".pcmi": "PACKAGE",
     ".pcmp": "PACKAGE",
@@ -79,7 +86,19 @@ def infer_source_type(filename: str, ext: str = "", override: Optional[str] = No
         )
     ) or bool(re.search(r"(^|[_\-.])set\d*([_\-.]|$)", name)) or name.startswith("set_")
     if settings_name or ext in (".set", ".rdb", ".xrio"):
-        if ext in (".json", ".txt", ".xml", ".csv", ".set", ".rdb", ".xrio", ".cfg"):
+        if ext in (
+            ".json",
+            ".txt",
+            ".xml",
+            ".csv",
+            ".set",
+            ".rdb",
+            ".xrio",
+            ".cfg",
+            ".pdf",
+            ".docx",
+            ".doc",
+        ):
             return "SETTINGS"
         if ext == ".cfg" and ("setting" in name or "settings" in name):
             return "SETTINGS"
@@ -100,7 +119,7 @@ def infer_source_type(filename: str, ext: str = "", override: Optional[str] = No
         return "SOE"
 
     # --- Explicit relay event report ---
-    if ext in (".txt", ".log", ".eve", ".cev") and any(
+    if ext in (".txt", ".log", ".eve", ".cev", ".pdf", ".docx", ".doc") and any(
         h in name
         for h in (
             "event_report",
@@ -110,8 +129,14 @@ def infer_source_type(filename: str, ext: str = "", override: Optional[str] = No
             "fault_report",
             "history",
             "_eve",
+            "soe",
+            "ser",
         )
     ):
+        if ext in (".pdf", ".docx", ".doc") and any(
+            h in name for h in ("setting", "settings", "setpoint", "param")
+        ):
+            return "SETTINGS"
         return "RELAY_EVENT_REPORT"
 
     # --- Docs / notes ---
@@ -411,10 +436,11 @@ async def store_event_file(
     )
 
     # DIGSI / PCM600 / ZIP-like project packages → expand members
-    if ext in (".zip", ".dz5", ".dex5", ".d5z", ".pcmi", ".pcmp") or is_vendor_package(
+    if ext in (".zip", ".dz5", ".dex5", ".dex", ".d5z", ".pcmi", ".pcmp") or is_vendor_package(
         filename, data
     ):
-        if ext != ".zip" and not is_zip_bytes_safe(data):
+        zip_ok = is_zip_bytes_safe(data) or is_vendor_package(filename, data)
+        if ext != ".zip" and not zip_ok:
             # Fall through to single-file store with clear typing
             ef = await _store_bytes(
                 db,

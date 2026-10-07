@@ -15,7 +15,27 @@ from app.services import event_service
 router = APIRouter(prefix="/api/dr", tags=["dr-analyser"])
 
 _VALID_ROLES = frozenset(
-    {"IA", "IB", "IC", "IN", "VA", "VB", "VC", "VN", "I", "V", "UNKNOWN"}
+    {
+        "IA",
+        "IB",
+        "IC",
+        "IN",
+        "VA",
+        "VB",
+        "VC",
+        "VN",
+        "I",
+        "V",
+        "IDIFF",
+        "IDIFF_A",
+        "IDIFF_B",
+        "IDIFF_C",
+        "IREST",
+        "IREST_A",
+        "IREST_B",
+        "IREST_C",
+        "UNKNOWN",
+    }
 )
 
 
@@ -203,6 +223,9 @@ async def get_digital_map(event_id: str, db: DbSession, user: CurrentUser) -> di
         "valid_roles": sorted(VALID_TARGET_ROLES),
         "valid_elements": [
             "21",
+            "46",
+            "48",
+            "49",
             "50",
             "50BF",
             "50N",

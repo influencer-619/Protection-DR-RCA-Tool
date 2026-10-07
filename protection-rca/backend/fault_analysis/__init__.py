@@ -19,6 +19,8 @@ class FaultClassificationResult:
     distance: dict[str, Any] = field(default_factory=dict)
     limitations: list[str] = field(default_factory=list)
     algorithm_version: str = ALGORITHM_VERSION
+    event_class: Optional[str] = None
+    event_class_status: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -273,6 +275,173 @@ def distance_scheme_applicable(
     return False
 
 
+def _asserted_digital_names(timeline: Optional[list[Any]] = None) -> list[str]:
+    names: list[str] = []
+    for ev in timeline or []:
+        src = getattr(ev, "source", None)
+        if src is None and isinstance(ev, dict):
+            src = ev.get("source")
+        src = str(src or "")
+        if src.startswith("digital:"):
+            names.append(src.split(":", 1)[1])
+        et = getattr(ev, "event_type", None) or (ev.get("event_type") if isinstance(ev, dict) else "")
+        if str(et) in ("protection_trip", "protection_pickup", "breaker_trip_command"):
+            # keep
+            pass
+    return names
+
+
+def _phase_hint_from_names(names: list[str]) -> Optional[str]:
+    """Return A/B/C when digitals show a single-phase trip/start (Indian RYB: R/Y/B)."""
+    import re
+
+    phases: set[str] = set()
+    for raw in names:
+        n = (raw or "").upper()
+        if re.search(r"\b(?:R|A)\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD)\b", n):
+            phases.add("A")
+        if re.search(r"\bY\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD)\b", n):
+            phases.add("B")
+        if re.search(r"\b(?:B|C)\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD)\b", n):
+            phases.add("C")  # B = blue in RYB
+    if len(phases) == 1:
+        return next(iter(phases))
+    return None
+
+
+def _refine_with_digital_phase(
+    ft: str,
+    status: str,
+    conf: str,
+    feat: dict[str, Any],
+    phase_hint: Optional[str],
+) -> tuple[str, str, str]:
+    """Correct ABC mis-class on multi-bay DFRs when a single phase trip digital asserts."""
+    if not phase_hint or phase_hint not in ("A", "B", "C"):
+        return ft, status, conf
+    ground = bool(feat.get("ground"))
+    mapped = {
+        "A": "AG" if ground else "AG",
+        "B": "BG" if ground else "BG",
+        "C": "CG" if ground else "CG",
+    }[phase_hint]
+    # If electrical claimed ABC/ABCG but only one phase tripped in digitals, trust digitals
+    if ft in ("ABC", "ABCG") or (ft == "UNKNOWN" and status in ("INCONCLUSIVE", "UNKNOWN")):
+        st = (
+            ClassificationStatus.CLASSIFIED.value
+            if ground
+            else ClassificationStatus.PROBABLE.value
+        )
+        return mapped, st, "MEDIUM"
+    return ft, status, conf
+
+
+def motor_start_context(
+    digital_names: Optional[list[str]] = None,
+    *,
+    detectors: Optional[dict[str, Any]] = None,
+    assessments: Optional[list[Any]] = None,
+) -> dict[str, Any]:
+    """Detect motor-protection / starting-current context from DR digitals + ops."""
+    import re
+
+    names = [str(n) for n in (digital_names or []) if n]
+    name_hit = any(
+        re.search(
+            r"ANY\s*START|PROLONGED\s*START|STALL|LOCKED?\s*ROTOR|THERMAL|"
+            r"START\s*I\s*[>0-9]|START\s*I2|START\s*ISEF|NUMBER\s*OF\s*STARTS|"
+            r"INCOMPLETE.?SEQ",
+            n,
+            re.I,
+        )
+        for n in names
+    )
+    det = detectors if isinstance(detectors, dict) else {}
+    prefixes = det.get("active_bay_prefixes")
+    prefix_hit = False
+    if isinstance(prefixes, (list, tuple, set)):
+        prefix_hit = any(str(p).upper() == "START" for p in prefixes)
+
+    motor_els = {"46", "48", "49"}
+    oc_els = {"50", "51", "50P", "51P", "50N", "51N"}
+    pickup_motor = False
+    pickup_oc = False
+    any_trip = False
+    for a in assessments or []:
+        d = a.to_dict() if hasattr(a, "to_dict") else (a if isinstance(a, dict) else {})
+        code = str(d.get("element") or "").upper().strip()
+        act = str(d.get("actual_operation") or "").upper()
+        pu = d.get("pickup") is True or act in ("PICKED_UP", "OPERATED", "TRIPPED")
+        tr = d.get("trip") is True or act in ("OPERATED", "TRIPPED")
+        if tr:
+            any_trip = True
+        if pu and code in motor_els:
+            pickup_motor = True
+        if pu and code in oc_els | motor_els:
+            pickup_oc = True
+
+    present = bool(name_hit or prefix_hit or pickup_motor)
+    # Strong: motor relay context + phase/NPS/OC pickup without trip digital
+    likely = bool(present and pickup_oc and not any_trip)
+    return {
+        "present": present,
+        "likely": likely,
+        "name_hit": name_hit,
+        "prefix_hit": prefix_hit,
+        "pickup_motor": pickup_motor,
+        "pickup_without_trip": pickup_oc and not any_trip,
+    }
+
+
+def _apply_inrush_and_motor_context(
+    ft: str,
+    status: str,
+    conf: str,
+    elec: ElectricalAnalysisResult,
+    digital_names: list[str],
+    limitations: list[str],
+    assessments: Optional[list[Any]] = None,
+) -> tuple[str, str, str]:
+    """Downgrade false fault framing for energization / motor start signatures."""
+    det = getattr(elec, "detectors", None) or {}
+    inrush = det.get("magnetizing_inrush") if isinstance(det, dict) else None
+    if isinstance(inrush, dict) and str(inrush.get("status") or "").upper() == "POSSIBLE":
+        # Do not publish AG/ABG/… as the fault type for magnetizing inrush /
+        # transformer charging — phase imbalance is expected during energization.
+        limitations.append(
+            "Magnetizing inrush / transformer energization POSSIBLE (elevated H2) — "
+            "phase fault type suppressed; review 87 restrain / harmonic blocking"
+        )
+        return (
+            FaultType.UNKNOWN.value,
+            ClassificationStatus.INCONCLUSIVE.value,
+            "LOW",
+        )
+
+    motor = motor_start_context(
+        digital_names,
+        detectors=det if isinstance(det, dict) else {},
+        assessments=assessments,
+    )
+    phaseish = ft in ("ABC", "AB", "BC", "CA", "ABG", "BCG", "CAG", "AG", "BG", "CG")
+    if motor.get("likely") and phaseish:
+        limitations.append(
+            "Motor start / starting-current signature — phase fault type suppressed "
+            "(OC/46 pickup without trip on motor-protection DR)"
+        )
+        return (
+            FaultType.UNKNOWN.value,
+            ClassificationStatus.INCONCLUSIVE.value,
+            "LOW",
+        )
+    if motor.get("present") and ft in ("ABC", "AB", "BC", "CA") and status == "CLASSIFIED":
+        limitations.append(
+            "Motor-protection digitals present — phase fault type may reflect start/unbalance"
+        )
+        return ft, ClassificationStatus.PROBABLE.value, "LOW"
+    return ft, status, conf
+
+
 def classify_fault(
     elec: ElectricalAnalysisResult,
     *,
@@ -283,14 +452,70 @@ def classify_fault(
     distance_applicable: Optional[bool] = None,
     elec_remote: Optional[ElectricalAnalysisResult] = None,
     sync_offset_us: Optional[float] = None,
+    timeline: Optional[list[Any]] = None,
+    digital_channel_names: Optional[list[str]] = None,
 ) -> FaultClassificationResult:
+    from fault_analysis.event_class import EventClass, classify_dfr_event
     from fault_analysis.location import compute_fault_locations, normalize_line_params
 
     feat = _features_from_electrical(elec)
-    ft, status, conf = _classify_from_features(feat)
     limitations: list[str] = []
     if not feat.get("available"):
         limitations.append("Three-phase current evidence NOT AVAILABLE")
+
+    # IEEE/PSRC-style gate: event class BEFORE shunt fault type
+    dfr = classify_dfr_event(
+        elec,
+        timeline=timeline,
+        assessments=assessments,
+        digital_channel_names=digital_channel_names,
+    )
+    feat = dict(feat)
+    feat["event_classification"] = dfr.to_dict()
+    limitations.extend(list(dfr.limitations or []))
+
+    # Asserted digitals only (timeline) for phase-trip hint — not the full CFG list
+    asserted_names = _asserted_digital_names(timeline)
+    for a in assessments or []:
+        d = a.to_dict() if hasattr(a, "to_dict") else (a if isinstance(a, dict) else {})
+        op = str(d.get("actual_operation") or "").upper()
+        if op in ("OPERATED", "PICKED_UP", "TRIPPED"):
+            for ch in d.get("channel_evidence") or []:
+                asserted_names.append(str(ch))
+
+    context_names = list(asserted_names) + list(digital_channel_names or [])
+
+    if dfr.event_class != EventClass.FAULT:
+        # Non-fault DFR class — never publish AG/AB/… or ground from current imbalance alone
+        ft = FaultType.UNKNOWN.value
+        status = ClassificationStatus.INCONCLUSIVE.value
+        conf = "LOW"
+        # Inrush / motor / switching often look "groundy" (I0/H2) — not shunt-fault ground
+        feat["ground"] = None
+        feat["ground_applicable"] = False
+        feat["Ia_elevated"] = None
+        feat["Ib_elevated"] = None
+        feat["Ic_elevated"] = None
+        if dfr.reasons:
+            limitations.append("DFR reasons: " + "; ".join(dfr.reasons[:4]))
+    else:
+        ft, status, conf = _classify_from_features(feat)
+        phase_hint = _phase_hint_from_names(asserted_names)
+        if phase_hint:
+            feat["digital_phase_hint"] = phase_hint
+            ft, status, conf = _refine_with_digital_phase(
+                ft, status, conf, feat, phase_hint
+            )
+        # Safety net (legacy detectors) if class said FAULT but inrush/motor still strong
+        ft, status, conf = _apply_inrush_and_motor_context(
+            ft,
+            status,
+            conf,
+            elec,
+            context_names,
+            limitations,
+            assessments=assessments,
+        )
 
     if distance_applicable is None:
         distance_applicable = distance_scheme_applicable(
@@ -341,6 +566,8 @@ def classify_fault(
         evidence=feat,
         distance=distance,
         limitations=limitations,
+        event_class=dfr.event_class,
+        event_class_status=dfr.status,
     )
 
 

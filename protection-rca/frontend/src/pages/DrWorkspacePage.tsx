@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
-import type { TimelineEntry, WaveformChannelData, WaveformMarker } from '@/types';
+import type {
+  FaultClassification,
+  ProtectionOperation,
+  TimelineEntry,
+  WaveformChannelData,
+  WaveformMarker,
+} from '@/types';
 import { WaveformViewer } from '@/components/WaveformViewer';
 import { PhasorDiagram, type PhasorVector } from '@/components/PhasorDiagram';
 import { RXPlot } from '@/components/RXPlot';
@@ -34,6 +40,11 @@ import {
   isRxLocusApplicable,
   rxLocusEmptyHint,
 } from '@/utils/rxLocus';
+import {
+  resolveBaySchemeHint,
+  resolveDistanceApplicable,
+  resolveFaultType,
+} from '@/utils/schemeContext';
 import styles from './DrWorkspacePage.module.css';
 
 export function DrWorkspacePage() {
@@ -56,11 +67,25 @@ export function DrWorkspacePage() {
   const [syncUs, setSyncUs] = useState<number | null>(null);
   const [profiles, setProfiles] = useState<DrDisplayProfile[]>(() => loadProfiles());
   const [sessionRestored] = useState(Boolean(session));
+  const [protection, setProtection] = useState<ProtectionOperation[]>([]);
+  const [fault, setFault] = useState<FaultClassification | null>(null);
 
   useEffect(() => {
     if (!id) return;
     markDrVisited(id);
   }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    void api
+      .getProtection(id)
+      .then(setProtection)
+      .catch(() => setProtection([]));
+    void api
+      .getFaultClassification(id)
+      .then((f) => setFault(Array.isArray(f) ? f[0] ?? null : f))
+      .catch(() => setFault(null));
+  }, [id, analysisRevision]);
 
   useEffect(() => {
     if (!id) return;
@@ -208,28 +233,25 @@ export function DrWorkspacePage() {
       });
   }, [event]);
 
-  const faultTypeForRx = useMemo(() => {
-    const extra = (event?.extra || {}) as Record<string, unknown>;
-    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
-    const fc = (ra.fault_classification || {}) as Record<string, unknown>;
-    return (
-      (typeof fc.fault_type === 'string' && fc.fault_type) ||
-      event?.fault_type ||
-      null
-    );
-  }, [event]);
+  const faultTypeForRx = useMemo(
+    () =>
+      resolveFaultType({
+        fault,
+        eventFaultType: event?.fault_type,
+        eventExtra: (event?.extra || {}) as Record<string, unknown>,
+      }),
+    [fault, event],
+  );
 
-  const distanceApplicableForRx = useMemo(() => {
-    const extra = (event?.extra || {}) as Record<string, unknown>;
-    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
-    const fc = (ra.fault_classification || {}) as Record<string, unknown>;
-    const d = (fc.distance || {}) as Record<string, unknown>;
-    const ev = (fc.evidence || {}) as Record<string, unknown>;
-    return (
-      ev.distance_applicable === true &&
-      String(d.status || '').toUpperCase() !== 'NOT_APPLICABLE'
-    );
-  }, [event]);
+  const distanceApplicableForRx = useMemo(
+    () =>
+      resolveDistanceApplicable({
+        fault,
+        protection,
+        eventExtra: (event?.extra || {}) as Record<string, unknown>,
+      }),
+    [fault, protection, event],
+  );
 
   const rxLocusOk = isRxLocusApplicable(distanceApplicableForRx, faultTypeForRx);
   const rxLocusPoints = useMemo(
@@ -325,25 +347,23 @@ export function DrWorkspacePage() {
     const ra = (plant.report_analysis || {}) as Record<string, unknown>;
     const fc = (ra.fault_classification || {}) as Record<string, unknown>;
     const d = (fc.distance || {}) as Record<string, unknown>;
-    const ev = (fc.evidence || {}) as Record<string, unknown>;
-    const applicable =
-      ev.distance_applicable === true &&
-      String(d.status || '').toUpperCase() !== 'NOT_APPLICABLE';
-    const km = typeof d.value_km === 'number' ? d.value_km : null;
+    const applicable = distanceApplicableForRx;
+    const km =
+      applicable && typeof fault?.distance_km === 'number'
+        ? fault.distance_km
+        : applicable && typeof d.value_km === 'number'
+          ? d.value_km
+          : null;
     return { applicable, km };
   })();
   const lineLen = (() => {
     const lp = (plant.line_params || {}) as Record<string, unknown>;
     return typeof lp.length_km === 'number' ? lp.length_km : null;
   })();
-  const schemeHint = (() => {
-    const ra = (plant.report_analysis || {}) as Record<string, unknown>;
-    const prot = ra.protection as { assessments?: Array<{ element?: string; trip?: boolean }> } | undefined;
-    const hit = (prot?.assessments || []).find(
-      (a) => a.trip && String(a.element || '').toUpperCase().startsWith('87'),
-    );
-    return hit?.element || null;
-  })();
+  const schemeHint = resolveBaySchemeHint({
+    protection,
+    eventExtra: plant,
+  });
 
   const saveProfile = () => {
     const p: DrDisplayProfile = {
@@ -411,7 +431,7 @@ export function DrWorkspacePage() {
         bay={event?.bay_name || labels.bay_name}
         relay={event?.relay_tag || labels.relay_tag}
         feeder={event?.feeder}
-        faultType={event?.fault_type}
+        faultType={faultTypeForRx || event?.fault_type}
         distanceKm={distanceMeta.applicable ? distanceMeta.km : null}
         lineLengthKm={lineLen}
         distanceApplicable={distanceMeta.applicable}

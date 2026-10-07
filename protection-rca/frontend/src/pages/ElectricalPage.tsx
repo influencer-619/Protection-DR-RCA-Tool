@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
-import type { Measurement } from '@/types';
+import type { FaultClassification, Measurement, ProtectionOperation } from '@/types';
 import { formatNumber, unitLabel } from '@/utils/formatElectrical';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
 import { EmptyState } from '@/components/EmptyState';
@@ -25,32 +25,30 @@ import {
   isRxLocusApplicable,
   rxLocusEmptyHint,
 } from '@/utils/rxLocus';
+import { resolveDistanceApplicable, resolveFaultType } from '@/utils/schemeContext';
 
-const PHASE_COLORS: Record<string, string> = {
-  a: '#e07020',
-  b: '#2aaa55',
-  c: '#2a8fd4',
-  ia: '#e07020',
-  ib: '#2aaa55',
-  ic: '#2a8fd4',
-  va: '#c45a12',
-  vb: '#1f7a3a',
-  vc: '#0b6e99',
-  i1: '#00a0b4',
-  i2: '#c47a00',
-  i0: '#5c7188',
-  v1: '#007a8a',
-  v2: '#c45a12',
-  v0: '#8fa3b8',
-};
+/** One distinct colour per phasor — do not reuse phase colour for M1/M2/Diff/Rest. */
+const PHASOR_PALETTE = [
+  '#e07020',
+  '#2aaa55',
+  '#2a8fd4',
+  '#c47a00',
+  '#8b5cf6',
+  '#db2777',
+  '#0d9488',
+  '#dc2626',
+  '#2563eb',
+  '#ca8a04',
+  '#059669',
+  '#7c3aed',
+  '#ea580c',
+  '#4f46e5',
+  '#be185d',
+  '#0891b2',
+];
 
-function colorFor(label: string, idx: number): string {
-  const k = label.toLowerCase().replace(/[^a-z0-9]/g, '');
-  for (const [key, c] of Object.entries(PHASE_COLORS)) {
-    if (k.includes(key)) return c;
-  }
-  const fallback = ['#e07020', '#2aaa55', '#2a8fd4', '#c47a00', '#00a0b4', '#0b3a5b'];
-  return fallback[idx % fallback.length];
+function colorFor(_label: string, idx: number): string {
+  return PHASOR_PALETTE[idx % PHASOR_PALETTE.length];
 }
 
 function toPhasor(m: Measurement, idx: number): PhasorVector | null {
@@ -63,10 +61,15 @@ function toPhasor(m: Measurement, idx: number): PhasorVector | null {
         ? Number(m.value)
         : null;
   if (mag == null || Number.isNaN(mag)) return null;
+  // Prefer short engineering tags on diagrams (IA / VA) — full quantity stays in tables
+  const q = String(m.quantity || '')
+    .replace(/_(rms|phasor|peak|pri|sec)$/gi, '')
+    .replace(/_+/g, ' ')
+    .trim();
   const label =
-    m.phase && !m.quantity.toLowerCase().includes(String(m.phase).toLowerCase())
-      ? `${m.quantity} (${m.phase})`
-      : m.quantity;
+    m.phase && !q.toLowerCase().includes(String(m.phase).toLowerCase())
+      ? `${q} (${m.phase})`
+      : q || String(m.quantity);
   return {
     id: m.id,
     label,
@@ -130,15 +133,26 @@ export function ElectricalPage() {
   const { analysisRevision, event } = useEventOrWorkspace(id);
   const { mode: quantitySide, setMode: setQuantitySide } = useQuantitySide(id);
   const [meas, setMeas] = useState<Measurement[]>([]);
+  const [fault, setFault] = useState<FaultClassification | null>(null);
+  const [protection, setProtection] = useState<ProtectionOperation[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!id) return;
     setLoading(true);
-    void api
-      .getMeasurements(id)
-      .then(setMeas)
-      .catch(() => setMeas([]))
+    void Promise.all([
+      api.getMeasurements(id).catch(() => [] as Measurement[]),
+      api
+        .getFaultClassification(id)
+        .then((f) => (Array.isArray(f) ? f[0] ?? null : f))
+        .catch(() => null),
+      api.getProtection(id).catch(() => [] as ProtectionOperation[]),
+    ])
+      .then(([m, f, p]) => {
+        setMeas(m);
+        setFault(f);
+        setProtection(Array.isArray(p) ? p : []);
+      })
       .finally(() => setLoading(false));
   }, [id, analysisRevision]);
 
@@ -172,16 +186,25 @@ export function ElectricalPage() {
     [filtered],
   );
 
-  const faultType = useMemo(() => {
-    const extra = (event?.extra || {}) as Record<string, unknown>;
-    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
-    const fc = (ra.fault_classification || {}) as Record<string, unknown>;
-    return (
-      (typeof fc.fault_type === 'string' && fc.fault_type) ||
-      event?.fault_type ||
-      null
-    );
-  }, [event]);
+  const faultType = useMemo(
+    () =>
+      resolveFaultType({
+        fault,
+        eventFaultType: event?.fault_type,
+        eventExtra: (event?.extra || {}) as Record<string, unknown>,
+      }),
+    [fault, event],
+  );
+
+  const distanceApplicable = useMemo(
+    () =>
+      resolveDistanceApplicable({
+        fault,
+        protection,
+        eventExtra: (event?.extra || {}) as Record<string, unknown>,
+      }),
+    [fault, protection, event],
+  );
 
   const impedanceAll = useMemo(
     () => filtered.filter((m) => m.quantity.startsWith('Z_') || m.quantity.startsWith('R_')),
@@ -256,18 +279,6 @@ export function ElectricalPage() {
       })
       .filter((p): p is NonNullable<typeof p> => !!p);
   }, [impedance]);
-
-  const distanceApplicable = useMemo(() => {
-    const extra = (event?.extra || {}) as Record<string, unknown>;
-    const ra = (extra.report_analysis || {}) as Record<string, unknown>;
-    const fc = (ra.fault_classification || {}) as Record<string, unknown>;
-    const ev = (fc.evidence || {}) as Record<string, unknown>;
-    const dist = (fc.distance || {}) as Record<string, unknown>;
-    return (
-      ev.distance_applicable === true &&
-      String(dist.status || '').toUpperCase() !== 'NOT_APPLICABLE'
-    );
-  }, [event]);
 
   const rxLocusOk = isRxLocusApplicable(distanceApplicable, faultType);
   const rxLocusPoints = useMemo(

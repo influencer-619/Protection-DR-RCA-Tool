@@ -14,7 +14,7 @@ class ProtectionAssessment:
     pickup: Optional[bool]
     trip: Optional[bool]
     expected_operation: str  # OPERATE | NOT_OPERATE | UNKNOWN
-    actual_operation: str  # OPERATED | NOT_OPERATED | UNKNOWN
+    actual_operation: str  # OPERATED (trip) | PICKED_UP | NOT_OPERATED | UNKNOWN
     timing: Optional[dict[str, Any]]
     consistency: str  # CONSISTENT | INCONSISTENT | UNVERIFIABLE | DATA_QUALITY_ISSUE
     setting_reference: dict[str, Any]
@@ -69,8 +69,14 @@ def _expected_from_settings(enabled: Optional[bool], electrical_fault: bool) -> 
 
 
 def _actual(pickup: Optional[bool], trip: Optional[bool]) -> str:
-    if trip is True or pickup is True:
+    """Map digital observations to engineer-facing actual state.
+
+    OPERATED = trip assert (or trip+pickup). Pickup alone is PICKED_UP — not a trip.
+    """
+    if trip is True:
         return "OPERATED"
+    if pickup is True:
+        return "PICKED_UP"
     if trip is False and pickup is False:
         return "NOT_OPERATED"
     if trip is None and pickup is None:

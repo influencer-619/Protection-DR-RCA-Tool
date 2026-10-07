@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { format, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 import { api } from '@/services/api';
+import { formatDrDate, parseApiDate } from '@/utils/dateTime';
 import type { DashboardStats } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { SeverityBadge } from '@/components/SeverityBadge';
@@ -50,11 +51,9 @@ function dayTotal(p: TrendPoint): number {
 }
 
 function formatTrendDay(iso: string): string {
-  try {
-    return format(parseISO(iso), 'd MMM');
-  } catch {
-    return iso.slice(5);
-  }
+  const d = parseApiDate(iso);
+  if (!d) return iso.slice(5);
+  return format(d, 'd MMM');
 }
 
 /** Zoom to activity; if sparse, show only active days so bars stay readable. */
@@ -847,14 +846,18 @@ export function DashboardPage() {
                       </Link>
                     </td>
                     <td className="num" title="Relay disturbance / COMTRADE trigger time">
-                      {ev.event_datetime
-                        ? format(parseISO(ev.event_datetime), 'yyyy-MM-dd HH:mm')
-                        : '—'}
+                      {(() => {
+                        const s = formatDrDate(ev.event_datetime, '');
+                        if (!s) return '—';
+                        const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4}),\s*(\d{2}:\d{2}:\d{2})/);
+                        return m ? `${m[3]}-${m[2]}-${m[1]} ${m[4].slice(0, 5)}` : s;
+                      })()}
                     </td>
                     <td className="num" title="Created in this application">
-                      {ev.created_at
-                        ? format(parseISO(ev.created_at), 'yyyy-MM-dd HH:mm')
-                        : '—'}
+                      {(() => {
+                        const d = parseApiDate(ev.created_at);
+                        return d ? format(d, 'yyyy-MM-dd HH:mm') : '—';
+                      })()}
                     </td>
                     <td>{ev.location}</td>
                     <td className="mono">{ev.relay}</td>

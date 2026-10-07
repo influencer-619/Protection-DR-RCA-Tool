@@ -31,11 +31,11 @@
 }
 
 .cardWhy {
-  border-top-color: #6b4ea2;
+  border-top-color: #0a7a94;
 }
 
 .cardSettings {
-  border-top-color: #2a7a9a;
+  border-top-color: var(--accent);
 }
 
 .cardUncertain {

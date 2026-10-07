@@ -239,6 +239,34 @@ def parse_digital_line(parts: list[str]) -> DigitalChannel:
     return DigitalChannel(index=idx, name=name, phase=phase, ccbm=ccbm, normal_state=y)
 
 
+def ensure_unique_channel_names(cfg: ParsedCfg) -> None:
+    """Disambiguate duplicate CFG names (e.g. two ``Unused`` digitals).
+
+    Parsers key sample series by channel name; collisions merge series and
+    trigger DIGITAL_LENGTH validation warnings.
+    """
+    seen: dict[str, int] = {}
+
+    def _unique(name: str) -> str:
+        base = (name or "").strip() or "CH"
+        n = seen.get(base, 0) + 1
+        seen[base] = n
+        if n == 1:
+            return base
+        return f"{base}#{n}"
+
+    for ch in cfg.analog_channels:
+        new = _unique(ch.name)
+        if new != ch.name:
+            cfg.warnings.append(f"renamed duplicate analog '{ch.name}' → '{new}'")
+            ch.name = new
+    for ch in cfg.digital_channels:
+        new = _unique(ch.name)
+        if new != ch.name:
+            cfg.warnings.append(f"renamed duplicate digital '{ch.name}' → '{new}'")
+            ch.name = new
+
+
 def parse_cfg(text: str) -> ParsedCfg:
     """Parse a full CFG (or CFG section) into :class:`ParsedCfg`.
 
@@ -357,6 +385,7 @@ def parse_cfg(text: str) -> ParsedCfg:
         )
         cfg.digital_count = len(cfg.digital_channels)
     cfg.total_channels = cfg.analog_count + cfg.digital_count
+    ensure_unique_channel_names(cfg)
 
     # --- Line frequency ---
     if idx < len(lines):

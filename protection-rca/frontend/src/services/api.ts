@@ -222,6 +222,14 @@ export const api = {
     return data;
   },
 
+  async updateSubstation(
+    id: string,
+    body: { name?: string; code?: string },
+  ): Promise<Substation> {
+    const { data } = await apiClient.patch(`/substations/${id}`, body);
+    return data;
+  },
+
   async deleteSubstation(id: string): Promise<void> {
     await apiClient.delete(`/substations/${id}`);
   },
@@ -233,6 +241,14 @@ export const api = {
     code?: string;
   }): Promise<VoltageLevel> {
     const { data } = await apiClient.post('/voltage-levels', body);
+    return data;
+  },
+
+  async updateVoltageLevel(
+    id: string,
+    body: { name?: string; nominal_voltage_kv?: number; code?: string },
+  ): Promise<VoltageLevel> {
+    const { data } = await apiClient.patch(`/voltage-levels/${id}`, body);
     return data;
   },
 
@@ -249,6 +265,11 @@ export const api = {
     return data;
   },
 
+  async updateBay(id: string, body: { name?: string; code?: string }): Promise<Bay> {
+    const { data } = await apiClient.patch(`/bays/${id}`, body);
+    return data;
+  },
+
   async deleteBay(id: string): Promise<void> {
     await apiClient.delete(`/bays/${id}`);
   },
@@ -262,6 +283,11 @@ export const api = {
     return data;
   },
 
+  async updateFeeder(id: string, body: { name?: string; code?: string }): Promise<Feeder> {
+    const { data } = await apiClient.patch(`/feeders/${id}`, body);
+    return data;
+  },
+
   async deleteFeeder(id: string): Promise<void> {
     await apiClient.delete(`/feeders/${id}`);
   },
@@ -272,6 +298,14 @@ export const api = {
     relay_tag?: string;
   }): Promise<Relay> {
     const { data } = await apiClient.post('/ieds', body);
+    return data;
+  },
+
+  async updateIed(
+    id: string,
+    body: { name?: string; relay_tag?: string },
+  ): Promise<Relay> {
+    const { data } = await apiClient.patch(`/ieds/${id}`, body);
     return data;
   },
 

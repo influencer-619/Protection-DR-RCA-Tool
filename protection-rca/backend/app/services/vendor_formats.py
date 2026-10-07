@@ -24,12 +24,23 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 VENDOR_PACKAGE_EXTS = frozenset(
-    {".dz5", ".dex5", ".d5z", ".pcmi", ".pcmp", ".zip", ".7z"}
+    {".dz5", ".dex5", ".dex", ".d5z", ".pcmi", ".pcmp", ".zip", ".7z"}
 )
 COMTRADE_MEMBER_EXTS = frozenset({".cfg", ".dat", ".cff", ".hdr", ".inf"})
 SETTINGS_MEMBER_EXTS = frozenset(
-    {".txt", ".csv", ".json", ".xml", ".xrio", ".set", ".rdb"}
+    {".txt", ".csv", ".json", ".xml", ".xrio", ".set", ".rdb", ".tex", ".pdf", ".docx", ".doc"}
 )
+
+
+def _zip_payload(data: bytes) -> Optional[bytes]:
+    """Return ZIP bytes — whole file or DIGSI4 ``.dex`` payload after header."""
+    if is_zip_bytes(data):
+        return data
+    # DIGSI 4 .dex: short binary header then PK zip
+    idx = data.find(b"PK\x03\x04")
+    if idx > 0 and idx < 4096:
+        return data[idx:]
+    return None
 
 
 def is_ole2(data: bytes) -> bool:
@@ -42,12 +53,9 @@ def is_zip_bytes(data: bytes) -> bool:
 
 def is_vendor_package(filename: str, data: bytes) -> bool:
     ext = Path(filename or "").suffix.lower()
-    if ext in VENDOR_PACKAGE_EXTS and is_zip_bytes(data):
-        return True
-    # Misnamed ZIP project packages
-    if ext in {".dz5", ".dex5", ".d5z", ".pcmi", ".pcmp"} and is_zip_bytes(data):
-        return True
-    return False
+    if ext not in VENDOR_PACKAGE_EXTS:
+        return False
+    return _zip_payload(data) is not None
 
 
 def extract_sel_rdb_text(data: bytes) -> dict[str, Any]:
@@ -318,9 +326,12 @@ def expand_vendor_package(
     """
     Expand DIGSI / PCM600 / ZIP project packages into member files.
 
-    Returns members usable as COMTRADE or settings uploads.
+    Supports DIGSI 4 ``.dex`` (header + embedded ZIP) as well as ``.dex5`` /
+    ``.dz5`` / PCM600 ZIP packages. Returns members usable as COMTRADE or
+    settings uploads.
     """
-    if not is_zip_bytes(data):
+    payload = _zip_payload(data)
+    if payload is None:
         return {
             "status": "NOT_CALCULABLE",
             "reason": (
@@ -333,7 +344,7 @@ def expand_vendor_package(
     members: list[dict[str, Any]] = []
     skipped: list[str] = []
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
+        zf = zipfile.ZipFile(io.BytesIO(payload))
     except zipfile.BadZipFile as exc:
         return {
             "status": "NOT_CALCULABLE",
@@ -349,8 +360,10 @@ def expand_vendor_package(
                 "reason": f"Package has more than {max_members} files",
                 "members": [],
             }
+        # Prefer nested COMTRADE under SAMPLES/FAULT when present
         for info in infos:
-            name = Path(info.filename.replace("\\", "/")).name
+            rel = info.filename.replace("\\", "/")
+            name = Path(rel).name
             if not name or name.startswith("."):
                 continue
             ext = Path(name).suffix.lower()
@@ -367,15 +380,55 @@ def expand_vendor_package(
             except Exception as exc:  # noqa: BLE001
                 skipped.append(f"{name}:{exc}")
                 continue
+            # Disambiguate nested CFG names with parent folder hint
+            out_name = name
+            if "SAMPLES/FAULT" in rel.upper() or "FAULT/" in rel.upper():
+                out_name = name
             kind = "COMTRADE" if ext in COMTRADE_MEMBER_EXTS else (
                 "SETTINGS" if ext in SETTINGS_MEMBER_EXTS else "OTHER"
             )
             members.append(
                 {
-                    "filename": name,
+                    "filename": out_name,
                     "data": raw,
                     "kind": kind,
                     "size": len(raw),
+                    "path": rel,
+                }
+            )
+
+        # Synthesize a compact DIGSI device settings text from ExtraData / ParCache
+        text_bits: list[str] = []
+        for info in infos:
+            rel = info.filename.replace("\\", "/").lower()
+            base = Path(rel).name.lower()
+            if base in {"extradata.txt", "parcache.tex", "cfcdbver.txt"} or base.endswith(
+                ".txt"
+            ):
+                try:
+                    raw = zf.read(info)
+                    t = raw.decode("utf-8", errors="replace").strip()
+                    if t:
+                        text_bits.append(f"# {Path(info.filename).name}\n{t}")
+                except Exception:  # noqa: BLE001
+                    pass
+        # Device identity from package header / GeraDatH
+        head = data[:120]
+        m = re.search(rb"(7[A-Z]{2}\d{3}[A-Z0-9\-]*)", head)
+        if m:
+            text_bits.insert(0, f"device_mlfb={m.group(1).decode('ascii', errors='ignore')}")
+        if "digsi" in filename.lower() or Path(filename).suffix.lower() in {".dex", ".dex5", ".dz5"}:
+            text_bits.insert(0, "vendor=SIEMENS")
+            text_bits.insert(0, "package=DIGSI")
+        if text_bits:
+            synth = "\n".join(text_bits) + "\n"
+            members.append(
+                {
+                    "filename": f"{Path(filename).stem}_digsi_info.txt",
+                    "data": synth.encode("utf-8"),
+                    "kind": "SETTINGS",
+                    "size": len(synth),
+                    "path": "synthetic/digsi_info.txt",
                 }
             )
 

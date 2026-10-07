@@ -23,6 +23,7 @@ TARGET_TO_EVENT: dict[str, str] = {
     "COMM": "communication_signal",
     "BF": "breaker_trip_command",
     "BLOCK": "protection_pickup",  # e.g. 68 block asserted
+    "ALARM": "",  # advisory (e.g. thermal alarm) — not a trip sequence step
     "IGNORE": "",
     "UNKNOWN": "",
 }
@@ -30,18 +31,83 @@ TARGET_TO_EVENT: dict[str, str] = {
 VALID_TARGET_ROLES = frozenset(TARGET_TO_EVENT.keys())
 
 _INFER_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"PICK\s*UP|PU_|_PU\b|START|ZONE\s*\d*|Z[123]\b", re.I), "PICKUP"),
-    (re.compile(r"TRIP|TR\b|_TR\b|OPERATE|_OP\b|(?<![A-Z0-9])OP\b", re.I), "TRIP"),
-    (re.compile(r"52A|52_A|BREAKER.*A\b|CB.*52A", re.I), "52A"),
+    # Spare / unused CFG slots
+    (re.compile(r"^UNUSED(?:#\d+)?$", re.I), "IGNORE"),
+    # Unlabeled programmable relay outputs (MiCOM "Relay 1" …) — not operate evidence
+    (re.compile(r"^RELAY\s*\d+$", re.I), "IGNORE"),
+    # Watchdog / unlabeled binary inputs — not protection evidence
+    (re.compile(r"WATCHDOG|DIGITAL\s*INPUT\s*\d+", re.I), "IGNORE"),
+    # Station interlocking / supervision — not pickup/trip evidence
+    (re.compile(
+        r"SYNCH?\s*PERMIT|VTS|PT\s*NOT\s*SER|BUS_VOLTAGE|MLC_|TSS_ON|RB_ACTIVE|"
+        r"STN_SUPPLY|AM_SWITCH|^TCS$|CHECK.?SYNC|SYNC.?CHECK",
+        re.I,
+    ), "IGNORE"),
+    # Recorder / capture status — not protection operate evidence
+    (re.compile(
+        r"TRIG\.?\s*WAVE|WAVE\.?\s*CAP|FLTREC|FLAG\s*LOST|RECORDER|DR\s*TRIG|FAULT\s*REC",
+        re.I,
+    ), "IGNORE"),
+    # Motor thermal alarm (before generic TRIP / START)
+    (re.compile(
+        r"THERMAL\s*ALARM|TH(?:ERMAL)?\s*ALARM|TEMP(?:ERATURE)?\s*ALARM|\b49\s*ALARM\b",
+        re.I,
+    ), "ALARM"),
+    # Motor stall / locked rotor (operate → trip)
+    (re.compile(
+        r"STALL|LOCKED?\s*ROTOR|ROTOR.?STALL|\b48\b",
+        re.I,
+    ), "TRIP"),
+    # BF / LBB before generic OPTD so "LBB OPTD" is not classed as trip
+    (re.compile(r"BF|50BF|BFAIL|BRK.?FAIL|BREAKER.?FAIL|\bLBB\b", re.I), "BF"),
+    # Harmonic / inrush blocking (Siemens 87 BLK 2nd H / nth H / CWA)
+    (re.compile(
+        r"BLOCK|\bBLK\b|68\b|PSB|INRUSH|2ND\s*H|NTH\s*H|\bCWA\b|HARM(?:ONIC)?\s*BLK",
+        re.I,
+    ), "BLOCK"),
+    # Intertrip / transfer trip BEFORE bare TRIP (substring "TRIP" inside INTERTRIP)
+    (re.compile(r"INTERTRIP|TRANSFER.?TRIP|(?<![A-Z0-9])TT\b", re.I), "INTERTRIP"),
+    # Trip / operate BEFORE zone/start heuristics so "21_Z1_TRIP" is not PICKUP
+    # (incl. station DFR "… OPTD"; CFG may truncate "Trip"→"Ti")
+    (re.compile(
+        r"TRIP|UNIT\s*TI\b|(?<![A-Z0-9])TR\b|_TR\b|OPERAT(?:E|ED)?|\bOPTD\b|_OP\b|(?<![A-Z0-9])OP\b",
+        re.I,
+    ), "TRIP"),
+    # Vendor-neutral pickup: PICKUP / PU / START / zone+PU / DST ST
+    # Bare Z1/ZONE alone is not enough (would steal "21_Z1_TRIP").
+    (re.compile(
+        r"PICK(?:ED)?\s*UP|(?<![A-Za-z])PU(?![A-Za-z0-9])|"
+        r"(?<![A-Za-z])START(?:ED)?(?![A-Za-z])|"
+        r"ZONE\s*\d*\s*(?:PICK|START|PU)|Z[123](?:_|\s)*(?:PICK|START|PU)|"
+        r"PROLONGED\s*START|LONG\s*START|ANY\s*START|"
+        r"DST\s*ST|DSTST",
+        re.I,
+    ), "PICKUP"),
+    # Breaker status — 52a / CB open (BKR OFF, BREAKER OFF, …)
+    (re.compile(
+        r"52A|52_A|CB.*52A|BKR\s*OFF|BREAKER\s*OFF|CB\s*OFF|CB\s*AUX",
+        re.I,
+    ), "52A"),
     (re.compile(r"52B|52_B|BREAKER.*B\b|CB.*52B", re.I), "52B"),
-    (re.compile(r"RECLOSE|79\b|AR\b|AUTO.?RECLOSE", re.I), "RECLOSE"),
-    (re.compile(r"LOCKOUT|86\b|\bLO\b", re.I), "LOCKOUT"),
-    (re.compile(r"INTERTRIP|TRANSFER.?TRIP|\bTT\b", re.I), "INTERTRIP"),
-    (re.compile(r"COMM|PILOT|CARRIER|POTT|DUTT", re.I), "COMM"),
-    (re.compile(r"BF|50BF|BREAKER.?FAIL", re.I), "BF"),
-    (re.compile(r"BLOCK|68\b|PSB", re.I), "BLOCK"),
+    # AR inhibit — supervisory only (do not treat as reclose operate / 79 pickup)
+    (re.compile(
+        r"INHIBIT\s*AR|AR_?INHIBIT|AR\s*INHIBIT|79\s*INHIBIT|INHIBIT.?RECLOSE",
+        re.I,
+    ), "BLOCK"),
+    # Autoreclose initiate / close / success (not bare A/R or lone 79)
+    (re.compile(
+        r"AUTO.?RECLOSE|RECLOSE|INITIATE_?AR|"
+        r"\bRREC\d*\b|\b79\s*(?:AR|RECLOSE|RREC)\b|"
+        r"\bAR\s*(?:INIT|CLOSE|ON|OFF|SUCCESS)",
+        re.I,
+    ), "RECLOSE"),
+    (re.compile(r"LOCKOUT|\b86\b|LOCK.?OUT", re.I), "LOCKOUT"),
+    # Word-ish COMM — avoid matching inside RECOMMENDATION
+    (re.compile(
+        r"(?<![A-Z])COMM(?![A-Z])|PILOT|CARRIER|(?<![A-Z])CARR\b|POTT|DUTT",
+        re.I,
+    ), "COMM"),
 ]
-
 
 def infer_target_role(channel_name: str) -> str:
     for pat, role in _INFER_PATTERNS:

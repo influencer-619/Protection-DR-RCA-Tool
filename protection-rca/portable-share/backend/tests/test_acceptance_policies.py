@@ -87,7 +87,8 @@ def test_fault_distance_not_invented_without_inputs():
     )
     result = classify_fault(elec, line_params=None)
     dist = result.distance or {}
-    assert dist.get("status") == "NOT_CALCULABLE"
+    # No distance scheme / line params → NOT_APPLICABLE (not a failed km calc)
+    assert dist.get("status") in ("NOT_CALCULABLE", "NOT_APPLICABLE")
     assert dist.get("value_km") is None
     assert result.fault_type in ("UNKNOWN", "INCONCLUSIVE") or result.status in (
         "UNKNOWN",

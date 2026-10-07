@@ -84,6 +84,9 @@ hypotheses:
   - id: SWITCHING_TRANSIENT
     required_for_confirmed:
       - switching_event_correlated
+  - id: MOTOR_START
+    required_for_confirmed:
+      - motor_start_possible
   - id: EXTERNAL_GRID_DISTURBANCE
     required_for_confirmed:
       - external_event_correlated

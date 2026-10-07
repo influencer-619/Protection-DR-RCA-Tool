@@ -95,6 +95,47 @@ class ComtradeService:
         when there is no COMTRADE evidence or no usable channel data.
         """
         stages: list[str] = []
+        # ABB REVAL (.reh/.rev) — not COMTRADE, but ingestable for RCA
+        try:
+            from comtrade.parsers.reval import is_reval, parse_reval
+            from pathlib import Path as _P
+
+            paths = [_P(f) for f in files]
+            if is_reval(paths):
+                from comtrade.detector.service import DetectionResult
+
+                stages.append("detect_reval")
+                record = parse_reval(paths)
+                stages.append("parse_reval")
+                validation = self.validate(record) if validate_after_parse else None
+                if validate_after_parse:
+                    stages.append("validate")
+                detection = DetectionResult(
+                    standard="ABB",
+                    revision="REVAL",
+                    container="REH_REV",
+                    data_format="REVAL",
+                    confidence=0.8,
+                    status="PARTIALLY_SUPPORTED",
+                    is_comtrade=False,
+                    evidence=["ABB REVAL .reh header"],
+                    notes=[
+                        "REVAL ingested from header RMS/digitals; convert to COMTRADE for full waveforms"
+                    ],
+                    unsupported_features=["reval_rev_binary_not_decoded"],
+                )
+                return ComtradeIngestResult(
+                    detection=detection,
+                    validation=validation,
+                    record=record,
+                    success=True,
+                    usable_with_warnings=True,
+                    error="REVAL header ingest (REV binary not fully decoded)",
+                    stages=stages,
+                )
+        except Exception:
+            pass
+
         detection = self.detect(files)
         stages.append("detect")
 

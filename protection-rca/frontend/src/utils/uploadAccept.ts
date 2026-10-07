@@ -1,11 +1,13 @@
 /** Keep in sync with backend `Settings.allowed_upload_extensions`. */
 export const UPLOAD_ACCEPT =
-  '.cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip,' +
-  '.set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex5,.d5z,.pcmi,.pcmp';
+  '.cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.docx,.doc,.zip,' +
+  '.set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex,.dex5,.d5z,.pcmi,.pcmp,' +
+  '.dg4,.xmlu,.reh,.rev';
 
 export const UPLOAD_ACCEPT_HINT =
   'COMTRADE: .cfg .dat .cff .hdr .inf · Settings/SOE: .csv .txt .xml .json .set .xrio .rio .eve .log · ' +
-  'Vendor: .rdb .cev .dz5 .dex5 .d5z .pcmi .pcmp · .pdf .zip (ZIP / packages auto-extract when possible)';
+  'Docs: .pdf .docx .doc (text extract → settings/events) · ' +
+  'Vendor: .rdb .cev .dz5 .dex .dex5 .d5z .pcmi .pcmp .dg4 .xmlu · .zip (auto-extract when possible)';
 
 /** True when filenames include a usable COMTRADE record (CFG+DAT or CFF). */
 export function hasComtradePackage(names: Iterable<string>): boolean {
@@ -24,6 +26,8 @@ export function looksLikeSettingsFile(name: string): boolean {
     n.endsWith('.set') ||
     n.endsWith('.xrio') ||
     n.endsWith('.rio') ||
+    ((n.endsWith('.pdf') || n.endsWith('.docx') || n.endsWith('.doc')) &&
+      (n.includes('setting') || n.includes('param') || n.includes('relay'))) ||
     (n.endsWith('.json') && (n.includes('param') || n.includes('relay')))
   );
 }

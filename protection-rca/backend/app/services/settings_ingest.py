@@ -177,7 +177,16 @@ def detect_vendor(filename: str, text_sample: str = "") -> str:
         return "SEL"
     if "abb" in n or "pcm600" in n or "ref615" in s or "relion" in s or "xrio" in n:
         return "ABB"
-    if "siemens" in n or "digsi" in n or "7sa" in s or "siprotec" in s:
+    if (
+        "siemens" in n
+        or "digsi" in n
+        or "7sa" in s
+        or "7ut" in s
+        or "7sj" in s
+        or "siprotec" in s
+        or "vendor=siemens" in s
+        or "package=digsi" in s
+    ):
         return "SIEMENS"
     if (
         "schneider" in n
@@ -185,6 +194,8 @@ def detect_vendor(filename: str, text_sample: str = "") -> str:
         or "micom" in s
         or "easergy" in s
         or "ecopact" in s
+        or "app: courier" in s
+        or n.endswith(".set")
     ):
         return "SCHNEIDER"
     if (
@@ -328,6 +339,53 @@ def ingest_settings_bytes(
             extracted["text"].encode("utf-8", errors="replace"),
             filename="SET_ALL.TXT",
         )
+
+    # PDF / Word settings sheets → text extract → same text parsers
+    from app.services.document_extract import DOCUMENT_EXTS, extract_document_text
+
+    ext = Path(name_l).suffix
+    if ext in DOCUMENT_EXTS or data.startswith(b"%PDF"):
+        doc = extract_document_text(data, filename=Path(filename).name)
+        if doc.get("status") != "OK" or not doc.get("text"):
+            return {
+                "status": "NOT_CALCULABLE",
+                "vendor": "UNKNOWN",
+                "reason": doc.get("reason")
+                or "PDF/Word settings could not be extracted as text",
+                "filename": Path(filename).name,
+                "raw": {"document_format": doc.get("format")},
+                "mapped": {},
+                "common": {},
+                "param_count": 0,
+                "raw_keys": [],
+            }
+        stem = Path(filename).stem or "settings"
+        nested = ingest_settings_bytes(
+            doc["text"].encode("utf-8", errors="replace"),
+            filename=f"{stem}_from_{doc.get('format') or 'doc'}.txt",
+        )
+        nested = dict(nested)
+        nested["filename"] = Path(filename).name
+        nested.setdefault("raw", {})
+        if isinstance(nested["raw"], dict):
+            nested["raw"] = {
+                **nested["raw"],
+                "document_source": Path(filename).name,
+                "document_format": doc.get("format"),
+                "document_char_count": doc.get("char_count") or len(doc.get("text") or ""),
+            }
+        if doc.get("reason") and nested.get("status") == "OK":
+            nested["extract_note"] = doc["reason"]
+        return nested
+
+    # MiCOM / Schneider Courier binary setting files
+    from app.services.settings_micom_courier import (
+        is_micom_courier_set,
+        parse_micom_courier_set,
+    )
+
+    if is_micom_courier_set(data, filename):
+        return parse_micom_courier_set(data, filename=Path(filename).name)
 
     text = ""
     try:

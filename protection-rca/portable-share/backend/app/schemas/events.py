@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+from app.core.datetime_iso import to_dr_wall_iso, to_utc_iso
 
 
 class EventCreate(BaseModel):
@@ -114,6 +116,14 @@ class EventOut(BaseModel):
     fault_type: Optional[str] = None
     severity_summary: Optional[str] = None
     protection_summary: Optional[str] = None
+
+    @field_serializer("created_at", "updated_at")
+    def _ser_utc(self, v: datetime | None) -> str | None:
+        return to_utc_iso(v)
+
+    @field_serializer("event_datetime")
+    def _ser_dr(self, v: datetime | None) -> str | None:
+        return to_dr_wall_iso(v)
 
 
 class EventListResponse(BaseModel):

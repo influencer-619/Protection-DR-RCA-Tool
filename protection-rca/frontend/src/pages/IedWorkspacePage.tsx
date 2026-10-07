@@ -6,6 +6,7 @@ import type { Event, IedContext, Iec61850FetchResult } from '@/types';
 import { EventStatusCell } from '@/components/EventStatusCell';
 import { Iec61850FetchPanel } from '@/components/Iec61850FetchPanel';
 import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT, hasComtradePackage } from '@/utils/uploadAccept';
+import { formatDrDate, parseApiDate, parseDrDate } from '@/utils/dateTime';
 import styles from './IedWorkspacePage.module.css';
 
 function formatSize(bytes: number): string {
@@ -15,7 +16,8 @@ function formatSize(bytes: number): string {
 }
 
 function eventTime(ev: Event): Date {
-  return new Date(ev.event_datetime || ev.created_at);
+  if (ev.event_datetime) return parseDrDate(ev.event_datetime) ?? new Date(0);
+  return parseApiDate(ev.created_at) ?? new Date(0);
 }
 
 export function IedWorkspacePage() {
@@ -379,16 +381,23 @@ export function IedWorkspacePage() {
                     <div className={styles.eventMeta}>
                       <span className="mono" title="Relay DR time (COMTRADE)">
                         DR{' '}
-                        {ev.event_datetime
-                          ? format(new Date(ev.event_datetime), 'yyyy-MM-dd HH:mm')
-                          : '—'}
+                        {(() => {
+                          const s = formatDrDate(ev.event_datetime, '');
+                          if (!s) return '—';
+                          const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4}),\s*(\d{2}:\d{2}:\d{2})/);
+                          return m ? `${m[3]}-${m[2]}-${m[1]} ${m[4].slice(0, 5)}` : s;
+                        })()}
                       </span>
                       <span
                         className="mono"
                         style={{ opacity: 0.75 }}
                         title="Created in this application"
                       >
-                        Created {format(new Date(ev.created_at), 'yyyy-MM-dd HH:mm')}
+                        Created{' '}
+                        {(() => {
+                          const d = parseApiDate(ev.created_at);
+                          return d ? format(d, 'yyyy-MM-dd HH:mm') : '—';
+                        })()}
                       </span>
                       {(ev.protection_summary || ev.fault_type) && (
                         <span className={styles.eventElem}>

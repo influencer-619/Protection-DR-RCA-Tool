@@ -52,11 +52,17 @@ describe('timelineCardInfo', () => {
           metadata: {
             baseline_rms: 63.4592452770378,
             threshold: 53.94035848548213,
+            value_rms: 48.2,
+            value: -12.5,
+            unit: 'V',
           },
         },
       }),
     );
     expect(info.title).toMatch(/Voltage/i);
+    const rms = info.facts.find((f) => f.label === 'RMS');
+    expect(rms?.value).toMatch(/48\.2\s*V/);
+    expect(info.summary).toContain('RMS');
     const base = info.facts.find((f) => f.label === 'Baseline');
     expect(base?.value).toMatch(/V$/);
     expect(base?.value).not.toMatch(/63\.4592452770378/);

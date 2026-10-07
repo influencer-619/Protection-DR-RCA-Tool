@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 export type ThemeMode = 'light' | 'dark';
 
-const STORAGE_KEY = 'protection_rca_theme';
+const STORAGE_KEY = 'protection_rca_theme_v3';
 
 function readStored(): ThemeMode {
   try {
@@ -11,6 +11,7 @@ function readStored(): ThemeMode {
   } catch {
     /* ignore */
   }
+  // Light default — professional engineering workstation (ETAP / PowerFactory style)
   return 'light';
 }
 

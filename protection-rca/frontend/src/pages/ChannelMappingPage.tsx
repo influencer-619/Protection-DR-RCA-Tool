@@ -6,8 +6,44 @@ import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 import { unitLabel } from '@/utils/formatElectrical';
 import styles from './ChannelMappingPage.module.css';
 
-const ROLE_OPTIONS = ['IA', 'IB', 'IC', 'IN', 'VA', 'VB', 'VC', 'VN', 'I', 'V', 'UNKNOWN'] as const;
-const ROLE_COLS = ['IA', 'IB', 'IC', 'IN', 'VA', 'VB', 'VC', 'VN', 'UNKNOWN'] as const;
+const ROLE_OPTIONS = [
+  'IA',
+  'IB',
+  'IC',
+  'IN',
+  'VA',
+  'VB',
+  'VC',
+  'VN',
+  'IDIFF_A',
+  'IDIFF_B',
+  'IDIFF_C',
+  'IREST_A',
+  'IREST_B',
+  'IREST_C',
+  'I',
+  'V',
+  'FREQ',
+  'UNKNOWN',
+] as const;
+const ROLE_COLS = [
+  'IA',
+  'IB',
+  'IC',
+  'IN',
+  'VA',
+  'VB',
+  'VC',
+  'VN',
+  'IDIFF_A',
+  'IDIFF_B',
+  'IDIFF_C',
+  'IREST_A',
+  'IREST_B',
+  'IREST_C',
+  'FREQ',
+  'UNKNOWN',
+] as const;
 
 interface ChannelRow {
   name: string;

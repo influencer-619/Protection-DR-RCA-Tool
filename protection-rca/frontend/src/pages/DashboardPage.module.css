@@ -43,13 +43,14 @@
 .inboxLabel {
   font-size: 0.68rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   color: var(--text-muted);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .inboxLine {
-  font-size: 1.15rem;
+  font-size: 1.1rem;
+  font-weight: 600;
   color: var(--text-primary);
   margin-top: 4px;
   line-height: 1.35;

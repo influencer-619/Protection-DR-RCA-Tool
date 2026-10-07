@@ -56,7 +56,11 @@ export function VerdictStrip({
         )}
         <span className={styles.part}>
           <span className={styles.k}>Fault</span>
-          <span className={`mono ${styles.v}`}>{faultType || 'UNKNOWN'}</span>
+          <span className={`mono ${styles.v}`}>
+            {faultType && String(faultType).toUpperCase() !== 'UNKNOWN'
+              ? faultType
+              : 'Unclassified'}
+          </span>
         </span>
         <span className={styles.sep} aria-hidden>
           ·

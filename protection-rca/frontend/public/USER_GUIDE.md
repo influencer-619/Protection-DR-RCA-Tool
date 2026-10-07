@@ -2,7 +2,7 @@
 
 **Audience:** Protection engineers, analysts, approvers, and administrators  
 **Product:** Protection Disturbance Record (DR) / COMTRADE analysis and Root Cause Analysis (RCA) platform  
-**Document version:** 0.9.0  
+**Document version:** 1.0.0  
 **Application:** Protection RCA web application (React + FastAPI)
 
 This guide explains how to launch the application (including the portable, no-install build), build the plant hierarchy, bring disturbance records in — either by **fetching them directly from the relay over IEC 61850** or by **manual upload** — analyse each event, interpret the results, generate reports, and complete engineer review. It reflects the **current implemented behaviour** of the platform.
@@ -11,27 +11,28 @@ This guide explains how to launch the application (including the portable, no-in
 
 ## Document revision — what is covered in this edition
 
-This edition (**0.9.0**) expands **IEC 61850 acquisition** and day-to-day DR review so the product behaves like market tools (Digsi / PCM600 / SCADA COMTRADE pollers): multi-DR fetch, optional COMTRADE path, auto-fetch with settings/SOE, and SOE matched to each DR by time.
+This edition (**1.0.0**) documents the **engineering decision rules** and **Summary / Protection / Waveform** behaviour that protection engineers use every day after analysis: DFR event class, evidence-gated pickup/trip, autoreclose framing, and the professional workstation UI.
 
 | Area | What changed |
 |------|----------------|
-| **Manual Fetch from IED** | **List records** → select one or many DRs → **Fetch DR + settings / events**. Optional **COMTRADE path on IED**. Incomplete CFG/DAT pairs are not fetched. See [§10](#10-fetching-records-from-the-relay-iec-61850) |
-| **Multi-DR** | Tick several records (or **Select all new**); **one event per DR**. Or skip the list and Fetch — all new complete DRs are taken. See [§10.4](#104-list-and-select-disturbance-records-multi-dr) |
-| **Auto-fetch + multi-DR** | Each poll imports up to **10 new** complete DRs (oldest first), one event each, with Settings/Events toggles. Baseline vs import-existing explained. See [§11](#11-automatic-fetch-auto-fetch) |
-| **SOE / events matched to DR** | Large SER/SOE files are **time-windowed** to each DR (CFG start − 5 s … end + 30 s), or by matching filename to the COMTRADE stem. Settings stay shared. See [§10.7](#107-matching-soe--events-to-the-right-dr) |
-| **Sequence cards** | Engineer-readable facts (element, channel, state `0 → 1`, baseline/threshold) instead of raw JSON. Absolute time = CFG start + relative (DR) or SOE wall-clock. See [§17](#17-event-analysis-workspace-detailed) |
-| **Trips on Summary** | Shared trip contacts such as `TRIP_CMD` (no ANSI in the name) are attributed to the element that picked up before the trip — Summary shows **Trips** correctly. See FAQ |
+| **DFR event class** | Records are classed as **FAULT**, **ENERGIZATION**, **MOTOR_START**, **SWITCHING**, **DISTURBANCE**, or **UNKNOWN** before shunt fault type is trusted. Energization / motor start do **not** invent AG/ABG from inrush alone. See [§17.1](#171-dfr-event-class-before-fault-type) |
+| **Operate evidence** | Pickup / trip asserts need **COMTRADE digital** channels or a **clear relay SER / event-report** line. Bare station SOE does not invent protection operates. See [§17.2](#172-what-counts-as-pickup--trip-evidence) |
+| **Pickup ≠ trip** | An element that only starts is labelled **pickup**; trip needs a trip assert. RCA phrases use exact ANSI codes (e.g. `51N`, not a guessed `67N`). See [§17.3](#173-pickup-vs-trip-framing) |
+| **Autoreclose (79)** | **INHIBIT AR** / blocked AR is **not** a 79 pickup. Clear initiate / close / “reclose issued” is scheme **Reclose**, shown separately on Summary. See [§17.4](#174-autoreclose-79--inhibit-vs-reclose-issued) |
+| **One-page Summary** | Rows for **Trips**, **Pickups**, and **Reclose**; Event class; DR time vs Created; printable sheet. See [§17.5](#175-one-page-summary-detailed) |
+| **Waveforms & phasors** | Separate analog traces by default; phasor colours / legend clarity. See [§17 Waveforms](#waveforms) |
+| **Professional UI** | Light engineering theme by default (dark navy sidebar + light content). Theme toggle remembered per browser. See [§5](#5-application-layout-and-navigation) |
 
-Still valid from **0.8.0** (dashboard / upload→Summary / PDF / Users):
+Still valid from **0.9.0** (IEC 61850 multi-DR / SOE matching):
 
 | Area | What changed |
 |------|----------------|
-| **Dashboard KPIs** | **Events with reports** counts distinct live events with a report. See [§6](#6-dashboard-operations-console) |
-| **Upload → Summary** | Complete package opens **Summary** after auto-analyse. See [§9](#9-ied-workspace) |
-| **Professional PDF** | Structured engineering PDF (ReportLab). See [§23](#23-reports-html-pdf-json) |
-| **Users CRUD** | Add / edit / delete local accounts. See [§24](#24-users-sso-and-audit) |
+| **Manual Fetch from IED** | List → multi-select → Fetch DR + settings / events; COMTRADE path; incomplete pairs skipped. See [§10](#10-fetching-records-from-the-relay-iec-61850) |
+| **Multi-DR / Auto-fetch** | One event per DR; auto-fetch up to 10 new DRs per cycle. See [§10.4](#104-list-and-select-disturbance-records-multi-dr), [§11](#11-automatic-fetch-auto-fetch) |
+| **SOE matched to DR** | Time window CFG start − 5 s … end + 30 s (or filename stem). See [§10.7](#107-matching-soe--events-to-the-right-dr) |
+| **Sequence cards / TRIP_CMD** | Engineer-readable sequence; shared trip contacts attributed to the picking-up element. See [§17](#17-event-analysis-workspace-detailed) |
 
-Still valid from **0.7.0** (IEC 61850 & portable) and earlier plant / engineering editions — see previous tables in git history if needed.
+Still valid from **0.8.0** (dashboard KPIs, upload→Summary, professional PDF, Users CRUD) and **0.7.0** (IEC 61850 & portable) — see git history for older revision tables.
 
 ---
 
@@ -53,7 +54,7 @@ Still valid from **0.7.0** (IEC 61850 & portable) and earlier plant / engineerin
 14. [Uploading files manually](#14-uploading-files-manually)
 15. [COMTRADE detection and validation](#15-comtrade-detection-and-validation)
 16. [Running analysis](#16-running-analysis)
-17. [Event analysis workspace (detailed)](#17-event-analysis-workspace-detailed)
+17. [Event analysis workspace (detailed)](#17-event-analysis-workspace-detailed) — includes DFR class, evidence rules, Summary rows, waveforms
 18. [Protection physics and schemes](#18-protection-physics-and-schemes)
 19. [Understanding status badges and quality labels](#19-understanding-status-badges-and-quality-labels)
 20. [Settings and setting hierarchy](#20-settings-and-setting-hierarchy)
@@ -81,13 +82,17 @@ An **engineering decision-support web application** that helps you:
 - **Fetch disturbance records, settings and protection events directly from the relay** over IEC 61850 (read-only), manually or automatically on a schedule
 - Upload COMTRADE / ZIP / vendor packages / PDF **on each IED** when the relay is not reachable
 - Detect and validate COMTRADE format, revision, container, encoding
-- Map analog channels and digital DR targets (pickup/trip/52a/…)
-- Stream and inspect waveforms (raw/scaled samples)
-- Reconstruct an event timeline from analog/digital channels (+ SOE when available)
+- Map analog channels and digital DR targets (pickup/trip/52a/reclose/block/…)
+- Classify the **DFR event class** (FAULT / ENERGIZATION / MOTOR_START / …) before trusting shunt fault letters
+- Stream and inspect waveforms (separate or grouped analogs, phasors, raw/scaled samples)
+- Reconstruct an event timeline from analog/digital channels (+ time-matched SOE / SER when available)
+- Assert protection pickup / trip only from **COMTRADE digitals** or **clear relay SER** (never invent from bare station SOE)
 - Evaluate protection element behaviour and scheme context (including curve/zone physics where inputs exist)
+- Frame **pickup ≠ trip**, and keep **79 inhibit** out of pickup lists (reclose issued shows under Reclose)
 - Run a **Protection Consistency Check** before RCA
 - Classify faults when electrical evidence is sufficient
-- Rank RCA hypotheses with supporting / contradicting / missing evidence (+ engineer cause enrichment)
+- Rank RCA hypotheses with exact ANSI wording and supporting / contradicting / missing evidence (+ engineer cause enrichment)
+- Present a printable **one-page Summary** (Trips · Pickups · Reclose · event class)
 - Find historically similar events (supporting only)
 - Generate controlled HTML / PDF / JSON reports
 - Record engineer review (accept / modify / reject / inconclusive / field investigation)
@@ -349,10 +354,24 @@ Higher roles include the rights of lower ones. Authorization is enforced on the 
 | Element | Purpose |
 |---------|---------|
 | Breadcrumb | `Protection RCA › <page>` (Plant hierarchy, IED workspace, Dashboard, All events, Event analysis, Compare events, Users, Audit trail, Help & guide) |
-| **COMTRADE RCA** chip | Environment indicator |
+| **COMTRADE RCA** chip | Environment indicator (live status lamp) |
 | Theme icon | Switch **light / dark** theme (remembered per browser) |
 | User chip | Your initials, name and role |
 | Sign-out icon | Log out |
+
+### Look and feel (professional workstation)
+
+The UI follows the pattern used by engineering tools such as ETAP / PowerFactory / Ignition cool themes:
+
+| Surface | Appearance |
+|---------|------------|
+| **Sidebar** | Dark navy navigation (always), independent of content theme |
+| **Content (default)** | Light grey workspace + white panels, steel-blue accent |
+| **Content (dark)** | Cool dark panels for low-light rooms — same layout, no neon effects |
+| **Accent colour** | Restrained teal/steel-blue for links, active nav, primary buttons |
+| **Status colour** | Green / amber / red reserved for quality, review, and fault badges |
+
+Theme choice is stored in the browser (`protection_rca_theme_v3`). Printable **Summary** and **Report** pages always render as a **light paper sheet** even when the app is in dark mode.
 
 ### Common UI conventions
 
@@ -360,6 +379,7 @@ Higher roles include the rights of lower ones. Authorization is enforced on the 
 - **Primary** (filled) buttons perform the main action of a section; outline buttons are secondary.
 - Destructive actions (delete) always ask for confirmation.
 - Tables scroll horizontally on narrow screens; the page itself stays full width.
+- Panel headers use plain engineering labels (not decorative HUD chrome).
 
 ---
 
@@ -853,9 +873,9 @@ After the event exists (uploaded or fetched):
 
 ### Supported extensions
 
-`.cfg .dat .cff .hdr .inf .csv .txt .xml .json .pdf .zip`  
+`.cfg .dat .cff .hdr .inf .csv .txt .xml .json .pdf .docx .doc .zip`  
 plus vendor / settings packages:  
-`.set .rdb .xrio .rio .eve .cev .log .dz5 .dex5 .d5z .pcmi .pcmp`  
+`.set .rdb .xrio .rio .eve .cev .log .dz5 .dex .dex5 .d5z .pcmi .pcmp .dg4 .xmlu .reh .rev`  
 and SCL files from IEC 61850 fetch (`.cid .icd .scd`, stored as attachments).
 
 **ZIP packages:** uploading a `.zip` **auto-extracts** the archive. Each allowed member is stored as its own immutable event file. The original ZIP is kept as a **PACKAGE** attachment. Nested ZIPs expand (limited depth). Path-traversal / zip-bomb guards apply.
@@ -866,8 +886,12 @@ and SCL files from IEC 61850 fetch (`.cid .icd .scd`, stored as attachments).
 |--------|-----------|
 | SEL `.rdb` | OLE container — SET_ALL text extracted when present → settings ingest |
 | SEL `.cev` | Converted to CFG+DAT for waveform / timeline use when convertible |
+| DIGSI 4 `.dex` | Header + embedded ZIP — expands nested COMTRADE (CFG/DAT) and text settings members |
 | DIGSI / PCM600 `.dz5` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp` | Treated as ZIP-like packages when they contain nested COMTRADE / settings / CEV; proprietary non-ZIP blobs stay **NOT CALCULABLE** with export guidance |
-| `.set` / `.xrio` / `.rio` / `.eve` / `.log` / SOE CSV | Parsed when structure is recognized; RIO/XRIO supply distance trip-zone geometry for R–X when present |
+| MiCOM Courier `.set` | Binary Courier settings decoded to CT/VT, OC/EF pickup/TMS/curve → ANSI 50/51/51N/50BF when present |
+| PDF / Word (`.pdf` / `.docx` / `.doc`) | **Text extract** → same settings / event-report parsers. Name files with `setting` / `event` / `soe` so they classify correctly. Scanned/image-only PDFs stay **NOT CALCULABLE** (no OCR) — use a text PDF or TXT/CSV export |
+| `.xrio` / `.rio` / `.eve` / `.log` / SOE CSV | Parsed when structure is recognized; RIO/XRIO supply distance trip-zone geometry for R–X when present |
+| Binary project blobs with no text/ZIP extract | Remain **NOT CALCULABLE** — export COMTRADE + text settings from the vendor tool |
 
 ### Deleting an event
 
@@ -982,11 +1006,62 @@ One tab bar that **stays at the top while you scroll**. Groups on the left, tabs
 | **Protect** | Protection · Consistency · RCA · Evidence |
 | **Conclude** | Summary · Report · Review |
 
+### 17.1 DFR event class (before fault type)
+
+Disturbance-record analysis first decides **what kind of record** this is. Shunt fault letters (AG, ABG, …) are only trusted when the class is **FAULT**.
+
+| Event class | Typical meaning | What you should expect |
+|-------------|-----------------|------------------------|
+| **FAULT** | Cleared shunt fault pattern (V/I collapse, trip, typical duration) | Fault type (AG/ABG/…) and location when inputs exist |
+| **ENERGIZATION** | Magnetizing inrush / charging (elevated H2, pickup without trip, uncleared profile) | Fault type often **UNKNOWN** — do **not** treat phase imbalance as AG/ABG |
+| **MOTOR_START** | Motor starting current / motor-protection signature | Not a feeder shunt fault; OC pickup without trip is common |
+| **SWITCHING** | Switching / reclose-related disturbance without shunt-fault confidence | Review Sequence + digitals carefully |
+| **DISTURBANCE** | Electrical event that does not meet FAULT gates | Engineer judgment required |
+| **UNKNOWN** | Insufficient V/I/digital evidence for a class | Do not publish a shunt fault type |
+
+**Duration gates** (SHORT / TYPICAL / LONG, cleared vs uncleared) and evidence flags (trip digital, H2 inrush, sustained current) feed the class. Overview and Summary show **Event class** next to fault type.
+
+### 17.2 What counts as pickup / trip evidence
+
+Industry practice (SIGRA / DME review): protection **operates** come from DR digitals or a clear relay SER — not from inventing ANSI codes from vague station tags.
+
+| Evidence quality | May assert pickup / trip? | Examples |
+|------------------|---------------------------|----------|
+| **COMTRADE digital** | Yes | `21_Z1_PICKUP`, `21_Z1_TRIP`, `RREC1`, mapped DR targets |
+| **Relay SER / event report** | Yes, when wording maps clearly | `ser:21_Z1_PICKUP`, `ser:AUTO_RECLOSE` with “reclose issued” |
+| **Station SOE alone** | No (context only) | Bare `soe:…` without SER upgrade |
+
+Assessments without operate evidence stay non-asserted on Summary / Protection operate columns. Physics tags such as `PHYS-…` never count as digital asserts.
+
+### 17.3 Pickup vs trip framing
+
+| Observation | How the UI / RCA says it |
+|-------------|--------------------------|
+| Digital start only | **Pickup** (e.g. `51N pickup`) — never “operated” alone |
+| Trip digital (with or without prior pickup) | **Trip** / **pickup with trip** when both exist |
+| Same element pickup + trip | Summary **Pickups** lists the element **and** **Trips** lists it as trip |
+
+RCA and evidence phrases use the **exact ANSI / function code** observed (e.g. `50N`, `51N`, `21`) — they do not invent a sibling code such as `67N` when only earth OC pickup exists.
+
+### 17.4 Autoreclose (79) — inhibit vs reclose issued
+
+| Digital / SER wording | Treated as |
+|-----------------------|------------|
+| `INHIBIT AR`, `AR_INHIBIT`, `79 INHIBIT`, inhibit reclose | **Supervisory only** — **not** 79 pickup |
+| `INITIATE_AR`, `RREC1`, `Auto Reclose`, `79 AR Success`, “dead time elapsed — reclose issued” | **79 reclose / AR issued** |
+
+On the one-page Summary:
+
+- **Pickups** never lists scheme status codes **79 / 86 / 25** as fault pickups  
+- **Reclose** shows `79 (AR issued)` when autoreclose operate evidence exists  
+
+Map AR inhibit channels as **BLOCK** (or leave unmapped) under DR targets — never as a fake RECLOSE operate if you only have inhibit.
+
 ### Overview
 
 Five engineering panels:
 
-1. **What happened** — fault, inception, protection, consistency, RCA, DQ  
+1. **What happened** — event class, fault, inception, protection, consistency, RCA, DQ  
 2. **Why** — primary hypothesis with links to Evidence / RCA  
 3. **Which setting** — source, version, group, active group verification  
 4. **What is uncertain** — missing evidence, unverified settings, DQ, inconclusive items  
@@ -994,7 +1069,7 @@ Five engineering panels:
 
 **Inputs loaded** chips summarise what evidence files are present (COMTRADE package, settings, SOE / event report) in short engineer-readable phrases — useful before you trust protection timing or consistency.
 
-Plant labels (substation / bay / relay) and bay one-line context can be saved from Overview. Fault distance shows **NOT CALCULABLE** when inputs are missing (never invented).
+Plant labels (substation / bay / relay) and bay one-line context can be saved from Overview. Fault distance shows **NOT CALCULABLE** when inputs are missing (never invented). On energization / motor-start class, ground / shunt fault wording is suppressed so you are not pushed toward a false AG/ABG story.
 
 ### Files
 
@@ -1017,11 +1092,13 @@ Map digital channels to protection roles:
 | **PICKUP** | Element pickup assert |
 | **TRIP** | Trip / operate assert |
 | **52A** / **52B** | Breaker auxiliary |
-| **RECLOSE** | Auto-reclose |
+| **RECLOSE** | Auto-reclose **initiate / close / success** only |
 | **LOCKOUT** | Lockout / 86 |
+| **BLOCK** | Inhibit / block / inrush restrain (e.g. **INHIBIT AR**, 87 2nd H) — **not** an operate |
+| **IGNORE** | Spare / unused / interlocking — skipped |
 | **UNKNOWN** | Leave unmapped |
 
-Optionally bind an **element** (21, 51, 51N, 67N, 87L, …). Rising-edge logic respects configured normal state. After save → **Re-run analysis** so Sequence / Protection / Consistency update.
+Optionally bind an **element** (21, 51, 51N, 67N, 87L, …). Do **not** bind element **79** to an inhibit channel. Rising-edge logic respects configured normal state. After save → **Re-run analysis** so Sequence / Protection / Consistency update.
 
 ### DR workspace
 
@@ -1031,12 +1108,15 @@ Combined disturbance-record view for day-to-day DR review: waveforms, cursors, p
 
 Interactive viewer with **real sample arrays** (from analysis cache / on-demand parse):
 
-- Zoom / pan / cursors  
-- Channel selection · analog/digital  
-- Markers when available  
-- Engineering units  
+| Control | Behaviour |
+|---------|-----------|
+| **Layout** | **Separate** analog traces (default, SIGRA-style) or **group** overlays |
+| Zoom / pan / cursors | Time cursors with engineering readouts |
+| Channel selection | Analog and digital toggles |
+| Markers | When timeline markers exist |
+| Units | Scaled engineering units from CFG |
 
-Inspect individual sample values — not smoothed-only curves.
+**Phasors** use distinct phase colours and a compact legend (badges) so labels do not crowd the diagram. Inspect individual sample values — not smoothed-only curves.
 
 ### Sequence (timeline)
 
@@ -1077,6 +1157,15 @@ Fault type / characteristics and distance / location views when inputs exist. Di
 ### Protection
 
 Per-element table: Enabled · Pickup · Trip · Expected · Timing · Consistency · Setting source · Evidence.
+
+| Column / field | How to read it |
+|----------------|----------------|
+| **Pickup** | True only with operate evidence ([§17.2](#172-what-counts-as-pickup--trip-evidence)) |
+| **Trip** | True only with trip / operate digital or clear SER trip |
+| **operation_type** | `TRIP`, `PICKUP`, `RECLOSE` (79), `LOCKOUT` (86), or `ASSESSMENT` (no assert) |
+| **Evidence ids** | Channel names and/or `ser:…` / `report:…` tokens |
+
+Elements that only appear in settings (never asserted in the DR) show as assessments, not as Summary pickups.
 
 See also [§18 Protection physics and schemes](#18-protection-physics-and-schemes).
 
@@ -1119,18 +1208,53 @@ Scheme label (when detected) appears in the subtitle (e.g. stepped distance, fee
 RCA → Hypothesis → Finding → Calculation → Source → Raw data / file
 ```
 
-### Summary / Report / Review
+### 17.5 One-page Summary (detailed)
 
-**Summary** consolidates the event story on a printable one-page sheet (fault, protection, consistency, RCA, quality).
+**Summary** consolidates the event story on a printable one-page sheet. After a complete **Manual upload** or package-ready fetch, the app often lands here first.
+
+#### Cover strip
 
 | Field | Source |
 |-------|--------|
-| **DR time** | Relay disturbance time (COMTRADE trigger/start or stamped event time) — not upload/created time |
+| **Event** | `EVT-YYYY-NNNNN` · feeder |
+| **Plant** | Substation · Bay · Relay |
+| **DR time** | Relay disturbance time (COMTRADE trigger/start or stamped event time) — **not** upload/created time |
 | **Created** | When the event was created in this app |
-| **Pickups / Trips** | Asserted protection operations from analysis (`PICKUP` / `TRIP`). A row that tripped still shows as a trip; pickup remains visible from assessment details |
-| **OPERATED** | Elements with trip asserted |
+| **kV / Hz** | Nominal voltage / frequency |
+| **Badges** | Review / decision · analysis state · data quality · fault letters when classed |
 
-After a complete **Manual upload** or package-ready fetch, the app often lands here first. **Report**: see [§23](#23-reports-html-pdf-json). Both always render as a light “paper” page, even in dark theme.
+#### KPI cards
+
+| Card | Meaning |
+|------|---------|
+| **EVENT CLASS** | FAULT / ENERGIZATION / MOTOR_START / … ([§17.1](#171-dfr-event-class-before-fault-type)) |
+| **FAULT** | Shunt type when class allows (else UNKNOWN / not applicable) |
+| **PRIMARY RCA** | Rank-1 hypothesis statement |
+| **OPERATED** | Elements with **trip** asserted (e.g. `21 trip`) |
+
+#### What happened table
+
+| Row | Meaning |
+|-----|---------|
+| **Event class** | Same as KPI |
+| **Fault** | Type · classification status |
+| **Phases / Ground** | From fault analysis (suppressed when class is energization / motor start) |
+| **Location** | Distance when applicable; else *Not applicable for this scheme* / NOT CALCULABLE |
+| **Trips** | Asserted trips (e.g. `21 trip`). Shared `TRIP_CMD` attributed to the picking-up element |
+| **Pickups** | Elements with **pickup** evidence, **including** those that later tripped (e.g. `21`). Scheme codes **79 / 86 / 25** are excluded here |
+| **Reclose** | `79 (AR issued)` when autoreclose operate evidence exists; else *None asserted* |
+
+If RCA says “21 pickup with trip” but an older UI build showed Pickups empty, refresh — pickup+trip elements must appear under **both** Pickups and Trips.
+
+#### Settings & consistency / Primary RCA
+
+Setting source, version/group, active group verification, consistency roll-up, DQ, and the primary hypothesis with supporting evidence tokens (humanized).
+
+**Print / Share:** use the toolbar **Print** / **Share pack**. Summary always prints as a light paper sheet.
+
+**Report**: see [§23](#23-reports-html-pdf-json). Report pages also render as light “paper”, even in dark theme.
+
+### Review
 
 | Review action | When to use |
 |--------|-------------|
@@ -1425,7 +1549,8 @@ Each entry: who / when / what / old→new where applicable.
 | `.rdb` | SEL settings database (SET_ALL extract when present) |
 | `.cev` | SEL compressed event — converted to CFG+DAT when convertible |
 | `.eve` | Relay event report text (parsed when recognized) |
-| `.dz5` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp` | DIGSI / PCM600-style packages (ZIP-expand when possible) |
+| `.dz5` / `.dex` / `.dex5` / `.d5z` / `.pcmi` / `.pcmp` | DIGSI / PCM600-style packages (ZIP-expand when possible; DIGSI 4 `.dex` via embedded ZIP) |
+| MiCOM Courier `.set` | Binary settings → CT/VT + OC/EF ANSI mapping when Courier cells decode |
 | `.cid` / `.icd` / `.scd` | IEC 61850 SCL — stored as attachment (reference only) |
 | `.pdf` | Supporting attachment (reports, drawings, notes) — stored, not parsed as COMTRADE |
 | `.zip` | Package archive — **auto-extracted**; allowed members processed further; ZIP kept as PACKAGE |
@@ -1564,7 +1689,25 @@ A: It opens All events with a queue filter (e.g. **Events with reports**). Use *
 **Q: Continue button still shows a deleted event**  
 A: Refresh the page after delete; the app prunes recent-event memory when the event is gone. You can also clear localStorage key `protection_rca_recent_events_v1`.
 
-### Analysis
+### Analysis and Summary
+
+**Q: Why is Event class ENERGIZATION / MOTOR_START but I expected AG?**  
+A: DFR class is decided first. Inrush / starting-current signatures suppress inventing shunt fault letters. Treat class as the primary story; only **FAULT** class publishes AG/ABG confidently. See [§17.1](#171-dfr-event-class-before-fault-type).
+
+**Q: Why does Summary say Pickups “None asserted” while RCA says “21 pickup with trip”?**  
+A: On current builds, pickup+trip elements appear under **both** Pickups and Trips. If Pickups is empty after a hard refresh, the protection row may lack `details.pickup` — **Re-run analysis**. Older builds wrongly hid pickups that also tripped.
+
+**Q: Why is 79 listed under Reclose and not Pickups?**  
+A: Autoreclose is scheme status, not a fault-protection start. Clear AR operate evidence shows as **Reclose → 79 (AR issued)**. See [§17.4](#174-autoreclose-79--inhibit-vs-reclose-issued).
+
+**Q: Why did 79 appear as a pickup before?**  
+A: Often from **INHIBIT AR** (or similar) being treated as reclose. Inhibit is now ignored for 79 pickup. Only initiate / close / success / “reclose issued” assert 79. Re-run analysis after upgrading.
+
+**Q: Can station SOE invent a 50/51/21 pickup?**  
+A: No. Asserts need COMTRADE digitals or a clear **relay SER / event report** line. Bare station SOE is context only. See [§17.2](#172-what-counts-as-pickup--trip-evidence).
+
+**Q: Why does RCA say “51N pickup” instead of “67N operated”?**  
+A: Exact observed codes only. Pickup-only earth OC is not renamed to directional EF or called a trip.
 
 **Q: Why is RCA INCONCLUSIVE?**  
 A: Consistency findings (e.g. disabled 51 operating), or missing evidence for CONFIRMED.
@@ -1582,10 +1725,10 @@ A: No voltage evidence was found. Upload/fetch settings that state nominal kV (o
 A: Not by default — uploads/fetches are auto-APPROVED / active group VERIFIED. Set `AUTO_APPROVE_UPLOADED_SETTINGS=false` to restore manual approval.
 
 **Q: Fault distance NOT CALCULABLE**  
-A: Needs validated CT/VT, line parameters, and impedance model — never invented.
+A: Needs validated CT/VT, line parameters, and impedance model — never invented. Also not applicable for some feeder OC schemes.
 
-**Q: Waveforms empty**  
-A: Run analysis after upload so samples are parsed and cached; check COMTRADE validation.
+**Q: Waveforms empty / overlays hard to read**  
+A: Run analysis after upload so samples are cached. Use **Separate** analog layout (default) instead of Group if traces overlap. Check COMTRADE validation.
 
 **Q: Why is analysis FAILED but older results still visible?**  
 A: The latest background job failed. Hover FAILED / open Details, fix inputs, **Re-run analysis**.
@@ -1594,7 +1737,7 @@ A: The latest background job failed. Hover FAILED / open Details, fix inputs, **
 A: Protect → **RCA**, tick the matching **cause enrichment** evidence, save, **Re-run analysis**.
 
 **Q: Pickup / trip times look wrong**  
-A: Setup → **DR targets**, map the correct digitals (and element), save, re-run.
+A: Setup → **DR targets**, map the correct digitals (and element), save, re-run. Confirm absolute time = CFG start + relative for DR digitals.
 
 **Q: Electrical / distance looks wrong after auto-detect**  
 A: Setup → **Channel map**, correct roles, save, re-run.
@@ -1618,13 +1761,16 @@ A: No. SOE is matched to the DR by filename and/or time window (CFG start − 5 
 A: Enable MMS file transfer in the relay tool, then set **COMTRADE path on IED** (often `/COMTRADE/`) from that tool or the manual. Paths are not downloaded from the internet.
 
 **Q: Summary says Trips “None asserted” but the Sequence shows TRIP_CMD**  
-A: Re-run analysis on a build that attributes shared trip contacts to the picking-up element. Map opaque channels under **DR targets** if needed.
+A: Re-run analysis so shared trip contacts are attributed to the picking-up element. Map opaque channels under **DR targets** if needed.
 
 **Q: DR time vs Created on Summary / dashboard?**  
 A: **DR time** = disturbance on the relay (COMTRADE). **Created** = when this app created the event.
 
 **Q: After manual upload I landed on Summary — is that normal?**  
 A: Yes, when COMTRADE **and** settings were present. Analysis started automatically and Summary is the first place to read the story. Use the tab bar for Waveforms, Consistency, Report, etc.
+
+**Q: The UI looks different / too dark / neon**  
+A: Current default is the **light professional** theme. Use the top-bar theme icon to switch light/dark. Hard-refresh (Ctrl+F5) after an upgrade so CSS and theme key refresh.
 
 **Q: How do I add or remove users?**  
 A: ADMIN → **Users** → **Add user**, or **Edit** / **Delete** on a row. On edit, leave password blank to keep the current one. You cannot delete yourself.
@@ -1715,6 +1861,9 @@ A: OIDC not enabled on the API (`AUTH_MODE` still `local`).
 | Stuck “Queued (background)” with FAILED | Latest job never advanced — re-run after fix; check `backend\logs\api-launch.log` |
 | Waveforms empty | Analysis/parse not run or validation failed |
 | Wrong pickup/trip sequence | Setup → **DR targets** → save → re-run |
+| False 79 pickup | Check for INHIBIT AR; upgrade + **Re-run**; inhibit must not map as RECLOSE |
+| Pickups empty but RCA cites pickup | Hard-refresh Summary; ensure build lists pickup+trip; else **Re-run analysis** |
+| Wrong event class / false AG | Trust DFR class first; energization/motor start suppress shunt letters |
 | Wrong phasors / distance | Setup → **Channel map** → save → re-run |
 | Consistency empty | Analysis not run or no digital/setting inputs |
 | Vendor `.rdb` / `.cev` / DIGSI unused | Confirm extract succeeded on Files tab; else export CFG/DAT + settings text from vendor tool |
@@ -1793,12 +1942,17 @@ UPLOAD     → IED → Manual upload → CFG/DAT/CFF/ZIP + settings
 EVENT ID   → EVT-YYYY-NNNNN (auto) · legacy UUID → previous_event_id
 MAP        → Setup → Channel map + DR targets → save
 ANALYSE    → Auto on complete package, or Start / Re-run → status lamps
-SUMMARY    → DR time vs Created · Pickups / Trips · one-page story
+CLASS      → Event class first (FAULT / ENERGIZATION / MOTOR_START / …)
+EVIDENCE   → Pickup/trip = COMTRADE digital or clear SER (not bare SOE)
+SUMMARY    → DR time vs Created · Event class · Trips · Pickups · Reclose
+79 RULE    → INHIBIT AR ≠ pickup · clear AR → Reclose row only
 SEQUENCE   → Table or Cards · Absolute = CFG start + relative (DR)
+WAVEFORMS  → Separate analogs (default) · phasor legend
 VERIFY     → Waveforms → Sequence → Consistency → RCA → Evidence
 CAUSE      → RCA cause enrichment (field evidence) → re-run
 FILTER     → All events: Search + From/To + Clear filters
 DASHBOARD  → Events with reports = live events with a report
+THEME      → Light professional default · toggle light/dark in top bar
 REPORT     → Download HTML or professional PDF
 USERS      → ADMIN → Users → Add / Edit / Delete (password optional on edit)
 CLOSE-OUT  → Review (ACCEPT / MODIFY / REJECT / …)
@@ -1810,4 +1964,4 @@ REMEMBER   → Read-only IEC 61850 · No invented data · No OT control · No ge
 
 ---
 
-*End of User Guide — Protection RCA Platform (document version 0.9.0)*
+*End of User Guide — Protection RCA Platform (document version 1.0.0)*

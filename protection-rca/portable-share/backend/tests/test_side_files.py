@@ -51,6 +51,33 @@ def test_parse_event_report():
     assert any(e.event_type == "52a_change" for e in evs)
 
 
+def test_bare_79_soe_does_not_classify_as_reclose():
+    """SOE row '79' must not invent autoreclose when DR has no AR channel."""
+    from app.services.side_files import _classify_signal, _element_from_label
+
+    assert _classify_signal("79") != "reclose"
+    assert _classify_signal("AR") != "reclose"
+    assert _element_from_label("79") is None
+    assert _element_from_label("Digital 79") is None
+    assert _classify_signal("RREC1") == "reclose"
+    assert _element_from_label("Auto Reclose initiate") == "79"
+
+
+def test_soe_csv_tags_relay_ser_quality_for_clear_pickup():
+    from app.services.side_files import parse_soe_csv
+
+    csv_text = """timestamp_utc,signal,value,source
+2026-09-04T08:00:00.410000+00:00,21_Z1_PICKUP,1,TEST_DISTANCE_RELAY
+2026-09-04T08:00:00.465000+00:00,52A_CLOSED,0,TEST_BREAKER
+"""
+    evs = parse_soe_csv(csv_text, source_name="soe.csv")
+    pu = next(e for e in evs if e.event_type == "protection_pickup")
+    assert pu.metadata.get("evidence_quality") == "relay_ser"
+    assert pu.metadata.get("element") == "21"
+    br = next(e for e in evs if e.event_type == "52a_change")
+    assert br.metadata.get("evidence_quality") == "station_soe"
+
+
 def test_merge_prefers_comtrade_over_soe_duplicate():
     primary = [
         TimelineEvent(

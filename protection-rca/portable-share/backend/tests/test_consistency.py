@@ -79,3 +79,69 @@ def test_overall_consistent_despite_unverifiable_noise_not_emitted():
     a = _assessment(enabled=True, pickup=True, trip=True)
     result = ConsistencyEngine().run(event_id="EVT-5", assessments=[a])
     assert result.summary_status == "CONSISTENT"
+
+
+def test_sequence_allows_interrupt_before_52a():
+    """EVT-2026-00014 style: interrupt ~11 ms before 52a must not be INCONSISTENT."""
+    from consistency.checker import check_protection_sequence
+
+    timeline = [
+        {"event_type": "protection_pickup", "timestamp": 0.1797},
+        {"event_type": "protection_trip", "timestamp": 1.1881},
+        {"event_type": "current_interruption", "timestamp": 1.2414},
+        {"event_type": "52a_change", "timestamp": 1.2522},
+    ]
+    f = check_protection_sequence(timeline, "EVT-14")
+    assert f.status == "CONSISTENT"
+    assert f.observed.get("violations") == []
+
+
+def test_sequence_trip_before_pickup_inconsistent():
+    from consistency.checker import check_protection_sequence
+
+    timeline = [
+        {"event_type": "protection_trip", "timestamp": 0.10},
+        {"event_type": "protection_pickup", "timestamp": 0.20},
+    ]
+    f = check_protection_sequence(timeline, "EVT-X")
+    assert f.status == "INCONSISTENT"
+    assert "trip_before_pickup" in (f.observed or {}).get("violations", [])
+
+
+def test_sequence_clearing_before_trip_inconsistent():
+    from consistency.checker import check_protection_sequence
+
+    timeline = [
+        {"event_type": "protection_pickup", "timestamp": 0.10},
+        {"event_type": "protection_trip", "timestamp": 0.50},
+        {"event_type": "52a_change", "timestamp": 0.40},
+    ]
+    f = check_protection_sequence(timeline, "EVT-Y")
+    assert f.status == "INCONSISTENT"
+    assert "clearing_before_trip" in (f.observed or {}).get("violations", [])
+
+
+def test_sequence_52a_few_ms_before_pickup_is_consistent():
+    """COMTRADE skew: 52a 6 ms before Start must not be HIGH INCONSISTENT."""
+    from consistency.checker import check_protection_sequence
+
+    timeline = [
+        {"event_type": "52a_change", "timestamp": 0.184},
+        {"event_type": "protection_pickup", "timestamp": 0.190},
+    ]
+    f = check_protection_sequence(timeline, "EVT-SKEW")
+    assert f.status == "CONSISTENT"
+    assert f.observed.get("violations") == []
+    assert "trip_digital_not_observed" in (f.observed or {}).get("notes", [])
+
+
+def test_sequence_clearing_well_before_pickup_still_inconsistent():
+    from consistency.checker import check_protection_sequence
+
+    timeline = [
+        {"event_type": "52a_change", "timestamp": 0.10},
+        {"event_type": "protection_pickup", "timestamp": 0.30},
+    ]
+    f = check_protection_sequence(timeline, "EVT-EARLY")
+    assert f.status == "INCONSISTENT"
+    assert "clearing_before_pickup" in (f.observed or {}).get("violations", [])

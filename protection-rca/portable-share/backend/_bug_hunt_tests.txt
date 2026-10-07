@@ -1,0 +1,24 @@
+﻿..F..................................................................... [ 22%]
+........................................................................ [ 44%]
+........................................................................ [ 66%]
+........................................................................ [ 88%]
+.................F..................s                                    [100%]
+================================== FAILURES ===================================
+E   AssertionError: assert 'NOT_APPLICABLE' == 'NOT_CALCULABLE'
+      
+      - NOT_CALCULABLE
+      + NOT_APPLICABLE
+D:\Sachin_Python\Protection Expert System\protection-rca\backend\tests\test_acceptance_policies.py:90: AssertionError: assert 'NOT_APPLICABLE' == 'NOT_CALCULABLE'
+E   ModuleNotFoundError: No module named 'olefile'
+<frozen importlib._bootstrap>:1335: ModuleNotFoundError: No module named 'olefile'
+============================== warnings summary ===============================
+.venv\Lib\site-packages\_pytest\config\__init__.py:1464
+  D:\Sachin_Python\Protection Expert System_IEC61850\protection-rca\backend\.venv\Lib\site-packages\_pytest\config\__init__.py:1464: PytestConfigWarning: Unknown config option: asyncio_mode
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_acceptance_policies.py::test_fault_distance_not_invented_without_inputs
+FAILED tests/test_vendor_binaries.py::test_rdb_ole_extracts_set_all_text - Mo...
+2 failed, 322 passed, 1 skipped, 1 warning in 4.53s

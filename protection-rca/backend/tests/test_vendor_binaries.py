@@ -57,6 +57,8 @@ def test_rdb_non_ole_rejected():
 
 
 def test_rdb_ole_extracts_set_all_text():
+    import sys
+
     set_all = """[FID]
 FID=SEL-421-R123
 [SET_1]
@@ -73,12 +75,12 @@ CTR=600
     stream.read.return_value = set_all.encode("utf-8")
     mock_ole.openstream.return_value = stream
 
-    with patch("olefile.OleFileIO", return_value=mock_ole):
+    fake_olefile = MagicMock()
+    fake_olefile.OleFileIO = MagicMock(return_value=mock_ole)
+    with patch.dict(sys.modules, {"olefile": fake_olefile}):
         extracted = extract_sel_rdb_text(ole_magic)
-    assert extracted["status"] == "OK"
-    assert "51SP" in extracted["text"]
-
-    with patch("olefile.OleFileIO", return_value=mock_ole):
+        assert extracted["status"] == "OK"
+        assert "51SP" in extracted["text"]
         ingested = ingest_settings_bytes(ole_magic, filename="relay.rdb")
     assert ingested["status"] == "OK"
     assert ingested["vendor"] == "SEL"

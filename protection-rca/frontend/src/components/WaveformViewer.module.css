@@ -14,26 +14,35 @@
   border-left: none;
   border-right: none;
   border-bottom: none;
+  /* Keep viewer usable under browser zoom — allow inner panes to scroll */
+  overflow: hidden;
 }
 
 .fill .body {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .fill .channels {
   max-height: none;
   height: 100%;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .fill .plotCol {
   height: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .fill .plotCol .canvas {
-  flex: 1;
-  min-height: 0;
-  height: 100% !important;
+  flex: 0 0 auto;
+  min-height: 240px;
+  /* Height set in JS so digitals are not clipped; plotCol scrolls */
 }
 
 .toolbar {
@@ -88,7 +97,7 @@
 }
 
 .channels {
-  width: 140px;
+  width: 188px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   padding: 8px;
@@ -199,12 +208,19 @@
 .scrollTrack {
   position: relative;
   height: 14px;
-  margin: 0 12px 0 118px;
+  margin: 0 12px 0 148px;
   background: var(--bg-elevated);
   border-top: 1px solid var(--border);
   cursor: pointer;
   flex-shrink: 0;
   touch-action: none;
+}
+
+.chItem .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .scrollThumb {
@@ -230,4 +246,51 @@
   color: var(--text-secondary);
   background: var(--bg-elevated);
   flex-shrink: 0;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.readoutValues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 6px;
+}
+
+.readoutCh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+}
+
+.readoutCh i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.readoutStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.readoutStatusLabel {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.readoutSep {
+  color: var(--text-muted);
+  margin: 0 1px;
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -71,32 +72,78 @@ def _infer_role(name: str, unit: str) -> str:
     # Normalize vendor punctuation: I_A, U-L1, IL1 → comparable tokens
     n = name.upper().replace(" ", "").replace("-", "").replace("_", "")
     u = (unit or "").upper()
-    # Phase currents (ABB REF615 IL1/2/3, Siemens, GE, …)
-    if n in ("IL1", "IL1A", "I1", "IA", "PHASEA", "CURRENTA", "CT1"):
+
+    # Siemens 7UT / differential quantities (before IL1 / IA substring rules)
+    if "IDIFF" in n or n.startswith("IDIF") or n.startswith("DIFFI"):
+        if n.endswith("A") or n.endswith("1") or "PHA" in n:
+            return "IDIFF_A"
+        if n.endswith("B") or n.endswith("2") or "PHB" in n:
+            return "IDIFF_B"
+        if n.endswith("C") or n.endswith("3") or "PHC" in n:
+            return "IDIFF_C"
+        return "IDIFF"
+    if "IREST" in n or "IBIAS" in n or "RESTRAINT" in n or n.startswith("IRST"):
+        if n.endswith("A") or n.endswith("1") or "PHA" in n:
+            return "IREST_A"
+        if n.endswith("B") or n.endswith("2") or "PHB" in n:
+            return "IREST_B"
+        if n.endswith("C") or n.endswith("3") or "PHC" in n:
+            return "IREST_C"
+        return "IREST"
+    # Siemens auxiliary / earth windings (i-X1, …) — generic current, not phase IA
+    if re.fullmatch(r"IX\d*", n) or n in ("IX", "IX1", "IX2", "IX3"):
+        return "I"
+
+    # IEC L1/L2/L3 (allow side suffixes: IL1M1, UL2M2, …)
+    if n.startswith("IL1") or n in ("I1", "IA", "PHASEA", "CURRENTA", "CT1"):
         return "IA"
-    if n in ("IL2", "IL2B", "I2", "IB", "PHASEB", "CURRENTB", "CT2"):
+    if n.startswith("IL2") or n in ("I2", "IB", "PHASEB", "CURRENTB", "CT2"):
         return "IB"
-    if n in ("IL3", "IL3C", "I3", "IC", "PHASEC", "CURRENTC", "CT3"):
+    if n.startswith("IL3") or n in ("I3", "IC", "PHASEC", "CURRENTC", "CT3"):
         return "IC"
-    if n in ("IO", "IG", "IR", "IN", "IRES", "IGND", "INOTAL", "IGROUND", "INEUTRAL"):
+    if (
+        n in ("IO", "IG", "IN", "IRES", "IGND", "INOTAL", "IGROUND", "INEUTRAL", "IE")
+        or n.startswith("3I0")
+        or n.startswith("I0")
+    ):
         return "IN"
-    # Phase voltages (UL1 common in IEC naming)
-    if n in ("UL1", "UL1A", "U1", "VA", "VL1", "PHASEVA", "VT1"):
+    if n.startswith("UL1") or n in ("U1", "VA", "VL1", "PHASEVA", "VT1"):
         return "VA"
-    if n in ("UL2", "UL2B", "U2", "VB", "VL2", "PHASEVB", "VT2"):
+    if n.startswith("UL2") or n in ("U2", "VB", "VL2", "PHASEVB", "VT2"):
         return "VB"
-    if n in ("UL3", "UL3C", "U3", "VC", "VL3", "PHASEVC", "VT3"):
+    if n.startswith("UL3") or n in ("U3", "VC", "VL3", "PHASEVC", "VT3"):
         return "VC"
-    if n in ("UN", "UG", "VN", "VG", "VNEUTRAL", "VGROUND"):
+    if n in ("UN", "UG", "VN", "VG", "VNEUTRAL", "VGROUND") or n.startswith("U0"):
         return "VN"
-    if any(x in n for x in ("IA", "IB", "IC", "IN", "CURRENT")) or u in ("A", "AMP", "AMPS"):
-        if "IA" in n or n.endswith("A") and "V" not in n and n.startswith("I"):
+
+    # Indian RYB colour phases: R→A, Y→B, B(blue)→C
+    is_i = u in ("A", "AMP", "AMPS") or "CURR" in n
+    is_v = u in ("V", "KV", "VOLT") or "VOLT" in n
+    if is_i and ("RPH" in n or "RPHASE" in n):
+        return "IA"
+    if is_i and ("YPH" in n or "YPHASE" in n):
+        return "IB"
+    if is_i and ("BPH" in n or "BPHASE" in n):
+        return "IC"
+    if is_v and ("RPH" in n or "RPHASE" in n):
+        return "VA"
+    if is_v and ("YPH" in n or "YPHASE" in n):
+        return "VB"
+    if is_v and ("BPH" in n or "BPHASE" in n):
+        return "VC"
+
+    if any(x in n for x in ("IA", "IB", "IC", "IN", "CURRENT", "CURR")) or u in (
+        "A",
+        "AMP",
+        "AMPS",
+    ):
+        if "IA" in n or (n.endswith("A") and "V" not in n and n.startswith("I")):
             return "IA"
         if "IB" in n or (n.endswith("B") and n.startswith("I")):
             return "IB"
         if "IC" in n or (n.endswith("C") and n.startswith("I")):
             return "IC"
-        if "IN" in n or "IG" in n or "IR" in n or "IO" in n:
+        if "IN" in n or "IG" in n or "IO" in n or "IE" in n:
             return "IN"
         return "I"
     if any(x in n for x in ("VA", "VB", "VC", "VN", "UL", "VOLT")) or u in ("V", "KV", "VOLT"):
@@ -108,6 +155,11 @@ def _infer_role(name: str, unit: str) -> str:
             return "VC"
         if "VN" in n or "VG" in n or "UN" in n:
             return "VN"
+        return "V"
+    # Frequency / sync-check measurement channels (not phase currents/voltages)
+    if "FREQ" in n or n in ("F", "HZ") or u in ("HZ", "FREQ"):
+        return "FREQ"
+    if "CHECKSYNC" in n or "SYNCHCHECK" in n or n.endswith("SYNCH"):
         return "V"
     return "UNKNOWN"
 
@@ -254,8 +306,58 @@ def _timestamp_at(record: CanonicalDisturbanceRecord, index: int) -> Optional[fl
 
 
 _VALID_ROLES = frozenset(
-    {"IA", "IB", "IC", "IN", "VA", "VB", "VC", "VN", "I", "V", "UNKNOWN"}
+    {
+        "IA",
+        "IB",
+        "IC",
+        "IN",
+        "VA",
+        "VB",
+        "VC",
+        "VN",
+        "I",
+        "V",
+        "IDIFF",
+        "IDIFF_A",
+        "IDIFF_B",
+        "IDIFF_C",
+        "IREST",
+        "IREST_A",
+        "IREST_B",
+        "IREST_C",
+        "UNKNOWN",
+    }
 )
+
+
+def _asserted_bay_prefixes(record: CanonicalDisturbanceRecord) -> list[str]:
+    """Bay/feeder tokens from asserted digitals (e.g. VERS B PH TRIP → VERS)."""
+    import re
+
+    prefixes: list[str] = []
+    for ch in record.digital_channels or []:
+        series = record.scaled_values.get(ch.name) or record.raw_values.get(ch.name)
+        try:
+            if not series or float(max(series)) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        name = (ch.name or "").strip().upper()
+        m = re.match(
+            r"^([A-Z0-9][A-Z0-9/_-]{1,16}?)\s+(?:R|Y|B|A|C)\s*PH\b",
+            name,
+        )
+        if m:
+            tok = m.group(1).replace(" ", "")
+            if tok not in prefixes:
+                prefixes.append(tok)
+            continue
+        m2 = re.match(r"^([A-Z]{2,}[A-Z0-9-]{0,10})\s+", name)
+        if m2 and any(k in name for k in ("TRIP", "START", "OPTD", "BKR")):
+            tok = m2.group(1)
+            if tok not in ("GEN", "ANY", "MAIN", "ZONE") and tok not in prefixes:
+                prefixes.append(tok)
+    return prefixes
 
 
 def analyze_electrical(
@@ -289,6 +391,7 @@ def analyze_electrical(
         if k and v and str(v).upper().strip() in _VALID_ROLES
     }
 
+    bay_prefs = _asserted_bay_prefixes(record)
     role_to_name: dict[str, str] = {}
     role_rank: dict[str, int] = {}
     for ch in record.analog_channels:
@@ -297,13 +400,33 @@ def analyze_electrical(
         role = override.get(ch.name, auto)
         result.channel_roles[ch.name] = role
         # Prefer specific IA/VA over generic I/V; prefer secondary over primary twin
-        if role in ("UNKNOWN", "I", "V"):
+        # Diff/restraint quantities are not phase CT substitutes for fault typing
+        if role in (
+            "UNKNOWN",
+            "I",
+            "V",
+            "IDIFF",
+            "IDIFF_A",
+            "IDIFF_B",
+            "IDIFF_C",
+            "IREST",
+            "IREST_A",
+            "IREST_B",
+            "IREST_C",
+        ):
             continue
         ps = getattr(ch, "ps", "") or ""
         rank = _channel_side_rank(ch.name, unit, str(ps))
+        # Multi-bay station DFRs: prefer currents from the bay that tripped
+        nu = (ch.name or "").upper().replace(" ", "")
+        if bay_prefs and any(p.replace(" ", "") in nu for p in bay_prefs):
+            rank -= 10
         if role not in role_to_name or rank < role_rank.get(role, 99):
             role_to_name[role] = ch.name
             role_rank[role] = rank
+    if bay_prefs:
+        result.detectors = dict(result.detectors or {})
+        result.detectors["active_bay_prefixes"] = bay_prefs[:8]
 
     fault_end, window = _max_current_window_end(
         record, role_to_name, sample_rate_hz=fs, nominal_frequency_hz=f0
@@ -518,7 +641,11 @@ def analyze_electrical(
 
         sat = detect_ct_saturation(result)
         inrush = detect_magnetizing_inrush(result)
-        result.detectors = {"ct_saturation": sat, "magnetizing_inrush": inrush}
+        result.detectors = {
+            **(result.detectors or {}),
+            "ct_saturation": sat,
+            "magnetizing_inrush": inrush,
+        }
         if sat.get("status") == "POSSIBLE":
             result.limitations.append(
                 "CT saturation POSSIBLE on some channels — verify before blaming relay"

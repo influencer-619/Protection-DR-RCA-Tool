@@ -55,6 +55,17 @@ function shapeFor(_status: string, cls: string): string {
   return '○';
 }
 
+/** Short display labels so long enums do not overflow badges / report chips. */
+const SHORT_LABELS: Record<string, string> = {
+  ANALYSIS_COMPLETE: 'Analysis complete',
+  ANALYSIS_COMPLETE_WITH_WARNINGS: 'Complete (warnings)',
+  ENGINEER_REVIEW_REQUIRED: 'Review required',
+  DATA_INSUFFICIENT: 'Data insufficient',
+  UNSUPPORTED_FORMAT: 'Unsupported format',
+  CONSISTENT_WITH_WARNINGS: 'Consistent*',
+  VALID_WITH_WARNINGS: 'Valid*',
+};
+
 interface Props {
   status: EventStatus | ConsistencyStatus | string;
   label?: string;
@@ -62,15 +73,16 @@ interface Props {
 }
 
 export function StatusBadge({ status, label, title }: Props) {
-  const cls = STATUS_CLASS[status] ?? styles.neutral;
-  const text = label ?? status.replace(/_/g, ' ');
+  const key = String(status || '');
+  const cls = STATUS_CLASS[key] ?? styles.neutral;
+  const text = label ?? SHORT_LABELS[key] ?? key.replace(/_/g, ' ');
   return (
     <span
       className={`${styles.badge} ${cls}`}
       title={title || explainStatus(status)}
     >
       <span className={styles.shape} aria-hidden>
-        {shapeFor(status, cls)}
+        {shapeFor(key, cls)}
       </span>
       {text}
     </span>

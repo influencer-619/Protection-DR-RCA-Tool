@@ -58,7 +58,8 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 200
     allowed_upload_extensions: str = (
         ".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip,"
-        ".set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex5,.d5z,.pcmi,.pcmp,"
+        ".set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex,.dex5,.d5z,.pcmi,.pcmp,"
+        ".docx,.doc,.dg4,.xmlu,.reh,.rev,"
         ".cid,.icd,.scd,.iid"
     )
     storage_backend: str = "auto"  # auto | s3 | local

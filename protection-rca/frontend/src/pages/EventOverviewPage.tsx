@@ -14,8 +14,22 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { SettingSourceBanner } from '@/components/SettingSourceBanner';
 import { VerifyActiveSettingsCard } from '@/components/VerifyActiveSettingsCard';
 import { OneLineBay } from '@/components/OneLineBay';
-import { formatOperatedElements, filterDistanceLimitations, isDistanceApplicable } from '@/utils/schemeContext';
-import { humanizeEvidenceToken } from '@/utils/evidenceLabels';
+import {
+  formatOperatedElements,
+  filterDistanceLimitations,
+  resolveBaySchemeHint,
+  resolveDistanceApplicable,
+  resolveFaultType,
+} from '@/utils/schemeContext';
+import { isEvidenceBackedAssert } from '@/utils/protectionOperateEvidence';
+import {
+  eventClassFromFault,
+  groundInvolvedLabel,
+  humanizeEventClass,
+  humanizeEvidenceToken,
+  humanizeFaultType,
+  isShuntFaultEventClass,
+} from '@/utils/evidenceLabels';
 import { formatCheckName } from '@/utils/findingValue';
 import styles from './EventOverviewPage.module.css';
 
@@ -228,12 +242,16 @@ export function EventOverviewPage() {
     (primary?.extra as { missing_evidence?: string[] } | undefined)?.missing_evidence ??
     primary?.missing_evidence ??
     [];
-  const inception = timeline.find((t) => {
-    const et = (t.event_type || '').toUpperCase();
-    return et.includes('INCEPTION') || et.includes('FAULT') || et.includes('PICKUP');
-  });
+  const inception =
+    timeline.find((t) => (t.event_type || '').toUpperCase().includes('INCEPTION')) ??
+    timeline.find((t) => {
+      const et = (t.event_type || '').toUpperCase();
+      return et === 'FAULT_INCEPTION' || et.startsWith('FAULT_');
+    });
   const trips = protection.filter(
-    (p) => p.asserted && (p.operation_type || '').toUpperCase().includes('TRIP'),
+    (p) =>
+      isEvidenceBackedAssert(p) &&
+      (p.operation_type || '').toUpperCase().includes('TRIP'),
   );
   const plantExtraEarly = (event?.extra as Record<string, unknown> | undefined) ?? {};
   const fileProcessingEarly =
@@ -256,7 +274,11 @@ export function EventOverviewPage() {
       'Protection consistency has INCONSISTENT findings — do not confirm relay malfunction from this alone',
     );
   }
-  const distanceContext = isDistanceApplicable({ fault, protection });
+  const distanceContext = resolveDistanceApplicable({
+    fault,
+    protection,
+    eventExtra: (event?.extra || {}) as Record<string, unknown>,
+  });
   if (distanceContext && fault?.distance_km == null) {
     const need: string[] = [];
     if (lineStatus !== 'OK') need.push('verified line parameters (Z1/Z0, length)');
@@ -303,13 +325,17 @@ export function EventOverviewPage() {
           bay={event.bay_name || (plantExtra.bay_name as string)}
           relay={event.relay_tag || (plantExtra.relay_tag as string)}
           feeder={event.feeder}
-          faultType={event.fault_type}
+          faultType={resolveFaultType({
+            fault,
+            eventFaultType: event.fault_type,
+            eventExtra: (event.extra || {}) as Record<string, unknown>,
+          })}
           distanceKm={distanceContext ? fault?.distance_km : null}
           distanceApplicable={distanceContext}
-          schemeHint={
-            protection.find((p) => p.asserted && /\b87/i.test(`${p.element} ${p.function_code}`))
-              ?.element || null
-          }
+          schemeHint={resolveBaySchemeHint({
+            protection,
+            eventExtra: (event.extra || {}) as Record<string, unknown>,
+          })}
           onOpenDr={() => navigate(`/events/${id}/dr`)}
         />
       )}
@@ -375,10 +401,23 @@ export function EventOverviewPage() {
           <div className={styles.label}>What happened</div>
           <div className={styles.rows}>
             <div className={styles.row}>
+              <span className={styles.rowKey}>Event class</span>
+              <span className={styles.rowVal}>
+                {humanizeEventClass(eventClassFromFault(fault))}
+              </span>
+            </div>
+            <div className={styles.row}>
               <span className={styles.rowKey}>Fault</span>
               <span className={styles.rowVal}>
-                {fault?.fault_type ?? 'Unknown'}
-                {fault?.status ? (
+                {humanizeFaultType(
+                  resolveFaultType({
+                    fault,
+                    eventFaultType: event?.fault_type,
+                    eventExtra: (event?.extra || {}) as Record<string, unknown>,
+                  }),
+                  eventClassFromFault(fault),
+                )}
+                {fault?.status && isShuntFaultEventClass(eventClassFromFault(fault)) ? (
                   <>
                     {' '}
                     <StatusBadge status={fault.status} />
@@ -534,13 +573,22 @@ export function EventOverviewPage() {
                 </tr>
                 <tr>
                   <td>Description</td>
-                  <td>{event?.description ?? '—'}</td>
+                  <td>{event?.description?.trim() ? event.description : '—'}</td>
                 </tr>
                 <tr>
                   <td>Nominal</td>
                   <td className="num">
-                    {event?.nominal_voltage_kv ?? 'UNKNOWN'} kV /{' '}
-                    {event?.nominal_frequency_hz ?? 50} Hz
+                    {event?.nominal_voltage_kv != null
+                      ? event.nominal_voltage_kv
+                      : (() => {
+                          const vl =
+                            plantLabels.voltage_level_name ||
+                            (plantExtra.voltage_level_name as string | undefined) ||
+                            '';
+                          const m = vl.match(/([0-9]{1,3}(?:\.[0-9]+)?)\s*k\s*v/i);
+                          return m ? m[1] : 'UNKNOWN';
+                        })()}{' '}
+                    kV / {event?.nominal_frequency_hz ?? 50} Hz
                   </td>
                 </tr>
                 <tr>
@@ -592,24 +640,32 @@ export function EventOverviewPage() {
               <>
                 <div className="badge-row" style={{ marginBottom: 12 }}>
                   <span className="mono" style={{ fontSize: '1.4rem', fontWeight: 700 }}>
-                    {fault.fault_type}
+                    {humanizeFaultType(fault.fault_type, eventClassFromFault(fault))}
                   </span>
-                  <StatusBadge status={fault.status} />
+                  {isShuntFaultEventClass(eventClassFromFault(fault)) ? (
+                    <StatusBadge status={fault.status} />
+                  ) : null}
                 </div>
                 <table className="data-table">
                   <tbody>
                     <tr>
                       <td>Phases</td>
-                      <td className="mono">{fault.involved_phases?.join(', ') ?? '—'}</td>
+                      <td className="mono">
+                        {isShuntFaultEventClass(eventClassFromFault(fault))
+                          ? fault.involved_phases?.join(', ') ?? '—'
+                          : '—'}
+                      </td>
                     </tr>
                     <tr>
                       <td>Ground</td>
                       <td>
-                        {fault.ground_involved == null
-                          ? 'NOT AVAILABLE'
-                          : fault.ground_involved
-                            ? 'Yes'
-                            : 'No'}
+                        {(() => {
+                          const g = groundInvolvedLabel(
+                            eventClassFromFault(fault),
+                            fault.ground_involved,
+                          );
+                          return g === '—' ? 'NOT AVAILABLE' : g;
+                        })()}
                       </td>
                     </tr>
                     {distanceContext && (

@@ -88,6 +88,44 @@ const LEVELS: Record<
 
 const ORDER: Level[] = ['substation', 'voltage', 'bay', 'feeder', 'ied'];
 
+type VoltageUnit = 'kV' | 'V';
+
+function tidyKv(n: number): number {
+  return Number(Number(n).toPrecision(8));
+}
+
+/** Parse a kilovolt value from the field (kV or V) or from a name like "33", "33kV", "33000 V". */
+function parseKv(rawKv: string, rawName: string, unit: VoltageUnit = 'kV'): number | undefined {
+  const fromField = rawKv.trim().replace(/,/g, '');
+  if (fromField) {
+    const n = Number(fromField.replace(/[^\d.+-eE]/g, ''));
+    if (Number.isFinite(n) && n > 0) return tidyKv(unit === 'V' ? n / 1000 : n);
+  }
+  const withUnit = rawName.trim().match(/(\d+(?:\.\d+)?)\s*(kV|V)\b/i);
+  if (withUnit) {
+    const n = Number(withUnit[1]);
+    if (Number.isFinite(n) && n > 0) {
+      return tidyKv(withUnit[2].toLowerCase() === 'kv' ? n : n / 1000);
+    }
+  }
+  const m = rawName.trim().match(/^(\d+(?:\.\d+)?)\s*k?v?$/i);
+  if (m) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > 0) return tidyKv(unit === 'V' ? n / 1000 : n);
+  }
+  return undefined;
+}
+
+function voltageLevelName(rawName: string, kv: number | undefined): string {
+  const name = rawName.trim();
+  if (!name && kv != null) return `${kv} kV`;
+  if (kv == null) return name;
+  if (/\bkV\b/i.test(name)) return name;
+  // Pure numeric name → attach unit
+  if (/^\d+(?:\.\d+)?$/.test(name)) return `${kv} kV`;
+  return name;
+}
+
 function countNoun(cfg: { label: string; plural: string }, n: number): string {
   const word = n === 1 ? cfg.label : cfg.plural;
   return cfg.label === cfg.label.toUpperCase() ? word : word.toLowerCase();
@@ -179,8 +217,16 @@ export function PlantPage() {
   const [adding, setAdding] = useState<{ kind: AddKind; parentId?: string; parentName?: string }>({
     kind: null,
   });
+  const [editing, setEditing] = useState<{
+    kind: Level;
+    id: string;
+    name: string;
+    kv: string;
+    unit: VoltageUnit;
+  } | null>(null);
   const [name, setName] = useState('');
   const [kv, setKv] = useState('');
+  const [kvUnit, setKvUnit] = useState<VoltageUnit>('kV');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const initialised = useRef(false);
@@ -227,23 +273,75 @@ export function PlantPage() {
   const toggle = (key: string) => setExpanded((p) => ({ ...p, [key]: !p[key] }));
 
   const startAdd = (kind: AddKind, parentId?: string, parentName?: string) => {
+    setEditing(null);
     setAdding({ kind, parentId, parentName });
     setName('');
     setKv('');
+    setKvUnit('kV');
+  };
+
+  const startEdit = (n: TreeNode) => {
+    setAdding({ kind: null });
+    const kvMatch = n.meta?.match(/^(\d+(?:\.\d+)?)\s*kV$/i);
+    setEditing({
+      kind: n.level,
+      id: n.id,
+      name: n.name,
+      kv: kvMatch?.[1] ?? '',
+      unit: 'kV',
+    });
+  };
+
+  const submitEdit = async () => {
+    if (!editing) return;
+    const trimmed = editing.name.trim();
+    const isVoltage = editing.kind === 'voltage';
+    const parsedKv = isVoltage ? parseKv(editing.kv, trimmed, editing.unit) : undefined;
+    const vlName = isVoltage ? voltageLevelName(trimmed, parsedKv) : trimmed;
+    if (!vlName) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (editing.kind === 'substation') {
+        await api.updateSubstation(editing.id, { name: vlName });
+      } else if (editing.kind === 'voltage') {
+        await api.updateVoltageLevel(editing.id, {
+          name: vlName,
+          nominal_voltage_kv: parsedKv,
+        });
+      } else if (editing.kind === 'bay') {
+        await api.updateBay(editing.id, { name: vlName });
+      } else if (editing.kind === 'feeder') {
+        await api.updateFeeder(editing.id, { name: vlName });
+      } else {
+        await api.updateIed(editing.id, { name: vlName });
+      }
+      setEditing(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Rename failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const submitAdd = async () => {
-    if (!adding.kind || !name.trim()) return;
+    if (!adding.kind) return;
+    const isVoltage = adding.kind === 'voltage';
+    const parsedKv = isVoltage ? parseKv(kv, name, kvUnit) : undefined;
+    const vlName = isVoltage ? voltageLevelName(name, parsedKv) : name.trim();
+    if (!isVoltage && !name.trim()) return;
+    if (isVoltage && !vlName) return;
     setBusy(true);
     setError(null);
     try {
       if (adding.kind === 'substation') {
         await api.createSubstation({ name: name.trim() });
-      } else if (adding.kind === 'voltage' && adding.parentId) {
+      } else if (isVoltage && adding.parentId) {
         await api.createVoltageLevel({
           substation_id: adding.parentId,
-          name: name.trim(),
-          nominal_voltage_kv: kv ? Number(kv) : undefined,
+          name: vlName,
+          nominal_voltage_kv: parsedKv,
         });
       } else if (adding.kind === 'bay' && adding.parentId) {
         await api.createBay({ voltage_level_id: adding.parentId, name: name.trim() });
@@ -286,6 +384,7 @@ export function PlantPage() {
     const isIed = n.level === 'ied';
     const open = q ? true : !!expanded[n.key];
     const childCfg = cfg.child ? LEVELS[cfg.child] : null;
+    const isEditing = editing?.kind === n.level && editing.id === n.id;
     return (
       <li key={n.key} className={`${styles.node} ${n.level === 'substation' ? styles.rootNode : ''}`}>
         <div className={`${styles.row} ${isIed ? styles.iedRow : ''}`}>
@@ -306,29 +405,101 @@ export function PlantPage() {
           )}
           <LevelIcon level={n.level} />
           <div className={styles.main}>
-            {isIed ? (
+            {isEditing && editing ? (
+              <span className={styles.editRow}>
+                <input
+                  className={styles.editInput}
+                  value={editing.name}
+                  autoFocus
+                  aria-label={`Rename ${cfg.label}`}
+                  onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void submitEdit();
+                    if (e.key === 'Escape') setEditing(null);
+                  }}
+                />
+                {n.level === 'voltage' && (
+                  <span className={styles.kvField}>
+                    <input
+                      className={styles.inputSm}
+                      placeholder={editing.unit === 'V' ? '33000' : '33'}
+                      inputMode="decimal"
+                      aria-label={`Nominal voltage in ${editing.unit}`}
+                      value={editing.kv}
+                      onChange={(e) => setEditing({ ...editing, kv: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void submitEdit();
+                        if (e.key === 'Escape') setEditing(null);
+                      }}
+                    />
+                    <select
+                      className={styles.kvUnit}
+                      aria-label="Voltage unit"
+                      value={editing.unit}
+                      onChange={(e) =>
+                        setEditing({ ...editing, unit: e.target.value as VoltageUnit })
+                      }
+                    >
+                      <option value="kV">kV</option>
+                      <option value="V">V</option>
+                    </select>
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={
+                    busy ||
+                    (n.level === 'voltage'
+                      ? !voltageLevelName(
+                          editing.name,
+                          parseKv(editing.kv, editing.name, editing.unit),
+                        )
+                      : !editing.name.trim())
+                  }
+                  onClick={() => void submitEdit()}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={busy}
+                  onClick={() => setEditing(null)}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : isIed ? (
               <Link to={`/plant/ieds/${n.id}`} className={styles.iedLink}>
                 {n.name}
               </Link>
             ) : (
-              <span className={styles.label}>{n.name}</span>
+              <button
+                type="button"
+                className={styles.labelBtn}
+                onDoubleClick={() => startEdit(n)}
+                title="Double-click to rename"
+              >
+                {n.name}
+              </button>
             )}
-            <span className={styles.levelTag}>{cfg.label}</span>
-            {n.code && <span className={styles.code}>{n.code}</span>}
-            {n.meta && <span className={styles.metaChip}>{n.meta}</span>}
-            {childCfg && (
+            {!isEditing && <span className={styles.levelTag}>{cfg.label}</span>}
+            {!isEditing && n.code && <span className={styles.code}>{n.code}</span>}
+            {!isEditing && n.meta && <span className={styles.metaChip}>{n.meta}</span>}
+            {!isEditing && childCfg && (
               <span className={styles.count}>
                 {n.total} {countNoun(childCfg, n.total)}
               </span>
             )}
-            {isIed && (
+            {!isEditing && isIed && (
               <span className={`${styles.count} ${n.eventCount ? styles.countHot : ''}`}>
                 {n.eventCount ?? 0} event{n.eventCount === 1 ? '' : 's'}
               </span>
             )}
           </div>
           <div className={styles.actions}>
-            {childCfg && cfg.child && (
+            {!isEditing && childCfg && cfg.child && (
               <button
                 type="button"
                 className={styles.ghostBtn}
@@ -337,23 +508,40 @@ export function PlantPage() {
                 + {childCfg.label}
               </button>
             )}
-            {isIed && (
+            {!isEditing && isIed && (
               <Link to={`/plant/ieds/${n.id}`} className="btn btn-sm btn-primary">
                 Open
               </Link>
             )}
-            <button
-              type="button"
-              className={styles.deleteBtn}
-              onClick={() => void remove(n.level, n.id, n.name)}
-              title={`Delete ${n.name}`}
-              aria-label={`Delete ${n.name}`}
-              disabled={busy}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" />
-              </svg>
-            </button>
+            {!isEditing && (
+              <button
+                type="button"
+                className={styles.editBtn}
+                onClick={() => startEdit(n)}
+                title={`Rename ${n.name}`}
+                aria-label={`Rename ${n.name}`}
+                disabled={busy}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
+                </svg>
+              </button>
+            )}
+            {!isEditing && (
+              <button
+                type="button"
+                className={styles.deleteBtn}
+                onClick={() => void remove(n.level, n.id, n.name)}
+                title={`Delete ${n.name}`}
+                aria-label={`Delete ${n.name}`}
+                disabled={busy}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
         {open && !isIed && (
@@ -406,7 +594,9 @@ export function PlantPage() {
           </div>
           <input
             className={styles.input}
-            placeholder={`${addCfg.label} name`}
+            placeholder={
+              adding.kind === 'voltage' ? 'Name (e.g. 33 kV) — or leave blank' : `${addCfg.label} name`
+            }
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {
@@ -416,18 +606,39 @@ export function PlantPage() {
             autoFocus
           />
           {adding.kind === 'voltage' && (
-            <input
-              className={styles.inputSm}
-              placeholder="kV"
-              inputMode="decimal"
-              value={kv}
-              onChange={(e) => setKv(e.target.value)}
-            />
+            <span className={styles.kvField}>
+              <input
+                className={styles.inputSm}
+                placeholder={kvUnit === 'V' ? '33000' : '33'}
+                inputMode="decimal"
+                aria-label={`Nominal voltage in ${kvUnit}`}
+                value={kv}
+                onChange={(e) => setKv(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void submitAdd();
+                  if (e.key === 'Escape') setAdding({ kind: null });
+                }}
+              />
+              <select
+                className={styles.kvUnit}
+                aria-label="Voltage unit"
+                value={kvUnit}
+                onChange={(e) => setKvUnit(e.target.value as VoltageUnit)}
+              >
+                <option value="kV">kV</option>
+                <option value="V">V</option>
+              </select>
+            </span>
           )}
           <button
             type="button"
             className="btn btn-primary"
-            disabled={busy || !name.trim()}
+            disabled={
+              busy ||
+              (adding.kind === 'voltage'
+                ? !voltageLevelName(name, parseKv(kv, name, kvUnit))
+                : !name.trim())
+            }
             onClick={() => void submitAdd()}
           >
             Save

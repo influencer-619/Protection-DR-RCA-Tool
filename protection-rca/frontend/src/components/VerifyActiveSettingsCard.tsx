@@ -13,9 +13,15 @@ interface Props {
 }
 
 function isPlaceholder(v?: string | null): boolean {
-  if (!v) return true;
-  const u = v.toUpperCase();
-  return u === 'NOT VERIFIED' || u === 'NOT AVAILABLE' || u === 'UNKNOWN';
+  if (v == null) return true;
+  const u = String(v).trim().toUpperCase();
+  if (!u || u === '—' || u === '-' || u === 'N/A' || u === 'NA' || u === 'NONE') return true;
+  return (
+    u === 'NOT VERIFIED' ||
+    u === 'NOT AVAILABLE' ||
+    u === 'NOT_AVAILABLE' ||
+    u === 'UNKNOWN'
+  );
 }
 
 export function VerifyActiveSettingsCard({
@@ -37,12 +43,13 @@ export function VerifyActiveSettingsCard({
   const approval = (source?.approval_status ?? 'NOT VERIFIED').toUpperCase();
   const approved = approval === 'APPROVED' || doneApprove;
   const groupVerified = activeStatus === 'VERIFIED' || doneConfirm;
+  const hasRealSource = !isPlaceholder(source?.source);
   const hasPackage =
-    !!settingsLoaded ||
-    !isPlaceholder(source?.source) ||
-    !isPlaceholder(source?.group) ||
-    !isPlaceholder(source?.version) ||
-    !!fileNote;
+    hasRealSource ||
+    (!!settingsLoaded &&
+      (!isPlaceholder(source?.group) ||
+        !isPlaceholder(source?.version) ||
+        !!fileNote));
 
   const afterSuccess = async () => {
     try {
@@ -107,13 +114,14 @@ export function VerifyActiveSettingsCard({
     }
   };
 
-  if (!hasPackage && !approved && !groupVerified) {
+  if (!hasPackage) {
     return (
       <div className={`alert alert-warn ${styles.card}`} role="status">
         <strong>Settings not loaded</strong>
         <p>
-          Upload a relay settings package first. Uploaded files are treated as APPROVED
-          automatically after analysis.
+          This event has disturbance records only. Upload a relay settings file
+          (TXT/CSV/JSON/<span className="mono">.set</span>/PDF/Word, etc.) if you want
+          setting-vs-observed consistency. Until then, Approve is not required.
         </p>
       </div>
     );

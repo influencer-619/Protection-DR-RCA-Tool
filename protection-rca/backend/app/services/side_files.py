@@ -143,15 +143,29 @@ def soe_file_matches_record(filename: str, record_key: Optional[str]) -> bool:
 
 _SIGNAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"INCEPTION|FAULT\s*START|FAULT\s*INCEPT", re.I), "fault_inception"),
-    (re.compile(r"PICK\s*UP|PICKUP|_PU\b|Z\d.*PU|START", re.I), "protection_pickup"),
+    (re.compile(r"50BF|BREAKER.?FAIL|(?<![A-Z])BF\b", re.I), "breaker_trip_command"),
+    # Intertrip / transfer before pickup START and bare TRIP
+    (re.compile(r"INTERTRIP|TRANSFER.?TRIP|(?<![A-Z0-9])TT\b", re.I), "intertrip"),
     (re.compile(r"TRIP|_TR\b|OPERATE|Z\d.*TRIP|(?<![A-Z0-9])OP\b", re.I), "protection_trip"),
+    (re.compile(
+        r"PICK\s*UP|PICKUP|_PU\b|Z\d.*PU|"
+        r"(?<![A-Za-z])START(?:ED)?(?![A-Za-z])",
+        re.I,
+    ), "protection_pickup"),
     (re.compile(r"52A|52_A|BREAKER.*OPEN|CB\s*OPEN|52A_CLOSED", re.I), "52a_change"),
     (re.compile(r"52B|52_B", re.I), "52b_change"),
-    (re.compile(r"RECLOSE|79\b|AR\b", re.I), "reclose"),
-    (re.compile(r"LOCKOUT|86\b", re.I), "lockout"),
-    (re.compile(r"INTERTRIP|TRANSFER|TT\b", re.I), "intertrip"),
-    (re.compile(r"50BF|BREAKER.?FAIL|BF\b", re.I), "breaker_trip_command"),
-    (re.compile(r"COMM|CARRIER|PILOT|POTT|DUTT", re.I), "communication_signal"),
+    # Same rule as COMTRADE: no bare "79" / "AR" — invents AR pickup without DR channel
+    (re.compile(
+        r"AUTO.?RECLOSE|RECLOSE|\bRREC\d*\b|INITIATE_?AR|"
+        r"\b79\s*(?:AR|RECLOSE|RREC)\b|"
+        r"\bAR\s*(?:INIT|CLOSE|ON|OFF|SUCCESS)",
+        re.I,
+    ), "reclose"),
+    (re.compile(r"LOCKOUT|\b86\s*(?:LOCK|TRIP|OUT)|LOCK.?OUT", re.I), "lockout"),
+    (re.compile(
+        r"(?<![A-Z])COMM(?![A-Z])|CARRIER|PILOT|POTT|DUTT",
+        re.I,
+    ), "communication_signal"),
 ]
 
 _REPORT_LINE = re.compile(
@@ -234,12 +248,40 @@ def _parse_ts(raw: str) -> Optional[datetime]:
 
 
 def _element_from_label(label: str) -> Optional[str]:
+    text = label or ""
+    # Scheme-status ANSI only with clear wording (never bare 79/86/25 alone)
+    if re.search(
+        r"AUTO.?RECLOSE|RECLOSE|\bRREC\d*\b|INITIATE_?AR|"
+        r"\b79\s*(?:AR|RECLOSE|RREC)\b|"
+        r"\bAR\s*(?:INIT|CLOSE|ON|OFF|SUCCESS)",
+        text,
+        re.I,
+    ):
+        return "79"
+    if re.search(r"LOCKOUT|\b86\s*(?:LOCK|TRIP)|LOCK.?OUT", text, re.I):
+        return "86"
+    if re.search(r"\bSYNC(?:HRO)?(?:CHECK)?\b|\b25\s*SYNC|\bRSYN\b", text, re.I):
+        return "25"
+    # Allow 21_Z1 / 50P_PICKUP style tags (underscore is a word char — \b21\b fails)
     m = re.search(
-        r"\b(87RGF|50BF|87G|87T|87L|87B|50N|51N|67N|67P|50P|51P|21G|21P|32R|81U|81O|81R|50|51|21|67|87|32|46|68|78|79|86|25|27|59)\b",
-        label or "",
+        r"(?<![A-Z0-9])(87RGF|50BF|87G|87T|87L|87B|50N|51N|67N|67P|50P|51P|21G|21P|32R|"
+        r"81U|81O|81R|50|51|21|67|87|32|46|68|78|27|59)(?![A-Z0-9])",
+        text,
         re.I,
     )
-    return m.group(1).upper() if m else None
+    if m:
+        return m.group(1).upper()
+    # Free-text SOE descriptions without ANSI digits
+    if re.search(r"\bDIST(?:ANCE)?\b|\bPDIS\b", text, re.I):
+        return "21"
+    if re.search(r"\bDIFF(?:ERENTIAL)?\b|\bPDIF\b", text, re.I):
+        return "87"
+    try:
+        from protection.digital_targets import infer_element_code
+
+        return infer_element_code(text)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def looks_like_soe_csv(text: str) -> bool:
@@ -327,6 +369,10 @@ def parse_soe_csv(
         "status_text",
         "point_tag",
     )
+    # Prefer structured tags (21_Z1_PICKUP) over free-text Description for ANSI
+    tag_key = _pick("point_tag", "point", "tag", "channel", "bit", "name")
+    if tag_key and sig_key and tag_key == sig_key:
+        tag_key = None
     val_key = _pick("value", "state", "status", "new_state", "val")
     src_key = _pick("source", "device", "relay", "ied", "bay")
     if not sig_key:
@@ -339,13 +385,14 @@ def parse_soe_csv(
     w0 = _aware(window_start) if window_start else None
     w1 = _aware(window_end) if window_end else None
 
-    rows: list[tuple[datetime, str, str, Any]] = []
+    rows: list[tuple[datetime, str, str, str, Any]] = []
     for row in reader:
         if ts_key:
             dt = _parse_ts(str(row.get(ts_key) or ""))
         else:
             dt = _parse_ts(f"{row.get(date_key) or ''} {row.get(time_key) or ''}".strip())
         sig = str(row.get(sig_key) or "").strip()
+        tag = str(row.get(tag_key) or "").strip() if tag_key else ""
         if dt is None or not sig:
             continue
         dt = _aware(dt)
@@ -355,7 +402,7 @@ def parse_soe_csv(
             continue
         val = row.get(val_key) if val_key else None
         src = str(row.get(src_key) or source_name)
-        rows.append((dt, sig, src, val))
+        rows.append((dt, sig, tag, src, val))
     if not rows:
         return []
 
@@ -367,7 +414,7 @@ def parse_soe_csv(
         t0 = _aware(t0)
 
     out: list[TimelineEvent] = []
-    for dt, sig, src, val in rows:
+    for dt, sig, tag, src, val in rows:
         # Skip de-assert / zero unless useful breaker status
         skip = False
         try:
@@ -380,26 +427,47 @@ def parse_soe_csv(
                     skip = True
         if skip:
             continue
-        etype = _classify_signal(sig)
-        if "52A" in sig.upper() and str(val) in ("0", "0.0"):
+        # Classify from Point_Tag when present (21_Z1_TRIP), else description
+        classify_label = tag or sig
+        etype = _classify_signal(classify_label)
+        if etype == "external_signal" and tag and tag != sig:
+            etype = _classify_signal(sig)
+        if "52A" in classify_label.upper() and str(val) in ("0", "0.0"):
             etype = "52a_change"
         rel = (dt - t0).total_seconds()
         # Without an explicit DR window, drop SOE long before the first row clock
         if w0 is None and rel < -1:
             continue
+        element = _element_from_label(tag) or _element_from_label(sig)
+        # Relay SER-quality vs station SOE (breaker aux / vague) — industry split
+        operate_types = {
+            "protection_pickup",
+            "protection_trip",
+            "breaker_trip_command",
+            "reclose",
+            "lockout",
+        }
+        if etype in operate_types and element:
+            evid_q = "relay_ser"
+            evid_id = f"ser:{tag or sig}"
+        else:
+            evid_q = "station_soe"
+            evid_id = f"soe:{source_name}:{tag or sig}"
         out.append(
             TimelineEvent(
                 event_type=etype,
                 timestamp=float(rel),
                 source=f"SOE:{src}",
                 confidence="HIGH",
-                evidence_ids=[f"soe:{source_name}:{sig}"],
+                evidence_ids=[evid_id],
                 metadata={
                     "signal": sig,
+                    "point_tag": tag or None,
                     "value": val,
                     "absolute_time": dt.isoformat(),
-                    "element": _element_from_label(sig),
+                    "element": element,
                     "file": source_name,
+                    "evidence_quality": evid_q,
                 },
             )
         )
@@ -419,9 +487,18 @@ def parse_relay_event_report(
     text: str,
     *,
     source_name: str = "relay_event_report.txt",
+    duration_s: Optional[float] = None,
 ) -> list[TimelineEvent]:
-    """Parse relay event report lines into timeline events."""
+    """Parse relay event report lines into timeline events.
+
+    Times are treated as seconds from the same trigger/DR start as COMTRADE
+    (industry event-report convention). When ``duration_s`` is known, rows far
+    outside the DR window are dropped so they do not scramble the merge.
+    """
     out: list[TimelineEvent] = []
+    max_t = None
+    if duration_s is not None and duration_s > 0:
+        max_t = float(duration_s) + 5.0
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("=") or line.upper().startswith("PROTECTION"):
@@ -440,23 +517,31 @@ def parse_relay_event_report(
         if "unit" in m.groupdict():
             unit = m.group("unit")
         t = _to_seconds(t_raw, unit)
+        if t < -1.0:
+            continue
+        if max_t is not None and t > max_t:
+            continue
         etype = _classify_signal(label)
         if "inception" in label.lower() or label.lower().startswith("fault inception"):
             etype = "fault_inception"
         if "open" in label.lower() and "52" in label:
             etype = "52a_change"
+        element = _element_from_label(label)
         out.append(
             TimelineEvent(
                 event_type=etype,
                 timestamp=t,
                 source=f"RELAY_EVENT_REPORT:{source_name}",
                 confidence="MEDIUM",
-                evidence_ids=[f"report:{source_name}:{label}"],
+                evidence_ids=[f"report:{label}"],
                 metadata={
                     "label": label,
-                    "element": _element_from_label(label),
+                    "element": element,
                     "file": source_name,
                     "unit": unit or "s",
+                    "time_base": "dr_relative",
+                    # Relay event reports are SER-grade evidence (SEL / PRC-002 practice)
+                    "evidence_quality": "relay_ser",
                 },
             )
         )
@@ -524,13 +609,30 @@ def _is_event_report_file(name: str, source_type: Optional[str]) -> bool:
     if any(x in n for x in ("setting", "readme", "upload_order", "set_all", "license")):
         return False
     if st == "RELAY_EVENT_REPORT":
-        return n.endswith((".txt", ".log", ".eve", ".cev"))
-    if n.endswith((".txt", ".log", ".eve")) and any(h in n for h in _REPORT_NAME_HINTS):
+        return n.endswith((".txt", ".log", ".eve", ".cev", ".pdf", ".docx", ".doc"))
+    if n.endswith((".txt", ".log", ".eve", ".pdf", ".docx", ".doc")) and any(
+        h in n for h in _REPORT_NAME_HINTS
+    ):
         return True
     # Generic .txt tagged as event report by extension default — try parse later
     if st == "RELAY_EVENT_REPORT" or (n.endswith(".txt") and "event" in n):
         return True
     return False
+
+
+def _text_from_side_file_bytes(raw: bytes, filename: str) -> tuple[str, Optional[str]]:
+    """Decode side-file bytes; PDF/Word go through document text extract."""
+    n = (filename or "").lower()
+    if n.endswith((".pdf", ".docx", ".doc")) or (
+        raw[:5] == b"%PDF-" or (raw[:2] == b"PK" and n.endswith((".docx", ".doc")))
+    ):
+        from app.services.document_extract import extract_document_text
+
+        doc = extract_document_text(raw, filename=filename)
+        if doc.get("status") != "OK" or not doc.get("text"):
+            return "", doc.get("reason") or "document text not extractable"
+        return doc["text"], None
+    return raw.decode("utf-8", errors="replace"), None
 
 
 def load_side_timeline_from_files(
@@ -565,9 +667,20 @@ def load_side_timeline_from_files(
         st = getattr(ef, "source_type", None)
         try:
             raw = storage.get_bytes(ef.storage_key)
-            text = raw.decode("utf-8", errors="replace")
+            text, doc_err = _text_from_side_file_bytes(raw, ef.original_filename or name)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not read side file %s: %s", name, exc)
+            continue
+
+        if doc_err and name.endswith((".pdf", ".docx", ".doc")):
+            summary["files_tried"].append(
+                {
+                    "file": ef.original_filename,
+                    "kind": "DOCUMENT",
+                    "n": 0,
+                    "note": doc_err,
+                }
+            )
             continue
 
         if _is_soe_file(name, st, text):
@@ -604,8 +717,14 @@ def load_side_timeline_from_files(
                     }
                 )
                 continue
-            parsed = parse_relay_event_report(text, source_name=ef.original_filename or name)
-            if not parsed and (ef.original_filename or "").lower().endswith(".txt"):
+            parsed = parse_relay_event_report(
+                text,
+                source_name=ef.original_filename or name,
+                duration_s=duration_s,
+            )
+            if not parsed and (ef.original_filename or "").lower().endswith(
+                (".txt", ".pdf", ".docx", ".doc")
+            ):
                 # Content may be settings mis-tagged — skip silently
                 continue
             events.extend(parsed)

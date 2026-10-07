@@ -118,3 +118,26 @@ class TimestampEngine:
             return []
         dt = 1_000_000.0 / sample_rate_hz
         return [int(round(i * dt)) for i in range(num_samples)]
+
+    def infer_sample_rate_hz(
+        self, normalized_us: Sequence[int]
+    ) -> Optional[float]:
+        """Estimate Hz from normalized DAT timestamps when CFG rate is missing/0.
+
+        Uses the median positive inter-sample Δt (µs). Vendor-neutral: any
+        COMTRADE pack that ships usable DAT timestamps can recover a rate.
+        """
+        if len(normalized_us) < 2:
+            return None
+        dts: list[int] = []
+        for i in range(1, len(normalized_us)):
+            dt = int(normalized_us[i]) - int(normalized_us[i - 1])
+            if dt > 0:
+                dts.append(dt)
+        if not dts:
+            return None
+        dts.sort()
+        med = dts[len(dts) // 2]
+        if med <= 0:
+            return None
+        return 1_000_000.0 / float(med)

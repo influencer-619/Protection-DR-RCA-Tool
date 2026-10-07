@@ -527,6 +527,14 @@ export interface ConsistencyFinding {
   rule_version?: string | null;
 }
 
+export type DfrEventClass =
+  | 'FAULT'
+  | 'ENERGIZATION'
+  | 'MOTOR_START'
+  | 'SWITCHING'
+  | 'DISTURBANCE'
+  | 'UNKNOWN';
+
 export interface FaultClassification {
   id: string;
   event_id: string;
@@ -543,6 +551,9 @@ export interface FaultClassification {
   confidence_level?: ConfidenceLevel | null;
   explanation?: string | null;
   features?: Record<string, unknown> | null;
+  /** IEEE/PSRC DFR event class (live analysis); also mirrored in features.event_class when persisted. */
+  event_class?: DfrEventClass | string | null;
+  event_class_status?: string | null;
   is_primary: boolean;
 }
 

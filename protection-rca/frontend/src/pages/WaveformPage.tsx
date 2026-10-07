@@ -93,8 +93,34 @@ export function WaveformPage({ popout = false }: Props) {
     if (!popout) return;
     const prev = document.title;
     document.title = 'Waveform viewer · Protection RCA';
+    // Browser zoom enlarges content past the viewport — allow document scroll
+    // (default #root { height:100% } + overflow:hidden would trap the view).
+    const root = document.getElementById('root');
+    const html = document.documentElement;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevBodyHeight = document.body.style.height;
+    const prevRootHeight = root?.style.height ?? '';
+    const prevRootMinHeight = root?.style.minHeight ?? '';
+    const prevRootOverflow = root?.style.overflow ?? '';
+    html.style.overflow = 'auto';
+    document.body.style.overflow = 'auto';
+    document.body.style.height = 'auto';
+    if (root) {
+      root.style.height = 'auto';
+      root.style.minHeight = '100%';
+      root.style.overflow = 'auto';
+    }
     return () => {
       document.title = prev;
+      html.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
+      document.body.style.height = prevBodyHeight;
+      if (root) {
+        root.style.height = prevRootHeight;
+        root.style.minHeight = prevRootMinHeight;
+        root.style.overflow = prevRootOverflow;
+      }
     };
   }, [popout]);
 
@@ -178,12 +204,13 @@ export function WaveformPage({ popout = false }: Props) {
         style={{
           display: 'flex',
           flexDirection: 'column',
-          height: '100vh',
-          width: '100vw',
+          minHeight: '100dvh',
+          width: '100%',
           maxWidth: 'none',
           boxSizing: 'border-box',
           background: 'var(--bg-app)',
-          overflow: 'hidden',
+          overflowX: 'auto',
+          overflowY: 'auto',
         }}
       >
         <div
@@ -200,7 +227,7 @@ export function WaveformPage({ popout = false }: Props) {
             <p className="subtitle">
               {channels.length} channels
               {markers.length ? ` · ${markers.length} markers` : ''} · Zoom, pan, time cursor ·
-              Pop-out
+              Pop-out · Scroll page when browser-zoomed
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -229,7 +256,15 @@ export function WaveformPage({ popout = false }: Props) {
             {note}
           </div>
         )}
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div
+          style={{
+            flex: '1 1 auto',
+            minHeight: 'min(70dvh, 720px)',
+            height: 'max(520px, calc(100dvh - 140px))',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
           <WaveformViewer channels={viewChannels} markers={markers} fill />
         </div>
         {markers.length > 0 && (
@@ -242,7 +277,7 @@ export function WaveformPage({ popout = false }: Props) {
               borderRight: 'none',
               borderBottom: 'none',
               flexShrink: 0,
-              maxHeight: 120,
+              maxHeight: 160,
               overflow: 'auto',
             }}
           >

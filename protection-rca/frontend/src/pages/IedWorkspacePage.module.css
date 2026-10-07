@@ -25,7 +25,7 @@
   position: absolute;
   inset: 0 0 auto 0;
   height: 3px;
-  background: linear-gradient(90deg, #8a55c9 0%, #2a7a9a 100%);
+  background: linear-gradient(90deg, var(--accent-bright) 0%, var(--accent-dim) 100%);
 }
 
 .heroIcon {
@@ -36,9 +36,9 @@
   align-items: center;
   justify-content: center;
   border-radius: 14px;
-  color: #8a55c9;
-  background: color-mix(in srgb, #8a55c9 12%, transparent);
-  border: 1px solid color-mix(in srgb, #8a55c9 25%, transparent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 :global([data-theme='dark']) .heroIcon {

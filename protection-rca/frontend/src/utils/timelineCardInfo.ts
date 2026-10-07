@@ -202,19 +202,39 @@ export function buildTimelineCardInfo(e: TimelineEntry): TimelineCardInfo {
     ? parts.join(' · ').replace(/^\w/, (c) => c.toUpperCase())
     : timelineEventTitle(e.event_type);
 
+  const metaUnit =
+    (typeof meta.unit === 'string' && meta.unit.trim()) || unit || undefined;
+  const valueRms = fmtRms(meta.value_rms, metaUnit);
+  const valueInst = fmtRms(meta.value, metaUnit);
+
   // Analog / inception: clearer sentence
   if (typeKey === 'voltage_change' || typeKey === 'current_increase') {
-    const base = fmtRms(meta.baseline_rms, unit);
-    const thr = fmtRms(meta.threshold, unit);
+    const base = fmtRms(meta.baseline_rms, metaUnit);
+    const thr = fmtRms(meta.threshold, metaUnit);
     summary = [
       channel ? `${channel}` : timelineEventTitle(e.event_type),
+      valueRms ? `RMS ${valueRms}` : valueInst ? `value ${valueInst}` : null,
       base ? `baseline ${base}` : null,
       thr ? `threshold ${thr}` : null,
     ]
       .filter(Boolean)
       .join(' · ');
+  } else if (typeKey === 'current_interruption') {
+    const peak = fmtRms(meta.peak_rms, metaUnit);
+    summary = [
+      channel ? `${channel}` : timelineEventTitle(e.event_type),
+      valueRms ? `RMS ${valueRms}` : null,
+      peak ? `peak ${peak}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
   } else if (typeKey === 'fault_inception') {
-    summary = signal || (method ? `Detected by ${method.replace(/_/g, ' ')}` : 'Fault inception');
+    summary = [
+      signal || (method ? `Detected by ${method.replace(/_/g, ' ')}` : 'Fault inception'),
+      valueRms ? `RMS ${valueRms}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
   } else if (typeKey === '52a_change' || typeKey === '52b_change') {
     const to = meta.to;
     const open = to === 0 || to === '0' || to === false;
@@ -238,8 +258,11 @@ export function buildTimelineCardInfo(e: TimelineEntry): TimelineCardInfo {
   push(fact('Channel', channel));
   push(fact('State', state));
   push(fact('Transition', tr && !state?.includes(tr) ? tr : null));
-  push(fact('Baseline', fmtRms(meta.baseline_rms, unit)));
-  push(fact('Threshold', fmtRms(meta.threshold, unit)));
+  push(fact('RMS', valueRms));
+  push(fact('Sample', valueInst && valueInst !== valueRms ? valueInst : null));
+  push(fact('Baseline', fmtRms(meta.baseline_rms, metaUnit)));
+  push(fact('Threshold', fmtRms(meta.threshold, metaUnit)));
+  push(fact('Peak', fmtRms(meta.peak_rms, metaUnit)));
   push(fact('Method', method ? method.replace(/_/g, ' ') : null));
   push(fact('Signal', signal && signal !== title ? signal : null));
   push(fact('File', file));
@@ -264,6 +287,9 @@ export function buildTimelineCardInfo(e: TimelineEntry): TimelineCardInfo {
         'baseline_rms',
         'threshold',
         'value',
+        'value_rms',
+        'peak_rms',
+        'unit',
         'asserted',
       ].includes(k)
     ) {

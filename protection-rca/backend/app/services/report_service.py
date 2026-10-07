@@ -143,17 +143,62 @@ _EVENT_TYPE_LABELS = {
     "protection_trip": "Protection trip",
     "breaker_trip_command": "Breaker trip command",
     "52a_change": "Breaker auxiliary (52a)",
+    "52b_change": "Breaker auxiliary (52b)",
+    "current_increase": "Current increase",
     "current_interruption": "Current interruption",
+    "voltage_change": "Voltage change",
     "fault_inception": "Fault inception",
     "reclose": "Reclose",
     "lockout": "Lockout",
 }
 
 
+def _timeline_value_display(payload: dict[str, Any], source: str = "") -> str:
+    """Human value for report timeline: analog RMS/sample or digital 0→1."""
+    meta = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    if not meta and isinstance(payload, dict):
+        meta = payload
+    unit = str(meta.get("unit") or "").strip()
+
+    def _num(v: Any) -> str | None:
+        try:
+            if v is None:
+                return None
+            x = float(v)
+            if abs(x) >= 1000 or (0 < abs(x) < 0.01):
+                return f"{x:.4g}"
+            return f"{x:.3f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return None
+
+    rms = _num(meta.get("value_rms"))
+    if rms is not None:
+        return f"{rms} {unit}".strip() if unit else f"{rms} RMS"
+    sample = _num(meta.get("value"))
+    if sample is not None and str(source).startswith("analog:"):
+        return f"{sample} {unit}".strip() if unit else sample
+    if "from" in meta and "to" in meta:
+        return f"{meta.get('from')} → {meta.get('to')}"
+    if meta.get("asserted") is True:
+        return "Asserted"
+    if meta.get("asserted") is False:
+        return "De-asserted"
+    # Fallback: baseline/threshold for older persisted analog events
+    base = _num(meta.get("baseline_rms"))
+    thr = _num(meta.get("threshold"))
+    if base is not None and thr is not None:
+        u = f" {unit}" if unit else ""
+        return f"baseline {base}{u}, thr {thr}{u}"
+    return "—"
+
+
 def _humanize_event_type(value: Any) -> str:
     key = str(value or "").strip()
     if not key:
         return "—"
+    low = key.lower().replace("-", "_").replace(" ", "_")
+    if low in _EVENT_TYPE_LABELS:
+        return _EVENT_TYPE_LABELS[low]
     if key in _EVENT_TYPE_LABELS:
         return _EVENT_TYPE_LABELS[key]
     return key.replace("_", " ").strip().title()
@@ -167,24 +212,57 @@ def _humanize_token(value: Any) -> str:
         "fault_classified": "Fault type classified",
         "fault_classified_strong": "Strong fault classification",
         "current_increase_observed": "Fault current increase observed",
-        "protection_operated": "Protection operated",
-        "protection_responded": "Protection responded",
+        "protection_operated": "Protection trip asserted",
+        "protection_responded": "Protection response asserted",
+        "protection_pickup_asserted": "Protection pickup asserted",
+        "protection_trip_asserted": "Protection trip asserted",
+        "protection_pickup_with_trip": "Protection pickup with trip",
         "settings_behavior_consistent": "Settings vs behaviour consistent",
         "ground_involved": "Ground / earth involved",
         "distance_element_operated": "Distance element (21) operated",
         "distance_estimate_available": "Location estimate available",
         "loop_impedance_available": "Loop impedance available",
         "scheme_distance": "Distance scheme context",
-        "differential_operated": "Differential operated",
+        "differential_operated": "Differential element trip asserted",
+        "transformer_diff_operated": "Transformer differential trip asserted",
+        "transformer_diff_picked_up": "Transformer differential pickup asserted",
+        "bus_diff_operated": "Bus differential trip asserted",
+        "bus_diff_picked_up": "Bus differential pickup asserted",
+        "generator_diff_operated": "Generator differential trip asserted",
+        "generator_diff_picked_up": "Generator differential pickup asserted",
+        "line_diff_operated": "Line differential trip asserted",
+        "line_diff_picked_up": "Line differential pickup asserted",
+        "magnetizing_inrush_possible": "Magnetizing inrush / charging (H2)",
+        "motor_start_possible": "Motor start / starting-current signature",
+        "motor_protection_present": "Motor-protection digitals present",
+        "motor_element_operated": "Motor element (46/48/49) trip asserted",
+        "motor_element_picked_up": "Motor element (46/48/49) pickup asserted (no trip)",
+        "overcurrent_element_operated": "Overcurrent (50/51) trip asserted",
+        "overcurrent_element_picked_up": "Overcurrent (50/51) pickup asserted (no trip)",
+        "earth_fault_element_operated": "Earth-fault (50N/51N/67N) trip asserted",
+        "earth_fault_element_picked_up": "Earth-fault (50N/51N/67N) pickup asserted (no trip)",
+        "directional_element_operated": "Directional (67) trip asserted",
+        "directional_element_picked_up": "Directional (67) pickup asserted (no trip)",
+        "scheme_motor": "Motor protection scheme",
         "through_fault_excluded": "Through-fault excluded",
         "cable_asset_confirmed": "Cable asset confirmed",
         "protection_sequence": "Protection sequence",
         "enabled_vs_pickup": "Enabled vs pickup",
         "enabled_vs_trip": "Enabled vs trip",
         "pickup_vs_trip": "Pickup vs trip",
+        "electrical_no_fault": "Electrical evidence indicates non-fault event",
+        "dfr_non_fault_event": "DFR classed as non-fault (energization/motor/switching/disturbance)",
+        "event_class_FAULT": "DFR event class: FAULT",
+        "event_class_ENERGIZATION": "DFR event class: ENERGIZATION (inrush/charging)",
+        "event_class_MOTOR_START": "DFR event class: MOTOR_START",
+        "event_class_SWITCHING": "DFR event class: SWITCHING",
+        "event_class_DISTURBANCE": "DFR event class: DISTURBANCE",
+        "event_class_UNKNOWN": "DFR event class: UNKNOWN",
     }
     if key in labels:
         return labels[key]
+    if key.startswith("event_class_"):
+        return "DFR event class: " + key.replace("event_class_", "").replace("_", " ")
     if key.startswith("scheme_"):
         return "Scheme: " + key.replace("scheme_", "").replace("_", " ")
     return key.replace("_", " ")
@@ -393,9 +471,12 @@ def _rebuild_analysis_from_db(
             row["_op"] = op.operation_type
             by_el[op.element] = row
 
-    # Fill gaps from consistency findings so every checked element appears
+    # Fill gaps from element consistency findings (not sequence / GENERAL)
     for f in findings:
-        el = str(f.element or "UNKNOWN")
+        el = str(f.element or "UNKNOWN").strip()
+        check = str(getattr(f, "check_type", None) or "").lower()
+        if el.upper() == "GENERAL" or check == "protection_sequence":
+            continue
         if el in by_el:
             if not by_el[el].get("consistency"):
                 by_el[el]["consistency"] = f.status
@@ -417,16 +498,32 @@ def _rebuild_analysis_from_db(
         }
     protection = []
     for r in by_el.values():
+        if str(r.get("element") or "").upper() == "GENERAL":
+            continue
         clean = {k: v for k, v in r.items() if k != "_op"}
         clean["enabled_display"] = _yes_no(clean.get("enabled"))
         clean["pickup_display"] = _yes_no(clean.get("pickup"))
         clean["trip_display"] = _yes_no(clean.get("trip"))
+        act = str(clean.get("actual_operation") or "").upper()
+        if act == "PICKED_UP":
+            clean["actual_operation"] = "PICKED UP"
+        elif act == "NOT_OPERATED":
+            clean["actual_operation"] = "NOT OPERATED"
+        elif act == "OPERATED":
+            clean["actual_operation"] = "TRIPPED"
         protection.append(clean)
+    from protection.operate_evidence import assessment_has_operate_evidence
+
     operated_elements = [
         str(p.get("element"))
         for p in protection
-        if p.get("trip") is True
-        or str(p.get("actual_operation") or "").upper() in ("OPERATED", "TRIP", "TRUE")
+        if assessment_has_operate_evidence(p)
+        and (
+            p.get("trip") is True
+            or str(p.get("actual_operation") or "").upper()
+            in ("OPERATED", "TRIPPED", "TRIP", "TRUE", "PICKED UP", "PICKED_UP")
+            or p.get("pickup") is True
+        )
     ]
 
     timeline_rows = []
@@ -435,12 +532,19 @@ def _rebuild_analysis_from_db(
         ts = payload.get("timestamp")
         if ts is None and te.t_us is not None:
             ts = te.t_us / 1_000_000.0
+        src = te.source or payload.get("source") or "COMTRADE"
+        # Nested metadata may live under payload.metadata or payload itself
+        value_txt = _timeline_value_display(payload, str(src))
+        meta = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         timeline_rows.append(
             {
                 "event_type": te.event_type,
                 "event_type_label": _humanize_event_type(te.event_type),
                 "timestamp": float(ts) if ts is not None else 0.0,
-                "source": te.source or payload.get("source") or "COMTRADE",
+                "source": src,
+                "value": value_txt,
+                "value_rms": meta.get("value_rms"),
+                "unit": meta.get("unit"),
                 "confidence": te.confidence
                 if isinstance(te.confidence, str)
                 else _conf_label(te.confidence)
@@ -919,6 +1023,7 @@ def _pdf_humanize(value: Any) -> str:
         "NOT VERIFIED": "Not verified",
         "NOT_AVAILABLE": "Not available",
         "NOT AVAILABLE": "Not available",
+        "UNKNOWN": "Unclassified",
     }
     if text in known:
         return known[text]
@@ -928,6 +1033,27 @@ def _pdf_humanize(value: Any) -> str:
     if "_" in text and text.upper() == text:
         return text.replace("_", " ").title()
     return text
+
+
+def _fault_type_display(fault: dict[str, Any]) -> str:
+    """Technical fault-type label — avoid bare UNKNOWN."""
+    ft = str(fault.get("fault_type") or "").strip().upper()
+    ec = fault.get("event_class")
+    if not ec:
+        evc = (fault.get("evidence") or {}).get("event_classification")
+        if isinstance(evc, dict):
+            ec = evc.get("event_class")
+        if not ec and isinstance(fault.get("features"), dict):
+            ec = fault["features"].get("event_class")
+    ec_u = str(ec or "").upper()
+    if ec_u in ("ENERGIZATION", "MOTOR_START", "SWITCHING", "DISTURBANCE"):
+        if ft in ("", "UNKNOWN", "INCONCLUSIVE"):
+            return "N/A — non-fault event"
+    if ft in ("", "UNKNOWN", "INCONCLUSIVE"):
+        if ec_u == "FAULT":
+            return "Unclassified (type indeterminate)"
+        return "Unclassified"
+    return str(fault.get("fault_type") or ft)
 
 
 def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
@@ -1039,10 +1165,11 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
         "PdfKpiVal",
         parent=cell,
         fontName="Helvetica-Bold",
-        fontSize=8.5,
+        fontSize=8,
         textColor=ink,
         alignment=TA_LEFT,
-        leading=11,
+        leading=10,
+        wordWrap="CJK",  # allow wrap inside narrow KPI cards
     )
     status_cell = ParagraphStyle(
         "PdfStatusCell",
@@ -1281,14 +1408,21 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
         )
     )
 
+    _ec = fault.get("event_class")
+    if not _ec:
+        _evc = (fault.get("evidence") or {}).get("event_classification")
+        if isinstance(_evc, dict):
+            _ec = _evc.get("event_class")
+        if not _ec and isinstance(fault.get("features"), dict):
+            _ec = fault["features"].get("event_class")
     kpi_items = [
-        ("Fault type", _pdf_humanize(fault.get("fault_type") or "UNKNOWN")),
+        ("Event class", _pdf_humanize(_ec or "UNKNOWN")),
+        ("Fault type", _fault_type_display(fault if isinstance(fault, dict) else {})),
         ("Decision", _pdf_humanize(decision.get("state") or ev.get("decision_state"))),
         (
             "Primary RCA",
             _pdf_humanize(primary.get("title") or primary.get("hypothesis_id") or "INCONCLUSIVE"),
         ),
-        ("Data quality", _pdf_humanize(ev.get("data_quality") or dq.get("event_data_quality"))),
     ]
     kpi_gap = 5.0
     kpi_col = (cover_inner - (kpi_gap * 3)) / 4.0
@@ -1395,9 +1529,17 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
     ]
     if primary.get("statement"):
         summary_lines.append(str(primary["statement"]))
+    _ec_sum = fault.get("event_class")
+    if not _ec_sum:
+        _evc_sum = (fault.get("evidence") or {}).get("event_classification")
+        if isinstance(_evc_sum, dict):
+            _ec_sum = _evc_sum.get("event_class")
+        if not _ec_sum and isinstance(fault.get("features"), dict):
+            _ec_sum = fault["features"].get("event_class")
     meta_bits = [
-        f"Fault: <b>{_pdf_esc(_pdf_dash(fault.get('fault_type'), 'UNKNOWN'))}</b> "
-        f"({_pdf_esc(_pdf_dash(fault.get('status')))}, {_pdf_esc(_pdf_dash(fault.get('confidence'), 'INCONCLUSIVE'))})"
+        f"Event class: <b>{_pdf_esc(_pdf_dash(_ec_sum, 'UNKNOWN'))}</b>",
+        f"Fault: <b>{_pdf_esc(_fault_type_display(fault if isinstance(fault, dict) else {}))}</b> "
+        f"({_pdf_esc(_pdf_dash(fault.get('status')))}, {_pdf_esc(_pdf_dash(fault.get('confidence'), 'INCONCLUSIVE'))})",
     ]
     ops = analysis.get("operated_elements") or []
     if ops:
@@ -1517,15 +1659,22 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
             ts_s = f"{float(ts):.4f}" if ts is not None else "—"
         except (TypeError, ValueError):
             ts_s = _pdf_dash(ts)
-        step = e.get("event_type_label") or e.get("event_type") or "—"
-        if e.get("label"):
-            step = f"{step} ({e['label']})"
-        tl_rows.append([step, ts_s, e.get("source"), e.get("confidence")])
+        step = e.get("event_type_label") or _humanize_event_type(e.get("event_type")) or "—"
+        src = str(e.get("source") or "—")
+        # Prefer channel name from analog:/digital: source in the step when useful
+        if src.startswith("analog:") or src.startswith("digital:"):
+            ch = src.split(":", 1)[1]
+            if ch and ch not in str(step):
+                step = f"{step} ({ch})"
+        val = e.get("value")
+        if not val or val == "—":
+            val = _timeline_value_display(e, src)
+        tl_rows.append([step, ts_s, val, src, e.get("confidence")])
     story.append(
         data_table(
-            ["Step", "Time (s)", "Source", "Confidence"],
+            ["Step", "Time (s)", "Value", "Source", "Confidence"],
             tl_rows,
-            [0.40, 0.16, 0.24, 0.20],
+            [0.30, 0.12, 0.18, 0.24, 0.16],
         )
     )
 
@@ -1556,10 +1705,37 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
 
     # ——— 7. Fault ———
     section(story, "7. Fault Classification & Location")
+    _ec_sec = fault.get("event_class")
+    _evc_sec = (fault.get("evidence") or {}).get("event_classification")
+    if not isinstance(_evc_sec, dict):
+        _evc_sec = {}
+    if not _ec_sec:
+        _ec_sec = _evc_sec.get("event_class")
+        if not _ec_sec and isinstance(fault.get("features"), dict):
+            _ec_sec = fault["features"].get("event_class")
+    _dur_ev = _evc_sec.get("evidence") if isinstance(_evc_sec.get("evidence"), dict) else {}
+    if not _dur_ev and isinstance(fault.get("features"), dict):
+        _feat_ec = fault["features"].get("event_classification")
+        if isinstance(_feat_ec, dict) and isinstance(_feat_ec.get("evidence"), dict):
+            _dur_ev = _feat_ec["evidence"]
+    _dur_ms = _dur_ev.get("duration_ms")
+    _dur_band = _dur_ev.get("duration_band")
+    _dur_txt = "—"
+    if _dur_ms is not None:
+        _dur_txt = f"{_dur_ms} ms"
+        if _dur_band:
+            _dur_txt += f" ({_dur_band})"
+        if _dur_ev.get("cleared") is True:
+            _dur_txt += "; cleared"
+        elif _dur_ev.get("cleared") is False:
+            _dur_txt += "; not cleared in DR"
     story.append(
         kv_table(
             [
-                ("Fault type", fault.get("fault_type") or "UNKNOWN"),
+                ("DFR event class", _ec_sec or "UNKNOWN"),
+                ("Event class status", fault.get("event_class_status") or "—"),
+                ("Event duration", _dur_txt),
+                ("Fault type", _fault_type_display(fault if isinstance(fault, dict) else {})),
                 ("Classification status", fault.get("status")),
                 ("Confidence", fault.get("confidence") or "INCONCLUSIVE"),
                 (
@@ -1576,9 +1752,18 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
 
     # ——— 8. Protection ———
     section(story, "8. Protection Performance")
+    story.append(
+        P(
+            "Actual: TRIPPED = trip digital asserted; PICKED UP = start/pickup only "
+            "(not a trip). UNVERIFIABLE = no verified settings to judge expected operate.",
+            meta,
+        )
+    )
     prot_rows = []
     for a in analysis.get("protection_assessment") or []:
         if not isinstance(a, dict):
+            continue
+        if str(a.get("element") or "").upper() == "GENERAL":
             continue
         prot_rows.append(
             [

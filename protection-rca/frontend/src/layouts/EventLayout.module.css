@@ -4,8 +4,6 @@
   min-height: 100%;
 }
 
-/* ---------- Header band ---------- */
-
 .headBand {
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
@@ -16,7 +14,7 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  padding: 14px var(--content-pad-x) 10px;
+  padding: 12px var(--content-pad-x) 10px;
   flex-wrap: wrap;
 }
 
@@ -28,15 +26,14 @@
 }
 
 .headIcon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
   display: grid;
   place-items: center;
   flex-shrink: 0;
   color: #fff;
-  background: linear-gradient(135deg, #2a7a9a, #1f5a78);
-  box-shadow: 0 4px 10px rgba(31, 90, 120, 0.25);
+  background: var(--accent-dim);
 }
 
 .headText {
@@ -58,8 +55,8 @@
 
 .title {
   margin: 2px 0 6px;
-  font-size: 1.3rem;
-  font-weight: 700;
+  font-size: 1.2rem;
+  font-weight: 600;
   color: var(--text-primary);
   display: flex;
   flex-wrap: wrap;
@@ -69,10 +66,9 @@
 }
 
 .feeder {
-  color: var(--accent);
+  color: var(--accent-dim);
   font-weight: 600;
-  font-size: 1.05rem;
-  font-family: var(--font-sans);
+  font-size: 1rem;
 }
 
 .badges {
@@ -99,7 +95,7 @@
 .fault {
   padding: 1px 8px;
   background: var(--sev-critical-bg);
-  border: 1px solid color-mix(in srgb, var(--sev-critical) 45%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sev-critical) 40%, transparent);
   border-radius: 999px;
   font-size: 0.7rem;
   font-weight: 700;
@@ -126,16 +122,12 @@
   color: var(--sev-critical);
 }
 
-/* ---------- Guide (next step + running pipeline) ---------- */
-
 .guide {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px var(--content-pad-x) 0;
+  padding: 10px var(--content-pad-x) 0;
 }
-
-/* ---------- Section navigation ---------- */
 
 .nav {
   position: sticky;
@@ -143,9 +135,9 @@
   z-index: 5;
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin: 12px var(--content-pad-x) 0;
-  padding: 6px;
+  gap: 12px;
+  margin: 10px var(--content-pad-x) 0;
+  padding: 5px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -156,10 +148,10 @@
 .groups {
   display: inline-flex;
   gap: 2px;
-  padding: 3px;
+  padding: 2px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 6px;
   flex-shrink: 0;
 }
 
@@ -167,16 +159,16 @@
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  padding: 6px 12px;
-  border-radius: 6px;
+  padding: 5px 11px;
+  border-radius: 4px;
   cursor: pointer;
   transition:
-    background 0.15s,
-    color 0.15s;
+    background 0.12s,
+    color 0.12s;
 }
 
 .groupBtn:hover {
@@ -186,7 +178,6 @@
 .groupActive {
   background: var(--accent-dim);
   color: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
 }
 
 .groupActive:hover {
@@ -201,17 +192,17 @@
 
 .tab {
   position: relative;
-  padding: 8px 12px;
+  padding: 7px 11px;
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-secondary);
   text-decoration: none;
-  border-radius: 6px;
+  border-radius: 5px;
   white-space: nowrap;
   flex: 0 0 auto;
   transition:
-    background 0.15s,
-    color 0.15s;
+    background 0.12s,
+    color 0.12s;
 }
 
 .tab:hover {
@@ -221,16 +212,16 @@
 }
 
 .active {
-  color: var(--accent);
+  color: var(--accent-dim);
   background: var(--accent-soft);
 }
 
 .active::after {
   content: '';
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: -7px;
+  left: 11px;
+  right: 11px;
+  bottom: -6px;
   height: 2px;
   border-radius: 2px;
   background: var(--accent);
@@ -241,11 +232,10 @@
 }
 
 .body {
-  padding: 16px var(--content-pad-x) 28px;
+  padding: 14px var(--content-pad-x) 28px;
   flex: 1;
 }
 
-/* Nested .page inside event body — avoid double horizontal padding */
 .body :global(.page) {
   padding-left: 0;
   padding-right: 0;

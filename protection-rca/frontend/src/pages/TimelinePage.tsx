@@ -32,14 +32,35 @@ function fmtAbsolute(raw?: string | null): string {
 
 function assertedValue(e: TimelineEntry): string {
   const info = buildTimelineCardInfo(e);
+  // Analog events: show measured RMS / sample, not boolean True
+  const rms = info.facts.find((f) => f.label === 'RMS');
+  if (rms) return rms.value;
+  const sample = info.facts.find((f) => f.label === 'Sample');
+  if (sample) return sample.value;
   if (info.transition) return info.transition;
   const state = info.facts.find((f) => f.label === 'State');
   if (state) return state.value;
   const d = e.details as Record<string, unknown> | null | undefined;
-  if (d && typeof d.value !== 'undefined') return String(d.value);
+  const meta = (d?.metadata as Record<string, unknown> | undefined) || d || {};
+  if (typeof meta.value_rms === 'number' && Number.isFinite(meta.value_rms)) {
+    const u = typeof meta.unit === 'string' ? meta.unit : '';
+    return u ? `${meta.value_rms.toFixed(3)} ${u}` : String(meta.value_rms);
+  }
+  if (d && typeof d.value === 'number' && Number.isFinite(d.value)) {
+    return String(d.value);
+  }
+  if (d && typeof d.value !== 'undefined' && typeof d.value !== 'boolean') {
+    return String(d.value);
+  }
   if (d && typeof d.asserted !== 'undefined') return String(d.asserted);
   const t = (e.event_type || '').toUpperCase();
   if (t.includes('DROPOUT') || t.includes('RESET') || t.includes('DPO')) return 'False';
+  // Digitals / assert events without a transition still show True/False
+  if ((e.source || '').startsWith('analog:')) {
+    const base = info.facts.find((f) => f.label === 'Baseline');
+    const thr = info.facts.find((f) => f.label === 'Threshold');
+    if (base && thr) return `${base.value} → thr ${thr.value}`;
+  }
   return 'True';
 }
 

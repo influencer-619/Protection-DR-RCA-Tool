@@ -5,13 +5,13 @@
 }
 
 .sidebar {
-  --sb-bg: linear-gradient(180deg, #17384b 0%, #122c3b 55%, #0f2431 100%);
-  --sb-text: #c9d9e4;
+  --sb-bg: #1a2b3a;
+  --sb-text: #c5d4df;
   --sb-text-strong: #ffffff;
-  --sb-muted: #7f9bad;
-  --sb-hover: rgba(255, 255, 255, 0.07);
-  --sb-active: rgba(74, 170, 205, 0.2);
-  --sb-accent: #4fb3d9;
+  --sb-muted: #8499a8;
+  --sb-hover: rgba(255, 255, 255, 0.06);
+  --sb-active: rgba(58, 150, 184, 0.22);
+  --sb-accent: #4fb3d4;
   --sb-line: rgba(255, 255, 255, 0.08);
 
   width: var(--sidebar-width);
@@ -27,37 +27,36 @@
 }
 
 :global([data-theme='dark']) .sidebar {
-  --sb-bg: linear-gradient(180deg, #13202b 0%, #0f1a23 100%);
+  --sb-bg: #0e151c;
 }
 
 .collapsed .sidebar {
-  width: 60px;
+  width: 58px;
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 14px 16px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--sb-line);
-  min-height: 64px;
+  min-height: 56px;
 }
 
 .brandMark {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #4fb3d9 0%, #2a7a9a 100%);
-  box-shadow: 0 2px 8px rgba(79, 179, 217, 0.35);
+  border-radius: 6px;
+  background: #2a7a96;
 }
 
 .brandMark svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   fill: #fff;
 }
 
@@ -67,57 +66,56 @@
 }
 
 .brandName {
-  font-weight: 700;
-  font-size: 0.92rem;
-  letter-spacing: 0.01em;
+  font-weight: 600;
+  font-size: 0.88rem;
+  letter-spacing: -0.01em;
   color: var(--sb-text-strong);
 }
 
 .brandSub {
-  font-size: 0.6rem;
+  font-size: 0.62rem;
   color: var(--sb-muted);
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
   margin-top: 1px;
 }
 
 .nav {
   flex: 1;
-  padding: 10px 10px;
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .groupLabel {
   padding: 0 10px 4px;
-  font-size: 0.6rem;
+  font-size: 0.62rem;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   color: var(--sb-muted);
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 
-/* Override global `a` styles so nav labels never inherit accent/brand colors */
 .sidebar a.link,
 .sidebar a.link:link,
 .sidebar a.link:visited {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 10px;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: 6px;
   color: var(--sb-text);
   text-decoration: none;
-  font-size: 0.83rem;
+  font-size: 0.82rem;
   font-weight: 500;
   white-space: nowrap;
   transition:
@@ -149,17 +147,17 @@
 .sidebar a.link.active::before {
   content: '';
   position: absolute;
-  left: -10px;
-  top: 7px;
-  bottom: 7px;
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
   width: 3px;
-  border-radius: 0 3px 3px 0;
+  border-radius: 0 2px 2px 0;
   background: var(--sb-accent);
 }
 
 .icon {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   flex-shrink: 0;
   opacity: 0.85;
 }
@@ -175,7 +173,7 @@
 }
 
 .footer {
-  padding: 8px 10px 10px;
+  padding: 8px;
   border-top: 1px solid var(--sb-line);
   display: flex;
   flex-direction: column;
@@ -190,7 +188,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--sb-line);
-  border-radius: 7px;
+  border-radius: 6px;
   background: transparent;
   color: var(--sb-muted);
   cursor: pointer;
@@ -254,10 +252,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 20px;
-  background: var(--bg-panel);
+  padding: 0 18px;
+  background: var(--topbar-bg);
   border-bottom: 1px solid var(--border);
-  box-shadow: 0 1px 4px rgba(22, 40, 56, 0.06);
   color: var(--chrome-text);
   position: relative;
   z-index: 2;
@@ -289,8 +286,8 @@
 }
 
 .crumbPage {
-  font-size: 0.95rem;
-  font-weight: 700;
+  font-size: 0.92rem;
+  font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -307,15 +304,16 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  padding: 3px 9px;
   border-radius: 999px;
   font-size: 0.66rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent-dim);
   background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   margin-right: 4px;
+  text-transform: uppercase;
 }
 
 .envDot {
@@ -323,16 +321,15 @@
   height: 6px;
   border-radius: 50%;
   background: var(--status-ok);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-ok) 25%, transparent);
 }
 
 .iconBtn {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
   color: var(--text-secondary);
@@ -347,12 +344,12 @@
 .iconBtn:hover {
   background: var(--accent-soft);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-dim);
 }
 
 .iconBtn svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -364,22 +361,22 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 3px 10px 3px 3px;
+  padding: 2px 10px 2px 2px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-elevated);
 }
 
 .avatarSm {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #3a96b8, #1f6380);
+  background: var(--accent-dim);
   color: #fff;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 700;
 }
 
@@ -397,10 +394,10 @@
 
 .userRole {
   font-size: 0.6rem;
-  color: var(--accent);
-  font-weight: 700;
+  color: var(--accent-dim);
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
 }
 
 .content {
@@ -416,7 +413,6 @@
   }
 
   .userChip {
-    padding-right: 3px;
+    padding-right: 2px;
   }
 }
-

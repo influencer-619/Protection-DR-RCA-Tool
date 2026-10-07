@@ -15,6 +15,9 @@ import { SharePackButton } from '@/components/SharePackButton';
 import { api } from '@/services/api';
 import { touchRecentEvent, removeRecentEvent } from '@/utils/recentEvents';
 import { wasDrVisited } from '@/utils/drSession';
+import { formatApiDateLocal, formatDrDate } from '@/utils/dateTime';
+import { resolveFaultType } from '@/utils/schemeContext';
+import { humanizeFaultType } from '@/utils/evidenceLabels';
 import styles from './EventLayout.module.css';
 
 type TabDef = { to: string; label: string };
@@ -322,10 +325,19 @@ function EventLayoutInner() {
     plantLabels.relay_tag ??
     'NOT VERIFIED';
 
-  const faultType =
-    event?.fault_type ??
-    (typeof plant.fault_type === 'string' ? plant.fault_type : undefined) ??
-    null;
+  const faultTypeRaw = resolveFaultType({
+    eventFaultType: event?.fault_type,
+    eventExtra: plant,
+  });
+  const _ra = (plant.report_analysis || {}) as Record<string, unknown>;
+  const _fc = (_ra.fault_classification || {}) as Record<string, unknown>;
+  const _evc = (_fc.event_class ||
+    (_fc.evidence as { event_classification?: { event_class?: string } } | undefined)
+      ?.event_classification?.event_class ||
+    (_fc.features as { event_class?: string } | undefined)?.event_class) as
+    | string
+    | undefined;
+  const faultType = humanizeFaultType(faultTypeRaw, _evc);
 
   const normalizedJob = useMemo(() => {
     if (!job) return null;
@@ -390,20 +402,17 @@ function EventLayoutInner() {
                 {loading && <span className={styles.loading}>Loading…</span>}
                 <span
                   className={`mono ${styles.when}`}
-                  title="Relay disturbance time from COMTRADE (DR)"
+                  title="Relay disturbance time from COMTRADE (wall clock as on the DR file)"
                 >
-                  DR{' '}
-                  {event?.event_datetime
-                    ? new Date(event.event_datetime).toLocaleString()
-                    : '—'}
+                  DR {formatDrDate(event?.event_datetime)}
                 </span>
                 {event?.created_at && (
                   <span
                     className={`mono ${styles.when}`}
-                    title="Created in this application"
+                    title="Created in this application — shown in your local timezone"
                     style={{ opacity: 0.85 }}
                   >
-                    Created {new Date(event.created_at).toLocaleString()}
+                    Created {formatApiDateLocal(event.created_at)}
                   </span>
                 )}
                 {event?.status && (

@@ -118,6 +118,30 @@ def test_ser_csv_date_time_columns():
     assert any(e.event_type == "protection_trip" for e in evs)
 
 
+def test_soe_classify_intertrip_before_start():
+    from app.services.side_files import _classify_signal
+
+    assert _classify_signal("TRANSFER TRIP START") == "intertrip"
+    assert _classify_signal("INTERTRIP START") == "intertrip"
+    assert _classify_signal("INTERTRIP") == "intertrip"
+    assert _classify_signal("Distance Zone 1 pickup") == "protection_pickup"
+    assert _classify_signal("RECOMMENDATION") != "communication_signal"
+
+
+def test_soe_point_tag_maps_distance_to_21():
+    csv_text = (
+        "Timestamp,Event_ID,IED,Point_Tag,Description,State\n"
+        "2026-08-19 17:05:11.301,E1,IED-1,21_Z1_PICKUP,Distance Zone 1 pickup,ON\n"
+        "2026-08-19 17:05:11.326,E1,IED-1,21_Z1_TRIP,Distance Zone 1 operate (instantaneous),ON\n"
+    )
+    evs = parse_soe_csv(csv_text, source_name="soe.csv")
+    pick = next(e for e in evs if e.event_type == "protection_pickup")
+    trip = next(e for e in evs if e.event_type == "protection_trip")
+    assert pick.metadata.get("element") == "21"
+    assert trip.metadata.get("element") == "21"
+    assert trip.metadata.get("point_tag") == "21_Z1_TRIP"
+
+
 def test_event_report_cycles_unit():
     text = "21 Z1 Pickup at 20.5 cycles\nTRIP at 0.435 s\n"
     evs = parse_relay_event_report(text, source_name="sel_history.txt")

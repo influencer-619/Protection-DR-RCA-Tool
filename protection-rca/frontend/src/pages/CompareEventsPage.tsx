@@ -6,7 +6,9 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { VerdictStrip } from '@/components/VerdictStrip';
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/Skeleton';
-import { isDistanceApplicable } from '@/utils/schemeContext';
+import { resolveDistanceApplicable, resolveFaultType } from '@/utils/schemeContext';
+import { eventClassFromFault, humanizeFaultType } from '@/utils/evidenceLabels';
+import { formatApiDateLocal, formatDrDate } from '@/utils/dateTime';
 import styles from './CompareEventsPage.module.css';
 
 type Side = {
@@ -53,7 +55,19 @@ function SideCard({ side, label }: { side: Side; label: string }) {
     );
   }
   const ev = side.event;
-  const distOk = isDistanceApplicable({ fault: side.fault, protection: side.protection });
+  const distOk = resolveDistanceApplicable({
+    fault: side.fault,
+    protection: side.protection,
+    eventExtra: (ev.extra || {}) as Record<string, unknown>,
+  });
+  const faultType = humanizeFaultType(
+    resolveFaultType({
+      fault: side.fault,
+      eventFaultType: ev.fault_type,
+      eventExtra: (ev.extra || {}) as Record<string, unknown>,
+    }),
+    eventClassFromFault(side.fault),
+  );
   return (
     <div className={styles.card}>
       <div className={styles.cardHead}>
@@ -71,7 +85,7 @@ function SideCard({ side, label }: { side: Side; label: string }) {
       </div>
       <VerdictStrip
         compact
-        faultType={side.fault?.fault_type ?? ev.fault_type}
+        faultType={faultType}
         consistency={side.cons}
         rcaTitle={side.rca?.title}
         rcaCode={side.rca?.hypothesis_code}
@@ -95,13 +109,13 @@ function SideCard({ side, label }: { side: Side; label: string }) {
           <tr>
             <th>DR time</th>
             <td className="mono" title="Relay disturbance / COMTRADE trigger time">
-              {ev.event_datetime ? new Date(ev.event_datetime).toLocaleString() : '—'}
+              {formatDrDate(ev.event_datetime)}
             </td>
           </tr>
           <tr>
             <th>Created</th>
             <td className="mono" title="Created in this application">
-              {ev.created_at ? new Date(ev.created_at).toLocaleString() : '—'}
+              {formatApiDateLocal(ev.created_at)}
             </td>
           </tr>
           <tr>

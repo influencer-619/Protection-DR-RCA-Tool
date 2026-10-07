@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Bay, Feeder, Relay, Substation, VoltageLevel
+
+
+def kv_from_label(name: Optional[str]) -> Optional[float]:
+    """Parse ``132kV`` / ``132 kV`` from a voltage-level or bay name."""
+    if not name:
+        return None
+    m = re.search(r"(?i)(?:^|[^0-9])([0-9]{1,3}(?:\.[0-9]+)?)\s*k\s*v(?:[^a-z]|$)", str(name))
+    if not m:
+        return None
+    try:
+        kv = float(m.group(1))
+    except ValueError:
+        return None
+    if 0.1 <= kv <= 1200:
+        return kv
+    return None
 
 
 async def resolve_ied_plant(
@@ -35,16 +52,20 @@ async def resolve_ied_plant(
     if sub is None:
         raise HTTPException(status_code=400, detail="Substation missing for IED")
 
+    nominal_kv = (
+        vl.nominal_voltage_kv
+        if vl and vl.nominal_voltage_kv is not None
+        else bay.voltage_kv
+    )
+    if nominal_kv is None:
+        nominal_kv = kv_from_label(vl.name if vl else None) or kv_from_label(bay.name)
+
     return {
         "relay_id": relay.id,
         "bay_id": bay.id,
         "substation_id": sub.id,
         "feeder": feeder.name,
-        "nominal_voltage_kv": (
-            vl.nominal_voltage_kv
-            if vl and vl.nominal_voltage_kv is not None
-            else bay.voltage_kv
-        ),
+        "nominal_voltage_kv": nominal_kv,
         "labels": {
             "substation_name": sub.name,
             "bay_name": bay.name,

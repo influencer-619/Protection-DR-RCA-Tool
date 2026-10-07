@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
@@ -17,6 +18,12 @@ from app.models import ComtradeChannel, ComtradeFile, Event, EventFile, EventTim
 from app.services.storage import StorageService
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_channel_token(name: Any) -> str:
+    """Filesystem-safe token for waveform sample keys (keeps DB channel name intact)."""
+    token = re.sub(r"[^A-Za-z0-9._+-]+", "_", str(name or "")).strip("._")
+    return (token[:80] or "ch")
 
 _MARKER_COLORS = {
     "record_start": "#5b9fd4",
@@ -337,7 +344,10 @@ async def ingest_and_persist_comtrade(
         samples = _channel_samples(str(name), analog=True)
         samples_trim = _trim(list(samples))
         sample_key = _put_json(
-            storage, samples_trim, prefix=f"waveforms/{event.id}", suffix=f".{name}.json"
+            storage,
+            samples_trim,
+            prefix=f"waveforms/{event.id}",
+            suffix=f".{_safe_channel_token(name)}.json",
         )
         ps = getattr(ch, "ps", None) if not isinstance(ch, dict) else ch.get("ps")
         primary = getattr(ch, "primary", None) if not isinstance(ch, dict) else ch.get("primary")
@@ -373,7 +383,10 @@ async def ingest_and_persist_comtrade(
         samples = _channel_samples(str(name), analog=False)
         samples_trim = _trim(list(samples))
         sample_key = _put_json(
-            storage, samples_trim, prefix=f"waveforms/{event.id}", suffix=f".{name}.json"
+            storage,
+            samples_trim,
+            prefix=f"waveforms/{event.id}",
+            suffix=f".{_safe_channel_token(name)}.json",
         )
         db.add(
             ComtradeChannel(
@@ -410,12 +423,58 @@ async def ingest_and_persist_comtrade(
     }
 
 
+def _select_waveform_channels(
+    channels: list[Any],
+    *,
+    max_channels: int,
+) -> tuple[list[Any], Optional[str]]:
+    """Keep protection digitals when capping — do not drop trailing status bits.
+
+    Ordering in the DB is ANALOG then DIGITAL by index. A naive ``LIMIT 32`` on a
+    15-analog / 21-digital 7UT record cuts off ``87G picked up`` and later bits.
+    """
+    if max_channels <= 0 or len(channels) <= max_channels:
+        return list(channels), None
+
+    digitals = [
+        c
+        for c in channels
+        if str(getattr(c, "channel_type", "") or "").upper() == "DIGITAL"
+    ]
+    analogs = [
+        c
+        for c in channels
+        if str(getattr(c, "channel_type", "") or "").upper() != "DIGITAL"
+    ]
+    # Reserve room for every digital when possible; otherwise keep first N digitals.
+    dig_keep = min(len(digitals), max_channels)
+    ana_keep = min(len(analogs), max(0, max_channels - dig_keep))
+    # If digitals alone exceed the cap, still prefer digitals over analogs.
+    if dig_keep + ana_keep < max_channels and ana_keep < len(analogs):
+        ana_keep = min(len(analogs), max_channels - dig_keep)
+    selected = analogs[:ana_keep] + digitals[:dig_keep]
+    selected.sort(
+        key=lambda c: (
+            0 if str(getattr(c, "channel_type", "") or "").upper() != "DIGITAL" else 1,
+            int(getattr(c, "channel_index", 0) or 0),
+        )
+    )
+    dropped = len(channels) - len(selected)
+    note = (
+        f"Showing {len(selected)} of {len(channels)} channels "
+        f"({ana_keep} analog, {dig_keep} digital; {dropped} omitted)."
+        if dropped
+        else None
+    )
+    return selected, note
+
+
 async def load_waveform_payload(
     db: AsyncSession,
     event_id: str,
     *,
     storage: Optional[StorageService] = None,
-    max_channels: int = 32,
+    max_channels: int = 128,
     comtrade_file_id: Optional[str] = None,
 ) -> dict[str, Any]:
     storage = storage or StorageService()
@@ -464,14 +523,16 @@ async def load_waveform_payload(
     if ct is None:
         return {"event_id": event_id, "channels": [], "note": "COMTRADE metadata missing"}
 
-    channels = (
+    all_channels = (
         await db.execute(
             select(ComtradeChannel)
             .where(ComtradeChannel.comtrade_file_id == ct.id)
             .order_by(ComtradeChannel.channel_type, ComtradeChannel.channel_index)
-            .limit(max_channels)
         )
     ).scalars().all()
+    channels, channel_cap_note = _select_waveform_channels(
+        list(all_channels), max_channels=max_channels
+    )
 
     out = []
     markers = []
@@ -604,11 +665,17 @@ async def load_waveform_payload(
     if len(markers) > 40:
         markers = markers[:40]
 
+    note: Optional[str] = None
+    if not any((c.get("samples") or []) for c in out):
+        note = "Channels present but samples not cached"
+    elif channel_cap_note:
+        note = channel_cap_note
+
     return {
         "event_id": event_id,
         "channels": out,
         "markers": markers,
-        "note": None if any((c.get("samples") or []) for c in out) else "Channels present but samples not cached",
+        "note": note,
         "comtrade_file_id": ct.id,
         "validation_status": ct.validation_status,
         "data_quality": ct.data_quality,

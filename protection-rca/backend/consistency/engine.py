@@ -85,6 +85,7 @@ class ConsistencyEngine:
             ("directional", ["67", "67N", "67P"]),
             ("earth_fault", ["50N", "51N", "67N", "87RGF"]),
             ("overcurrent", ["50", "51", "50P", "51P"]),
+            ("motor", ["46", "48", "49"]),
             ("voltage", ["27", "59"]),
             ("frequency", ["81U", "81O", "81R"]),
             ("differential", ["87T", "87L", "87B", "87G", "87RGF"]),

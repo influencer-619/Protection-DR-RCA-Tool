@@ -346,6 +346,52 @@ async def persist_engineering_analysis(
         extra["relay_tag"] = record.device
         plant["relay_tag"] = record.device
 
+    # Plant tree kV (incl. "132kV" name) when event was created before VL was set
+    if event.relay_id and event.nominal_voltage_kv is None:
+        try:
+            from app.services.plant_service import resolve_ied_plant
+
+            plant_res = await resolve_ied_plant(db, event.relay_id)
+            if plant_res.get("nominal_voltage_kv") is not None:
+                event.nominal_voltage_kv = float(plant_res["nominal_voltage_kv"])
+                extra["nominal_voltage_source"] = "plant:voltage_level"
+            for k, v in (plant_res.get("labels") or {}).items():
+                if v and not plant.get(k):
+                    plant[k] = v
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Description from COMTRADE / filenames when engineer left it blank
+    if not (event.description or "").strip():
+        from pathlib import Path as _Path
+
+        cfg_stem = next(
+            (
+                _Path(ef.original_filename).stem
+                for ef in files
+                if (ef.original_filename or "").lower().endswith((".cfg", ".cff"))
+            ),
+            None,
+        )
+        bits: list[str] = []
+        if record.station:
+            bits.append(str(record.station).strip())
+        if record.device:
+            bits.append(f"IED {record.device}")
+        if cfg_stem:
+            bits.append(cfg_stem)
+        if bits:
+            event.description = " · ".join(bits)[:1000]
+            extra["description_source"] = "comtrade_files"
+
+    # Frequency from COMTRADE CFG when missing
+    if event.nominal_frequency_hz is None and getattr(record, "nominal_frequency", None):
+        try:
+            event.nominal_frequency_hz = float(record.nominal_frequency)
+            extra["frequency_source"] = "comtrade"
+        except (TypeError, ValueError):
+            pass
+
     for ef in files:
         n = (ef.original_filename or "").lower()
         if not n.endswith(".json"):
@@ -380,6 +426,14 @@ async def persist_engineering_analysis(
         json_blobs: list[Any] = []
         texts: list[str] = []
         filenames = [ef.original_filename or "" for ef in files]
+        for label in (
+            plant.get("voltage_level_name"),
+            extra.get("voltage_level_name"),
+            plant.get("bay_name"),
+            plant.get("substation_name"),
+        ):
+            if label:
+                filenames.append(str(label))
         for ef in files:
             name = (ef.original_filename or "").lower()
             try:
@@ -796,12 +850,23 @@ async def persist_engineering_analysis(
         )
 
     # Protection operations — persist every assessment (details carry full row for reports)
+    from protection.operate_evidence import assessment_has_operate_evidence
+
     for a in result.protection_assessment or []:
         element = str(a.get("element") or "UNKNOWN")
-        trip = a.get("trip")
-        pickup = a.get("pickup")
+        trip = bool(a.get("trip"))
+        pickup = bool(a.get("pickup"))
+        # Hard rule: never assert PICKUP/TRIP without COMTRADE digital evidence
+        if (trip or pickup) and not assessment_has_operate_evidence(a):
+            trip = False
+            pickup = False
         if trip:
             op_type = "TRIP"
+        elif pickup and element.upper() == "79":
+            # Autoreclose initiate/close is scheme status — not a fault pickup
+            op_type = "RECLOSE"
+        elif pickup and element.upper() == "86":
+            op_type = "LOCKOUT"
         elif pickup:
             op_type = "PICKUP"
         else:
@@ -886,13 +951,21 @@ async def persist_engineering_analysis(
     expl = "; ".join(fault_limits) if fault_limits else None
     if not expl and dist_applicable:
         expl = dist.get("reason") or None
+    ec_from_feat = feat.get("event_classification")
+    ec_dict = ec_from_feat if isinstance(ec_from_feat, dict) else {}
+    persist_event_class = fault.get("event_class") or ec_dict.get("event_class")
+    persist_event_class_status = fault.get("event_class_status") or ec_dict.get("status")
+    # Ground / phase involvement only meaningful for DFR class FAULT
+    publish_shunt = str(persist_event_class or "") == "FAULT"
+    persist_ground = feat.get("ground") if publish_shunt else None
+    persist_phases = phases if publish_shunt else None
     db.add(
         FaultClassification(
             event_id=event.id,
             fault_type=str(fault.get("fault_type") or "UNKNOWN"),
             status=str(fault.get("status") or "INCONCLUSIVE"),
-            involved_phases=phases or None,
-            ground_involved=feat.get("ground"),
+            involved_phases=persist_phases or None,
+            ground_involved=persist_ground,
             distance_km=dist.get("value_km") if dist_applicable else None,
             location_method=(str(dist.get("method") or "") or None) if dist_applicable else None,
             impedance_ohm=float(z_mag) if z_mag is not None else None,
@@ -903,6 +976,8 @@ async def persist_engineering_analysis(
             confidence_level=conf_level,
             features={
                 **feat,
+                "event_class": persist_event_class,
+                "event_class_status": persist_event_class_status,
                 "distance_applicable": dist_applicable,
                 "location_algorithms": (dist.get("algorithms") or feat.get("location_algorithms") or [])
                 if dist_applicable
@@ -1024,10 +1099,15 @@ async def persist_engineering_analysis(
     extra["fault_type"] = ft
     operated_codes: list[str] = []
     seen: set[str] = set()
+    from protection.operate_evidence import assessment_has_operate_evidence as _has_op_evid
+
     for a in result.protection_assessment or []:
         if not isinstance(a, dict):
             continue
         if not (a.get("trip") or a.get("pickup")):
+            continue
+        # Require COMTRADE digital evidence for every operated code
+        if not _has_op_evid(a):
             continue
         code = str(a.get("element") or a.get("function_code") or "").strip()
         if not code or code.upper() == "UNKNOWN":
@@ -1052,15 +1132,15 @@ async def persist_engineering_analysis(
         fault_type=ft,
         fault_status=str(fault.get("status") or ""),
     )
-    # Disturbance time from COMTRADE trigger / start (relay DR time, not upload time).
-    # Always prefer COMTRADE when present so manual uploads that stamped "now" get corrected.
+    # Disturbance time from COMTRADE trigger / start (relay DR wall clock, not upload time).
+    # Keep naive — CFG times are plant/relay stamps, not UTC (do not attach tzinfo).
     ts = record.trigger_time or record.start_time
     if ts is not None:
         try:
             if hasattr(ts, "tzinfo"):
-                event.event_datetime = ts
+                event.event_datetime = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
             else:
-                event.event_datetime = datetime.fromtimestamp(float(ts), tz=timezone.utc)
+                event.event_datetime = datetime.fromtimestamp(float(ts))
         except Exception:  # noqa: BLE001
             pass
 

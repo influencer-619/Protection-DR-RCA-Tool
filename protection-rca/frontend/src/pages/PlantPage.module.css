@@ -11,7 +11,7 @@
 
 /* Level colours: one hue per hierarchy level, reused by icons, stat cards and the add bar. */
 .lvlSs {
-  --lvl: #2a7a9a;
+  --lvl: #0e9bb8;
 }
 
 .lvlKv {
@@ -31,7 +31,7 @@
 }
 
 :global([data-theme='dark']) .lvlSs {
-  --lvl: #4fb3d9;
+  --lvl: #1bb8d6;
 }
 
 :global([data-theme='dark']) .lvlKv {
@@ -247,6 +247,37 @@
   width: 72px;
 }
 
+.kvField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kvSuffix {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 1.4rem;
+}
+
+.kvUnit {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 3.4rem;
+  cursor: pointer;
+}
+
+.kvUnit:focus {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 /* ---------- Structure panel ---------- */
 
 .workspace {
@@ -352,6 +383,7 @@
   cursor: default;
 }
 
+.editBtn,
 .deleteBtn {
   width: 28px;
   height: 28px;
@@ -366,6 +398,7 @@
   padding: 0;
 }
 
+.editBtn svg,
 .deleteBtn svg {
   width: 15px;
   height: 15px;
@@ -376,10 +409,54 @@
   stroke-linejoin: round;
 }
 
+.editBtn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+}
+
 .deleteBtn:hover:not(:disabled) {
   color: var(--status-error);
   border-color: color-mix(in srgb, var(--status-error) 45%, transparent);
   background: color-mix(in srgb, var(--status-error) 10%, transparent);
+}
+
+.labelBtn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  cursor: text;
+  text-align: left;
+}
+
+.labelBtn:hover {
+  color: var(--accent);
+}
+
+.editRow {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.editInput {
+  min-width: 140px;
+  flex: 1;
+  background: var(--bg-input);
+  border: 1px solid var(--border-focus);
+  color: var(--text-primary);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .muted {
@@ -461,7 +538,7 @@
 
 .rootNode > .row {
   padding: 10px 12px;
-  background: color-mix(in srgb, #2a7a9a 6%, var(--bg-panel));
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel));
   border-bottom: 1px solid var(--border);
   border-radius: 0;
 }
@@ -597,13 +674,16 @@
 }
 
 .row .ghostBtn,
+.row .editBtn,
 .row .deleteBtn {
   opacity: 0.6;
 }
 
 .row:hover .ghostBtn,
+.row:hover .editBtn,
 .row:hover .deleteBtn,
 .row .ghostBtn:focus-visible,
+.row .editBtn:focus-visible,
 .row .deleteBtn:focus-visible {
   opacity: 1;
 }

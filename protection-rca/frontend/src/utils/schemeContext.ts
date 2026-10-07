@@ -1,4 +1,5 @@
 import type { FaultClassification, ProtectionOperation } from '@/types';
+import { isEvidenceBackedAssert } from '@/utils/protectionOperateEvidence';
 
 /** True when distance / Z1·km location is in scope. */
 export function isDistanceApplicable(opts: {
@@ -49,13 +50,13 @@ export function isDistanceApplicable(opts: {
   for (const p of ops) {
     const blob = `${p.element ?? ''} ${p.function_code ?? ''} ${p.operation_type ?? ''}`.toUpperCase();
     const ot = String(p.operation_type || '').toUpperCase();
-    const asserted = Boolean(p.asserted) || ot === 'TRIP' || ot === 'PICKUP' || ot === 'OPERATED';
+    // Operated = evidence-backed assert only (not SOE / settings-only)
+    const asserted = isEvidenceBackedAssert(p);
 
     if (isDistBlob(blob) && !isDiffBlob(blob)) {
       // Assessment rows may mark enabled without asserted trip (backup 21)
-      if (ot === 'ASSESSMENT' || asserted) distEnabled = true;
-      if (asserted && ot !== 'ASSESSMENT') distOperated = true;
-      if (p.asserted) distOperated = true;
+      if (ot === 'ASSESSMENT' || asserted || p.asserted) distEnabled = true;
+      if (asserted) distOperated = true;
       continue;
     }
 
@@ -99,7 +100,7 @@ export function filterDistanceLimitations(
 
 /** Human label for operated protection summary (scheme-agnostic). */
 export function formatOperatedElements(ops: ProtectionOperation[]): string {
-  const asserted = ops.filter((p) => p.asserted);
+  const asserted = ops.filter((p) => isEvidenceBackedAssert(p));
   if (!asserted.length) return 'None asserted / not mapped';
   return asserted
     .map((p) => {
@@ -107,6 +108,149 @@ export function formatOperatedElements(ops: ProtectionOperation[]): string {
       return `${p.element}${code} ${p.operation_type}`.trim();
     })
     .join('; ');
+}
+
+/**
+ * Scheme hint for bay one-line — same asserted elements as analysis "Operated",
+ * including PICKUP/TRIP so the marker can match Protect / Conclude.
+ */
+export function baySchemeHintFromProtection(
+  ops: ProtectionOperation[] | null | undefined,
+): string | null {
+  const asserted = (ops ?? []).filter((p) => isEvidenceBackedAssert(p));
+  if (!asserted.length) return null;
+  return asserted
+    .map((p) => {
+      const el = String(p.element || p.function_code || '').trim();
+      const ot = String(p.operation_type || '').trim().toUpperCase();
+      if (!el) return '';
+      return ot ? `${el} ${ot}` : el;
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** Fallback when live protection API is empty — read persisted analysis assessments. */
+export function schemeHintFromReportAnalysis(
+  reportAnalysis: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!reportAnalysis) return null;
+  const nested = reportAnalysis.protection as
+    | { assessments?: Array<Record<string, unknown>> }
+    | undefined;
+  const raw =
+    (reportAnalysis.protection_assessment as Array<Record<string, unknown>> | undefined) ||
+    (reportAnalysis.protection_assessments as Array<Record<string, unknown>> | undefined) ||
+    nested?.assessments ||
+    [];
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const parts = raw
+    .filter((a) => a.trip === true || a.pickup === true)
+    .map((a) => {
+      const el = String(a.element || '').trim();
+      if (!el) return '';
+      const op =
+        a.trip === true ? (a.pickup === true ? 'PICKUP TRIP' : 'TRIP') : 'PICKUP';
+      return `${el} ${op}`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(' ') : null;
+}
+
+/**
+ * Single resolver for bay one-line / scheme template across Setup, Analyse, Summary.
+ * Live protection wins; persisted analysis is fallback only.
+ */
+export function resolveBaySchemeHint(opts: {
+  protection?: ProtectionOperation[] | null;
+  reportAnalysis?: Record<string, unknown> | null;
+  eventExtra?: Record<string, unknown> | null;
+}): string | null {
+  const fromLive = baySchemeHintFromProtection(opts.protection);
+  if (fromLive) return fromLive;
+  const ra =
+    opts.reportAnalysis ||
+    ((opts.eventExtra?.report_analysis as Record<string, unknown> | undefined) ?? null);
+  return schemeHintFromReportAnalysis(ra);
+}
+
+export function faultTypeFromReportAnalysis(
+  reportAnalysis: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!reportAnalysis) return null;
+  const fc = reportAnalysis.fault_classification;
+  if (fc && typeof fc === 'object' && fc !== null) {
+    const ft = (fc as { fault_type?: unknown }).fault_type;
+    if (typeof ft === 'string' && ft.trim()) return ft;
+  }
+  return null;
+}
+
+/** Prefer live fault classification over denormalized event.fault_type. */
+export function bayFaultTypeFromAnalysis(
+  fault?: FaultClassification | null,
+  eventFaultType?: string | null,
+): string | null {
+  if (fault?.fault_type) return String(fault.fault_type);
+  return eventFaultType ? String(eventFaultType) : null;
+}
+
+/**
+ * Fault type sync across Overview / DR / Electrical / Summary / header.
+ * Priority: live FaultClassification → report_analysis → event.fault_type.
+ */
+export function resolveFaultType(opts: {
+  fault?: FaultClassification | null;
+  eventFaultType?: string | null;
+  reportAnalysis?: Record<string, unknown> | null;
+  eventExtra?: Record<string, unknown> | null;
+}): string | null {
+  if (opts.fault?.fault_type) return String(opts.fault.fault_type);
+  const ra =
+    opts.reportAnalysis ||
+    ((opts.eventExtra?.report_analysis as Record<string, unknown> | undefined) ?? null);
+  const fromRa = faultTypeFromReportAnalysis(ra);
+  if (fromRa) return fromRa;
+  return opts.eventFaultType ? String(opts.eventFaultType) : null;
+}
+
+/** Explicit distance flag from persisted analysis, or null if unknown. */
+export function distanceApplicableFromReportAnalysis(
+  reportAnalysis: Record<string, unknown> | null | undefined,
+): boolean | null {
+  if (!reportAnalysis) return null;
+  const fc = reportAnalysis.fault_classification;
+  if (!fc || typeof fc !== 'object') return null;
+  const f = fc as {
+    evidence?: { distance_applicable?: unknown };
+    features?: { distance_applicable?: unknown };
+    distance?: { status?: unknown };
+  };
+  const ev = f.evidence || f.features || {};
+  const status = String(f.distance?.status || '').toUpperCase();
+  if (ev.distance_applicable === true && status !== 'NOT_APPLICABLE') return true;
+  if (ev.distance_applicable === false || status === 'NOT_APPLICABLE') return false;
+  return null;
+}
+
+/**
+ * Distance applicability sync — report_analysis flag first, else live fault/protection.
+ */
+export function resolveDistanceApplicable(opts: {
+  fault?: FaultClassification | null;
+  protection?: ProtectionOperation[] | null;
+  reportAnalysis?: Record<string, unknown> | null;
+  eventExtra?: Record<string, unknown> | null;
+}): boolean {
+  const ra =
+    opts.reportAnalysis ||
+    ((opts.eventExtra?.report_analysis as Record<string, unknown> | undefined) ?? null);
+  const fromRa = distanceApplicableFromReportAnalysis(ra);
+  if (fromRa !== null) return fromRa;
+  return isDistanceApplicable({
+    fault: opts.fault,
+    protection: opts.protection,
+  });
 }
 
 const SCHEME_LABELS: Record<string, string> = {

@@ -455,15 +455,26 @@ async def get_fault_characteristics(
     if fault and fault.explanation:
         limitations = [p.strip() for p in str(fault.explanation).split(";") if p.strip()]
 
+    # Non-fault DFR class (energization/motor/…) — do not publish shunt ground/phases
+    ec = feat.get("event_class")
+    if not ec:
+        evc = feat.get("event_classification")
+        if isinstance(evc, dict):
+            ec = evc.get("event_class")
+    shunt_fault = str(ec or "") == "FAULT"
+
     currents = {
         k: feat.get(k)
         for k in ("Ia", "Ib", "Ic", "I0", "I2", "Ia_elevated", "Ib_elevated", "Ic_elevated")
         if k in feat
     }
+    if not shunt_fault:
+        for k in ("Ia_elevated", "Ib_elevated", "Ic_elevated"):
+            currents.pop(k, None)
     sequences = {
         "I0": feat.get("I0"),
         "I2": feat.get("I2"),
-        "ground": feat.get("ground"),
+        "ground": feat.get("ground") if shunt_fault else None,
     }
     z_est = feat.get("line_impedance_estimate") if isinstance(feat.get("line_impedance_estimate"), dict) else {}
     from common.units import normalize_unit
@@ -495,13 +506,16 @@ async def get_fault_characteristics(
             and "LINE Z1" not in lim.upper()
         ]
 
+    out_phases = (fault.involved_phases if fault else None) if shunt_fault else None
+    out_ground = (fault.ground_involved if fault else None) if shunt_fault else None
+
     return FaultCharacteristicsOut(
         event_id=event.id,
         fault_type=str(fault.fault_type if fault else "UNKNOWN"),
         status=str(fault.status if fault else "UNKNOWN"),
         confidence_level=fault.confidence_level if fault else None,
-        involved_phases=fault.involved_phases if fault else None,
-        ground_involved=fault.ground_involved if fault else None,
+        involved_phases=out_phases,
+        ground_involved=out_ground,
         distance_km=out_km,
         location_method=out_method,
         distance_applicable=bool(distance_applicable),

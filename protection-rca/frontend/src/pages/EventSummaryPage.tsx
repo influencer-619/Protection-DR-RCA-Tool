@@ -16,9 +16,20 @@ import { DataQualityBadge } from '@/components/DataQualityBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { VerdictStrip } from '@/components/VerdictStrip';
 import { SharePackButton } from '@/components/SharePackButton';
-import { isDistanceApplicable } from '@/utils/schemeContext';
-import { formatConfidencePct, humanizeEvidenceToken } from '@/utils/evidenceLabels';
+import { resolveDistanceApplicable, resolveFaultType } from '@/utils/schemeContext';
+import { isEvidenceBackedAssert } from '@/utils/protectionOperateEvidence';
+import {
+  eventClassFromFault,
+  formatConfidencePct,
+  groundInvolvedLabel,
+  humanizeEventClass,
+  humanizeEvidenceToken,
+  humanizeFaultType,
+  isShuntFaultEventClass,
+} from '@/utils/evidenceLabels';
 import { formatCheckName } from '@/utils/findingValue';
+import { buildTimelineCardInfo } from '@/utils/timelineCardInfo';
+import { formatDrDate, parseApiDate } from '@/utils/dateTime';
 import styles from './EventSummaryPage.module.css';
 
 const SETTING_LABELS: Record<string, string> = {
@@ -54,11 +65,39 @@ function timelineLabel(t: TimelineEntry): string {
   return formatCheckName(raw);
 }
 
-function fmtWhen(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return format(d, 'dd MMM yyyy HH:mm:ss');
+/** One-page summary: only operate-critical steps (not every VA/VB/IA analog edge). */
+const KEY_SEQUENCE_TYPES = new Set([
+  'FAULT_INCEPTION',
+  'PROTECTION_PICKUP',
+  'PROTECTION_TRIP',
+  'BREAKER_TRIP_COMMAND',
+  '52A_CHANGE',
+  '52B_CHANGE',
+  'CURRENT_INTERRUPTION',
+  'RECLOSE',
+  'LOCKOUT',
+  'INTERTRIP',
+]);
+
+function timelineType(t: TimelineEntry): string {
+  return String(t.event_type || t.label || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_');
+}
+
+function engineerKeySequence(entries: TimelineEntry[]): TimelineEntry[] {
+  const key = entries.filter((t) => KEY_SEQUENCE_TYPES.has(timelineType(t)));
+  // One row per type (first occurrence) — engineer cares about order, not 4× phase copies
+  const seen = new Set<string>();
+  const out: TimelineEntry[] = [];
+  for (const t of key) {
+    const ty = timelineType(t);
+    if (seen.has(ty)) continue;
+    seen.add(ty);
+    out.push(t);
+  }
+  return out;
 }
 
 function fmtDistance(km: number | null | undefined): string {
@@ -111,16 +150,30 @@ export function EventSummaryPage() {
   }, [id, analysisRevision]);
 
   const primary = rca.find((h) => h.rank === 1) ?? rca[0];
+  // Scheme status (79/86/25) is not a fault-protection pickup — show separately
+  const SCHEME_ELEMENTS = new Set(['79', '86', '25']);
+  // Trips / pickups only when COMTRADE digital / clear SER evidence backs the assert
   const trips = protection.filter(
-    (p) => p.asserted && (p.operation_type || '').toUpperCase().includes('TRIP'),
+    (p) =>
+      isEvidenceBackedAssert(p) &&
+      (p.operation_type || '').toUpperCase().includes('TRIP'),
   );
-  // TRIP rows still carry pickup in details — keep Pickups visible after trip attribution
+  // Pickup row = elements that started (including those that later tripped).
+  // Persist stores pickup+trip as operation_type TRIP with details.pickup=true.
   const pickups = protection.filter((p) => {
-    if (!p.asserted) return false;
+    if (!isEvidenceBackedAssert(p)) return false;
+    if (SCHEME_ELEMENTS.has(String(p.element || '').toUpperCase())) return false;
     const ot = (p.operation_type || '').toUpperCase();
-    if (ot.includes('PICKUP')) return true;
+    if (ot.includes('RECLOSE') || ot.includes('LOCKOUT')) return false;
     const d = p.details as { pickup?: boolean } | null | undefined;
-    return d?.pickup === true;
+    return ot.includes('PICKUP') || d?.pickup === true;
+  });
+  const recloseOps = protection.filter((p) => {
+    if (!isEvidenceBackedAssert(p)) return false;
+    const el = String(p.element || '').toUpperCase();
+    if (el === '79') return true;
+    const ot = (p.operation_type || '').toUpperCase();
+    return ot.includes('RECLOSE');
   });
   const inconsistent = findings.filter((f) => f.status === 'INCONSISTENT');
   const plantExtra = (event?.extra as Record<string, string> | undefined) ?? {};
@@ -133,20 +186,46 @@ export function EventSummaryPage() {
   const relay = event?.relay_tag ?? plantLabels.relay_tag ?? plantExtra.relay_tag ?? '—';
 
   const timing = useMemo(() => {
-    const byType = new Map<string, number>();
-    for (const t of timeline) {
-      const key = (t.event_type || '').toLowerCase();
-      if (!key || t.t_us == null || byType.has(key)) continue;
-      byType.set(key, t.t_us / 1000);
+    type Row = { ms: number; src: string };
+    const rank = (src: string) => {
+      const s = src.toUpperCase();
+      if (s.startsWith('DIGITAL:') || s.startsWith('ANALOG:')) return 0;
+      if (s.startsWith('SOE')) return 2;
+      if (s.includes('REPORT')) return 3;
+      return 1;
+    };
+    const rowsOf = (type: string): Row[] =>
+      timeline
+        .filter((t) => (t.event_type || '').toLowerCase() === type && t.t_us != null)
+        .map((t) => ({ ms: t.t_us! / 1000, src: t.source || '' }));
+
+    const pickupsT = rowsOf('protection_pickup').sort(
+      (a, b) => rank(a.src) - rank(b.src) || a.ms - b.ms,
+    );
+    const tripsT = rowsOf('protection_trip').sort(
+      (a, b) => rank(a.src) - rank(b.src) || a.ms - b.ms,
+    );
+    // Prefer COMTRADE digital pair with trip >= pickup (avoid early SOE skew)
+    let pickup: number | null = null;
+    let trip: number | null = null;
+    for (const p of pickupsT) {
+      const later = tripsT.find((tr) => tr.ms + 1e-9 >= p.ms);
+      if (later) {
+        pickup = p.ms;
+        trip = later.ms;
+        break;
+      }
     }
-    const pickup = byType.get('protection_pickup');
-    const trip = byType.get('protection_trip');
-    const interrupt = byType.get('current_interruption');
-    const breaker = byType.get('52a_change');
-    // Values are already in milliseconds (t_us / 1000).
+    if (pickup == null && pickupsT[0]) pickup = pickupsT[0].ms;
+    if (trip == null && tripsT[0]) trip = tripsT[0].ms;
+
+    const interrupt = rowsOf('current_interruption').sort((a, b) => a.ms - b.ms)[0]?.ms;
+    const breaker = rowsOf('52a_change').sort((a, b) => a.ms - b.ms)[0]?.ms;
     return {
       pickupToTripMs:
-        pickup != null && trip != null ? Math.round((trip - pickup) * 10) / 10 : null,
+        pickup != null && trip != null && trip >= pickup
+          ? Math.round((trip - pickup) * 10) / 10
+          : null,
       tripToClearMs:
         trip != null && interrupt != null
           ? Math.round((interrupt - trip) * 10) / 10
@@ -155,6 +234,8 @@ export function EventSummaryPage() {
             : null,
     };
   }, [timeline]);
+
+  const keySequence = useMemo(() => engineerKeySequence(timeline), [timeline]);
 
   const supporting = (primary?.supporting_evidence_ids ?? [])
     .slice(0, 6)
@@ -175,10 +256,23 @@ export function EventSummaryPage() {
   }
 
   const printedAt = format(new Date(), 'dd MMM yyyy HH:mm');
-  const distanceOk = isDistanceApplicable({ fault, protection });
+  const rawFaultType = resolveFaultType({
+    fault,
+    eventFaultType: event?.fault_type,
+    eventExtra: (event?.extra || {}) as Record<string, unknown>,
+  });
+  const eventClass = eventClassFromFault(fault);
+  const displayFaultType = humanizeFaultType(rawFaultType, eventClass);
+  const distanceOk = resolveDistanceApplicable({
+    fault,
+    protection,
+    eventExtra: (event?.extra || {}) as Record<string, unknown>,
+  });
   const tripSummary = trips.length
     ? trips.map((t) => `${t.element} trip`).join('; ')
-    : 'None asserted';
+    : pickups.length
+      ? `${[...new Set(pickups.map((p) => p.element))].join(', ')} — start only (no trip assert)`
+      : 'None asserted';
 
   return (
     <div>
@@ -208,7 +302,7 @@ export function EventSummaryPage() {
 
       <div className="no-print">
         <VerdictStrip
-          faultType={fault?.fault_type ?? event.fault_type}
+          faultType={displayFaultType}
           tripSummary={tripSummary}
           consistency={overallCons}
           inconsistentCount={inconsistent.length}
@@ -232,9 +326,13 @@ export function EventSummaryPage() {
               <div className={styles.meta}>
                 {substation} · {bay} · <span className="mono">{relay}</span>
                 <br />
-                DR {fmtWhen(event.event_datetime)}
+                DR {formatDrDate(event.event_datetime)}
                 {' · '}
-                Created {fmtWhen(event.created_at)}
+                Created{' '}
+                {(() => {
+                  const d = parseApiDate(event.created_at);
+                  return d ? format(d, 'dd MMM yyyy HH:mm:ss') : '—';
+                })()}
                 {event.nominal_voltage_kv != null && (
                   <>
                     {' '}
@@ -247,18 +345,22 @@ export function EventSummaryPage() {
               {event.status && <StatusBadge status={event.status} />}
               {event.decision_state && <StatusBadge status={event.decision_state} />}
               {event.data_quality && <DataQualityBadge quality={event.data_quality} />}
-              {(fault?.fault_type || event.fault_type) && (
-                <span className={`mono ${styles.fault}`}>
-                  {fault?.fault_type ?? event.fault_type}
-                </span>
+              {rawFaultType && (
+                <span className={`mono ${styles.fault}`}>{displayFaultType}</span>
               )}
             </div>
           </div>
 
           <div className={styles.kpis}>
             <div className={styles.kpi}>
+              <span className={styles.kpiLbl}>Event class</span>
+              <span className={styles.kpiVal}>
+                {humanizeEventClass(eventClassFromFault(fault))}
+              </span>
+            </div>
+            <div className={styles.kpi}>
               <span className={styles.kpiLbl}>Fault</span>
-              <span className={styles.kpiVal}>{fault?.fault_type ?? event.fault_type ?? '—'}</span>
+              <span className={styles.kpiVal}>{displayFaultType}</span>
             </div>
             <div className={styles.kpi}>
               <span className={styles.kpiLbl}>Primary RCA</span>
@@ -267,10 +369,6 @@ export function EventSummaryPage() {
             <div className={styles.kpi}>
               <span className={styles.kpiLbl}>Operated</span>
               <span className={styles.kpiVal}>{tripSummary}</span>
-            </div>
-            <div className={styles.kpi}>
-              <span className={styles.kpiLbl}>Consistency</span>
-              <span className={styles.kpiVal}>{overallCons.replace(/_/g, ' ')}</span>
             </div>
           </div>
         </header>
@@ -282,24 +380,33 @@ export function EventSummaryPage() {
               <table className={styles.table}>
                 <tbody>
                   <tr>
+                    <th>Event class</th>
+                    <td>{humanizeEventClass(eventClassFromFault(fault))}</td>
+                  </tr>
+                  <tr>
                     <th>Fault</th>
                     <td>
-                      {fault?.fault_type ?? event.fault_type ?? 'Unknown'}
-                      {fault?.status ? ` · ${fault.status.replace(/_/g, ' ')}` : ''}
+                      {displayFaultType}
+                      {fault?.status && isShuntFaultEventClass(eventClass)
+                        ? ` · ${fault.status.replace(/_/g, ' ')}`
+                        : ''}
                     </td>
                   </tr>
                   <tr>
                     <th>Phases</th>
-                    <td>{fault?.involved_phases?.join(', ') ?? '—'}</td>
+                    <td>
+                      {isShuntFaultEventClass(eventClassFromFault(fault))
+                        ? fault?.involved_phases?.join(', ') ?? '—'
+                        : '—'}
+                    </td>
                   </tr>
                   <tr>
                     <th>Ground</th>
                     <td>
-                      {fault?.ground_involved == null
-                        ? '—'
-                        : fault.ground_involved
-                          ? 'Yes'
-                          : 'No'}
+                      {groundInvolvedLabel(
+                        eventClassFromFault(fault),
+                        fault?.ground_involved,
+                      )}
                     </td>
                   </tr>
                   {distanceOk ? (
@@ -320,9 +427,20 @@ export function EventSummaryPage() {
                   <tr>
                     <th>Pickups</th>
                     <td>
-                      {pickups.length
-                        ? pickups.map((p) => p.element).join(', ')
-                        : 'None mapped / not asserted'}
+                      {[...new Set(pickups.map((p) => p.element))]
+                        .filter(Boolean)
+                        .join(', ') || 'None asserted'}
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>Reclose</th>
+                    <td>
+                      {recloseOps.length
+                        ? [...new Set(recloseOps.map((p) => p.element))]
+                            .filter(Boolean)
+                            .map((el) => (el === '79' ? '79 (AR issued)' : el))
+                            .join(', ')
+                        : 'None asserted'}
                     </td>
                   </tr>
                 </tbody>
@@ -393,9 +511,19 @@ export function EventSummaryPage() {
 
           <section className={styles.grid2}>
             <div className={styles.panel}>
-              <h2>
-                Sequence of operation ({Math.min(timeline.length, 8)} of {timeline.length})
-              </h2>
+              <h2>Key operate sequence</h2>
+              <p className={styles.muted} style={{ marginTop: 0, marginBottom: 8, fontSize: '0.8rem' }}>
+                Engineer view: fault → pickup → trip → clear
+                {timeline.length > keySequence.length
+                  ? ` (${keySequence.length} of ${timeline.length} timeline events)`
+                  : ''}
+                {id ? (
+                  <>
+                    {' · '}
+                    <Link to={`/events/${id}/timeline`}>Full timeline</Link>
+                  </>
+                ) : null}
+              </p>
               {(timing.pickupToTripMs != null || timing.tripToClearMs != null) && (
                 <div className={styles.timingBar}>
                   {timing.pickupToTripMs != null && (
@@ -410,18 +538,30 @@ export function EventSummaryPage() {
                   )}
                 </div>
               )}
-              {timeline.length === 0 ? (
-                <p className={styles.muted}>No timeline entries.</p>
+              {keySequence.length === 0 ? (
+                <p className={styles.muted}>
+                  No pickup / trip / breaker steps mapped yet
+                  {timeline.length ? ` (${timeline.length} other timeline edges recorded).` : '.'}
+                </p>
               ) : (
                 <ol className={styles.timeline}>
-                  {timeline.slice(0, 8).map((t) => (
-                    <li key={t.id}>
-                      <span className={styles.tTime}>
-                        {t.t_us != null ? `${(t.t_us / 1000).toFixed(1)} ms` : '—'}
-                      </span>
-                      <span className={styles.tLabel}>{timelineLabel(t)}</span>
-                    </li>
-                  ))}
+                  {keySequence.map((t) => {
+                    const info = buildTimelineCardInfo(t);
+                    const val =
+                      info.facts.find((f) => f.label === 'RMS')?.value ||
+                      info.facts.find((f) => f.label === 'Transition')?.value ||
+                      info.facts.find((f) => f.label === 'State')?.value ||
+                      null;
+                    return (
+                      <li key={t.id}>
+                        <span className={styles.tTime}>
+                          {t.t_us != null ? `${(t.t_us / 1000).toFixed(1)} ms` : '—'}
+                        </span>
+                        <span className={styles.tLabel}>{timelineLabel(t)}</span>
+                        {val && <span className={`mono ${styles.muted}`}> · {val}</span>}
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
             </div>

@@ -28,16 +28,36 @@ class TimelineEvent:
 
 
 _DIGITAL_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    # ZONE* treated as pickup (distance zone assert); *_OP / bare OP as operate/trip
-    (re.compile(r"PICK\s*UP|PU_|_PU\b|START|ZONE\s*\d*|Z[123]\b", re.I), "protection_pickup"),
-    (re.compile(r"TRIP|TR\b|_TR\b|OPERATE|_OP\b|(?<![A-Z0-9])OP\b", re.I), "protection_trip"),
-    (re.compile(r"52A|52_A|BREAKER.*A\b|CB.*52A", re.I), "52a_change"),
+    # Vendor-neutral digital roles (fallback when target map role is UNKNOWN)
+    (re.compile(r"BF|50BF|BREAKER.?FAIL|\bLBB\b", re.I), "breaker_trip_command"),
+    (re.compile(r"INTERTRIP|TRANSFER.?TRIP|(?<![A-Z0-9])TT\b", re.I), "intertrip"),
+    # Trip before zone/start so "21_Z1_TRIP" is not classified as pickup
+    (re.compile(
+        r"TRIP|(?<![A-Z0-9])TR\b|_TR\b|OPERAT(?:E|ED)?|\bOPTD\b|_OP\b|(?<![A-Z0-9])OP\b",
+        re.I,
+    ), "protection_trip"),
+    (re.compile(
+        r"PICK(?:ED)?\s*UP|(?<![A-Za-z])PU(?![A-Za-z0-9])|"
+        r"(?<![A-Za-z])START(?:ED)?(?![A-Za-z])|"
+        r"ZONE\s*\d*\s*(?:PICK|START|PU)|Z[123](?:_|\s)*(?:PICK|START|PU)",
+        re.I,
+    ), "protection_pickup"),
+    (re.compile(
+        r"52A|52_A|CB.*52A|BKR\s*OFF|BREAKER\s*OFF|CB\s*OFF",
+        re.I,
+    ), "52a_change"),
     (re.compile(r"52B|52_B|BREAKER.*B\b|CB.*52B", re.I), "52b_change"),
-    (re.compile(r"RECLOSE|79\b|AR\b|AUTO.?RECLOSE", re.I), "reclose"),
-    (re.compile(r"LOCKOUT|86\b|LO\b", re.I), "lockout"),
-    (re.compile(r"INTERTRIP|TRANSFER.?TRIP|TT\b", re.I), "intertrip"),
-    (re.compile(r"COMM|PILOT|CARRIER|POTT|DUTT", re.I), "communication_signal"),
-    (re.compile(r"BF|50BF|BREAKER.?FAIL", re.I), "breaker_trip_command"),
+    # Reclose — require clear AR wording; bare "AR"/"79" alone false-matches many DRs
+    (re.compile(
+        r"AUTO.?RECLOSE|RECLOSE|\bRREC\d*\b|INITIATE_?AR|"
+        r"\b79\s*(?:AR|RECLOSE|RREC)\b|\bAR\s*(?:INIT|CLOSE|ON|OFF|SUCCESS)",
+        re.I,
+    ), "reclose"),
+    (re.compile(r"LOCKOUT|\b86\b|LOCK.?OUT", re.I), "lockout"),
+    (re.compile(
+        r"(?<![A-Z])COMM(?![A-Z])|PILOT|CARRIER|POTT|DUTT",
+        re.I,
+    ), "communication_signal"),
 ]
 
 
@@ -211,11 +231,15 @@ def reconstruct_timeline(
             )
             is_voltage = unit in ("V", "KV") or "V" in name_u
 
+            ch_unit = (ch.unit or ("A" if is_current else "V" if is_voltage else "")).strip()
+
             if is_current and baseline > 1e-6:
                 thresh = baseline * current_increase_ratio
                 idxs = np.where(env > thresh)[0]
                 if len(idxs):
                     i0 = int(idxs[0])
+                    rms_now = float(env[i0])
+                    sample_now = float(arr[i0]) if i0 < len(arr) else rms_now
                     events.append(
                         TimelineEvent(
                             event_type="current_increase",
@@ -223,7 +247,14 @@ def reconstruct_timeline(
                             source=f"analog:{ch.name}",
                             confidence=ConfidenceLevel.MEDIUM.value,
                             evidence_ids=[f"ev-{uuid.uuid4().hex[:12]}"],
-                            metadata={"baseline_rms": baseline, "threshold": thresh},
+                            metadata={
+                                "baseline_rms": baseline,
+                                "threshold": thresh,
+                                "value_rms": rms_now,
+                                "value": sample_now,
+                                "unit": ch_unit or "A",
+                                "channel": ch.name,
+                            },
                         )
                     )
                     events.append(
@@ -233,16 +264,37 @@ def reconstruct_timeline(
                             source=f"analog:{ch.name}",
                             confidence=ConfidenceLevel.MEDIUM.value,
                             evidence_ids=[f"ev-{uuid.uuid4().hex[:12]}"],
-                            metadata={"method": "current_rms_threshold"},
+                            metadata={
+                                "method": "current_rms_threshold",
+                                "value_rms": rms_now,
+                                "value": sample_now,
+                                "unit": ch_unit or "A",
+                                "channel": ch.name,
+                            },
                         )
                     )
                 peak = float(np.max(env))
                 if peak > baseline * current_increase_ratio:
-                    after = env[int(np.argmax(env)) :]
-                    low = np.where(after < 0.1 * peak)[0]
+                    # Interrupt = sustained post-peak collapse, not the last samples
+                    # of a truncated DR (EOF often looks like a drop → false interrupt).
+                    peak_i = int(np.argmax(env))
+                    after = env[peak_i:]
+                    low_thresh = 0.1 * peak
+                    low = np.where(after < low_thresh)[0]
                     if len(low):
-                        ii = int(np.argmax(env)) + int(low[0])
-                        if ii < len(t):
+                        ii = peak_i + int(low[0])
+                        cycle = max(1, int(round(fs / f0)))
+                        # Need ~½ cycle of sustained low *after* the drop index
+                        sustain = max(1, cycle // 2)
+                        # Ignore drops in the last ~2 cycles (DR end / buffer tail)
+                        eof_guard = max(cycle, 2 * cycle)
+                        room = len(env) - ii
+                        if (
+                            ii < len(t)
+                            and room > eof_guard
+                            and ii + sustain <= len(env)
+                            and bool(np.all(env[ii : ii + sustain] < low_thresh))
+                        ):
                             events.append(
                                 TimelineEvent(
                                     event_type="current_interruption",
@@ -250,7 +302,15 @@ def reconstruct_timeline(
                                     source=f"analog:{ch.name}",
                                     confidence=ConfidenceLevel.MEDIUM.value,
                                     evidence_ids=[f"ev-{uuid.uuid4().hex[:12]}"],
-                                    metadata={"peak_rms": peak},
+                                    metadata={
+                                        "peak_rms": peak,
+                                        "value_rms": float(env[ii]),
+                                        "value": float(arr[ii])
+                                        if ii < len(arr)
+                                        else float(env[ii]),
+                                        "unit": ch_unit or "A",
+                                        "channel": ch.name,
+                                    },
                                 )
                             )
 
@@ -259,6 +319,8 @@ def reconstruct_timeline(
                 idxs = np.where(env < thresh)[0]
                 if len(idxs):
                     i0 = int(idxs[0])
+                    rms_now = float(env[i0])
+                    sample_now = float(arr[i0]) if i0 < len(arr) else rms_now
                     events.append(
                         TimelineEvent(
                             event_type="voltage_change",
@@ -269,6 +331,10 @@ def reconstruct_timeline(
                             metadata={
                                 "baseline_rms": baseline,
                                 "threshold": thresh,
+                                "value_rms": rms_now,
+                                "value": sample_now,
+                                "unit": ch_unit or "V",
+                                "channel": ch.name,
                             },
                         )
                     )
@@ -276,11 +342,16 @@ def reconstruct_timeline(
     events.sort(key=lambda e: (e.timestamp, e.event_type))
     deduped: list[TimelineEvent] = []
     seen_fi = False
+    seen_interrupt = False
     for e in events:
         if e.event_type == "fault_inception":
             if seen_fi:
                 continue
             seen_fi = True
+        if e.event_type == "current_interruption":
+            if seen_interrupt:
+                continue
+            seen_interrupt = True
         deduped.append(e)
     # Absolute wall-clock from CFG start + relative sample time (standard practice)
     return stamp_absolute_times(deduped, record)

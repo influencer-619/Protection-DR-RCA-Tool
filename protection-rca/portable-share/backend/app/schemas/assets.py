@@ -34,6 +34,13 @@ class SubstationOut(BaseModel):
     created_at: datetime
 
 
+class SubstationUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    region: Optional[str] = None
+    owner: Optional[str] = None
+
+
 class VoltageLevelCreate(BaseModel):
     substation_id: str
     name: str
@@ -51,6 +58,12 @@ class VoltageLevelOut(BaseModel):
     nominal_voltage_kv: Optional[float] = None
     is_active: bool
     created_at: datetime
+
+
+class VoltageLevelUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    nominal_voltage_kv: Optional[float] = None
 
 
 class BayCreate(BaseModel):
@@ -79,6 +92,12 @@ class BayOut(BaseModel):
     created_at: datetime
 
 
+class BayUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
+    bay_type: Optional[str] = None
+
+
 class FeederCreate(BaseModel):
     bay_id: str
     name: str
@@ -94,6 +113,11 @@ class FeederOut(BaseModel):
     name: str
     is_active: bool
     created_at: datetime
+
+
+class FeederUpdate(BaseModel):
+    name: Optional[str] = None
+    code: Optional[str] = None
 
 
 class RelayCreate(BaseModel):
@@ -125,6 +149,14 @@ class RelayOut(BaseModel):
     ip_address: Optional[str] = None
     is_active: bool
     created_at: datetime
+
+
+class RelayUpdate(BaseModel):
+    name: Optional[str] = None
+    relay_tag: Optional[str] = None
+    manufacturer: Optional[str] = None
+    model: Optional[str] = None
+    firmware_version: Optional[str] = None
 
 
 class BreakerCreate(BaseModel):

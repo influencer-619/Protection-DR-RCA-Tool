@@ -87,14 +87,13 @@ function isTimeMap(obj: Record<string, unknown>): boolean {
 }
 
 function formatSequenceMap(obj: Record<string, unknown>): string {
-  const order = [
-    'protection_pickup',
-    'protection_trip',
-    'breaker_trip_command',
-    '52a_change',
-    'current_interruption',
-  ];
-  const keys = [...order.filter((k) => k in obj), ...Object.keys(obj).filter((k) => !order.includes(k))];
+  // Chronological order (by timestamp) so 52a before pickup displays correctly
+  const keys = Object.keys(obj).sort((a, b) => {
+    const na = Number(obj[a]);
+    const nb = Number(obj[b]);
+    if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+    return a.localeCompare(b);
+  });
   return keys
     .map((k) => {
       const n = Number(obj[k]);

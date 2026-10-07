@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { format, isValid, parseISO } from 'date-fns';
+import { format, isValid } from 'date-fns';
+import { formatDrDate, parseApiDate, parseDrDate } from '@/utils/dateTime';
 import { api } from '@/services/api';
 import type { Event } from '@/types';
 import { EventStatusCell } from '@/components/EventStatusCell';
@@ -74,25 +75,20 @@ function parseLocalInput(value: string): Date | null {
 }
 
 function eventWhen(ev: Event): Date | null {
-  /** Prefer relay DR time for filters; fall back to system create time. */
-  const raw = ev.event_datetime || ev.created_at;
-  if (!raw) return null;
-  try {
-    const d = parseISO(raw);
-    return isValid(d) ? d : null;
-  } catch {
-    return null;
-  }
+  /** Prefer relay DR wall clock for filters; fall back to system create time. */
+  if (ev.event_datetime) return parseDrDate(ev.event_datetime);
+  return parseApiDate(ev.created_at);
 }
 
-function fmtStamp(raw?: string | null): string {
-  if (!raw) return '—';
-  try {
-    const d = parseISO(raw);
-    return isValid(d) ? format(d, 'yyyy-MM-dd HH:mm') : '—';
-  } catch {
-    return '—';
+function fmtStamp(raw?: string | null, opts?: { dr?: boolean }): string {
+  if (opts?.dr) {
+    const s = formatDrDate(raw, '');
+    if (!s) return '—';
+    const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4}),\s*(\d{2}:\d{2}:\d{2})/);
+    return m ? `${m[3]}-${m[2]}-${m[1]} ${m[4].slice(0, 5)}` : s;
   }
+  const d = parseApiDate(raw);
+  return d ? format(d, 'yyyy-MM-dd HH:mm') : '—';
 }
 
 export function EventsListPage() {
@@ -330,7 +326,7 @@ export function EventsListPage() {
                     </Link>
                   </td>
                   <td className="num" title="Relay disturbance / COMTRADE trigger time">
-                    {fmtStamp(ev.event_datetime)}
+                    {fmtStamp(ev.event_datetime, { dr: true })}
                   </td>
                   <td className="num" title="Created in this application">
                     {fmtStamp(ev.created_at)}

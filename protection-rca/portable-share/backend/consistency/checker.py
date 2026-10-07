@@ -200,23 +200,53 @@ def check_pickup_vs_trip(
 def check_protection_sequence(
     timeline: list[dict[str, Any]], event_id: str, element: str = "GENERAL"
 ) -> ConsistencyFinding:
-    order = [
-        "protection_pickup",
-        "protection_trip",
-        "breaker_trip_command",
-        "52a_change",
-        "current_interruption",
-    ]
+    """Check protection timeline order.
+
+    Strict core: pickup ≤ trip (when both present).
+    Clearing cluster (breaker command / 52a / current interrupt) may occur in
+    either order — physical interrupt and 52a often swap by tens of ms.
+
+    COMTRADE digitals also jitter by a sample or two: allow ~50 ms slack when
+    comparing clearing vs pickup/trip so 52a 6 ms before Start is not HIGH.
+    Missing trip (common when only a general trip contact exists) is not itself
+    an inconsistency if pickup and clearing are near-simultaneous.
+    """
+    pickup_key = "protection_pickup"
+    trip_key = "protection_trip"
+    clearing_keys = frozenset(
+        {"breaker_trip_command", "52a_change", "current_interruption"}
+    )
+    tracked = {pickup_key, trip_key} | clearing_keys
+    eps = 1e-6
+    # Sample / aux-contact skew tolerance (seconds)
+    clear_tol_s = 0.050
+
     times: dict[str, float] = {}
     for ev in timeline:
-        et = ev.get("event_type")
-        if et in order and et not in times:
-            times[et] = float(ev.get("timestamp", 0))
-    present = [e for e in order if e in times]
+        et = str(ev.get("event_type") or "").strip().lower()
+        if et in tracked and et not in times:
+            try:
+                times[et] = float(ev.get("timestamp", 0))
+            except (TypeError, ValueError):
+                continue
+
     expected = {
-        "order": "Pickup → Trip → Breaker → Interrupt",
-        "steps": ["protection_pickup", "protection_trip", "breaker_trip_command", "52a_change", "current_interruption"],
+        "order": "Pickup → Trip → Clearing (52a / interrupt, either order)",
+        "steps": [
+            pickup_key,
+            trip_key,
+            "breaker_trip_command",
+            "52a_change",
+            "current_interruption",
+        ],
+        "note": (
+            "52a and current interruption unordered; clearing vs pickup/trip "
+            f"allows ±{int(clear_tol_s * 1000)} ms COMTRADE skew"
+        ),
     }
+    present = [k for k in (pickup_key, trip_key, *sorted(clearing_keys)) if k in times]
+    observed = {"times_s": {k: round(times[k], 4) for k in present}}
+
     if len(present) < 2:
         return new_finding(
             event_id=event_id,
@@ -225,16 +255,63 @@ def check_protection_sequence(
             setting_source="N/A",
             setting_version="N/A",
             expected=expected,
-            observed={"present": present, "times_s": {}},
+            observed={**observed, "present": present},
             status=ConsistencyStatus.UNVERIFIABLE.value,
             severity=Severity.LOW.value,
             explanation="Insufficient timeline events for sequence check",
             confidence="INCONCLUSIVE",
         )
-    ok = all(
-        times[present[i]] <= times[present[i + 1]] + 1e-9
-        for i in range(len(present) - 1)
-    )
+
+    violations: list[str] = []
+    notes: list[str] = []
+    t_pickup = times.get(pickup_key)
+    t_trip = times.get(trip_key)
+    clearing_present = {k: times[k] for k in clearing_keys if k in times}
+    t_clear0 = min(clearing_present.values()) if clearing_present else None
+
+    if t_pickup is not None and t_trip is not None and t_trip + eps < t_pickup:
+        violations.append("trip_before_pickup")
+
+    def _clearing_too_early(ref: float) -> bool:
+        assert t_clear0 is not None
+        return t_clear0 + clear_tol_s < ref
+
+    if t_trip is not None and t_clear0 is not None and _clearing_too_early(t_trip):
+        violations.append("clearing_before_trip")
+    elif t_trip is not None and t_clear0 is not None and t_clear0 + eps < t_trip:
+        notes.append("clearing_slightly_before_trip_within_tol")
+
+    if t_pickup is not None and t_clear0 is not None and t_trip is None:
+        if _clearing_too_early(t_pickup):
+            violations.append("clearing_before_pickup")
+        elif t_clear0 + eps < t_pickup:
+            notes.append("clearing_slightly_before_pickup_within_tol")
+        # Trip digital often absent (general trip / orphan) — not a sequence fail
+        notes.append("trip_digital_not_observed")
+
+    ok = not violations
+    observed["violations"] = violations
+    if notes:
+        observed["notes"] = notes
+    if clearing_present:
+        observed["clearing_span_ms"] = round(
+            (max(clearing_present.values()) - min(clearing_present.values())) * 1000,
+            2,
+        )
+
+    if ok and "trip_digital_not_observed" in notes and t_trip is None:
+        explanation = (
+            "Protection sequence OK within COMTRADE skew; trip contact not in "
+            "timeline (general/orphan trip common) — pickup and clearing observed"
+        )
+    elif ok:
+        explanation = (
+            "Protection sequence order check (pickup→trip→clearing; "
+            "52a/interrupt unordered; ±50 ms clearing skew allowed)"
+        )
+    else:
+        explanation = f"Protection sequence violated: {', '.join(violations)}"
+
     return new_finding(
         event_id=event_id,
         element=element,
@@ -242,14 +319,14 @@ def check_protection_sequence(
         setting_source="N/A",
         setting_version="N/A",
         expected=expected,
-        observed={"times_s": {k: round(times[k], 4) for k in present}},
+        observed=observed,
         status=(
             ConsistencyStatus.CONSISTENT.value
             if ok
             else ConsistencyStatus.INCONSISTENT.value
         ),
         severity=Severity.MEDIUM.value if ok else Severity.HIGH.value,
-        explanation="Protection sequence order check",
+        explanation=explanation,
         confidence="MEDIUM",
     )
 

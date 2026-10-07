@@ -17,10 +17,49 @@
 
 .svg {
   width: 100%;
-  max-height: 120px;
+  max-height: 140px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 3px;
+}
+
+.schemeTag {
+  margin-left: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-bright, var(--accent));
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.xfmr {
+  fill: none;
+  stroke: var(--accent-bright, var(--accent));
+  stroke-width: 2.5;
+}
+
+.zone {
+  stroke: var(--sev-critical);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 2;
+}
+
+.zoneBand {
+  fill: color-mix(in srgb, var(--sev-critical) 18%, transparent);
+  stroke: var(--sev-critical);
+  stroke-width: 1;
+}
+
+.busbarWide {
+  fill: var(--accent);
+  opacity: 0.9;
+}
+
+.phaseTick {
+  fill: var(--sev-critical);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
 }
 
 .bus {

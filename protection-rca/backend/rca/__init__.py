@@ -8,7 +8,7 @@ from typing import Any, Optional
 from app.core.enums import HypothesisStatus
 from common.rules_path import load_yaml, resolve_rules_root
 from consistency.engine import ConsistencyResult
-from fault_analysis import FaultClassificationResult
+from fault_analysis import FaultClassificationResult, motor_start_context
 from protection.models import ProtectionAssessment
 
 
@@ -34,6 +34,7 @@ FAULT_SIDE_HYPOTHESES = frozenset(
         "INSULATION_FLASHOVER",
         "EXTERNAL_GRID_DISTURBANCE",  # 27/59/81-leaning
         "SWITCHING_TRANSIENT",
+        "MOTOR_START",
     }
 )
 
@@ -70,6 +71,7 @@ CAUSE_EVIDENCE_TOKENS: dict[str, frozenset[str]] = {
 _FAMILY_DISTANCE = frozenset({"21", "21G", "21P"})
 _FAMILY_OVERCURRENT = frozenset({"50", "51", "50P", "51P"})
 _FAMILY_EARTH_FAULT = frozenset({"50N", "51N", "67N", "87RGF"})
+_FAMILY_MOTOR = frozenset({"46", "48", "49"})
 _FAMILY_LINE_DIFF = frozenset({"87L"})
 _FAMILY_XFMR_DIFF = frozenset({"87T", "87RGF"})
 _FAMILY_BUS_DIFF = frozenset({"87B"})
@@ -88,12 +90,123 @@ def _element_code(assessment: ProtectionAssessment) -> str:
     return str(getattr(assessment, "element", "") or "").upper().strip()
 
 
+def _assessment_has_digital_evidence(assessment: ProtectionAssessment) -> bool:
+    from protection.operate_evidence import assessment_has_operate_evidence
+
+    evid = list(getattr(assessment, "evidence_ids", None) or [])
+    meta = getattr(assessment, "metadata", None)
+    bag: dict = {"evidence_ids": evid}
+    if isinstance(meta, dict):
+        bag["metadata"] = meta
+    return assessment_has_operate_evidence(bag)
+
+
 def _assessment_operated(assessment: ProtectionAssessment) -> bool:
+    """True when the element showed digital activity (pickup and/or trip)."""
+    if not _assessment_has_digital_evidence(assessment):
+        return False
+    act = str(assessment.actual_operation or "").upper()
     return (
         assessment.pickup is True
         or assessment.trip is True
-        or assessment.actual_operation == "OPERATED"
+        or act in ("OPERATED", "PICKED_UP", "TRIPPED")
     )
+
+
+def _assessment_tripped(assessment: ProtectionAssessment) -> bool:
+    """True only when a trip assert is evidenced (not pickup-only)."""
+    if not _assessment_has_digital_evidence(assessment):
+        return False
+    act = str(assessment.actual_operation or "").upper()
+    if assessment.trip is True or act == "TRIPPED":
+        return True
+    # Explicit trip=False → never treat as trip (pickup-only assessments)
+    if assessment.trip is False:
+        return False
+    # OPERATED + pickup without trip flag → pickup framing, not trip
+    if act == "OPERATED" and assessment.pickup is True:
+        return False
+    if act == "OPERATED":
+        return True
+    return False
+
+
+def _protection_assert_token(*, any_pickup: bool, any_trip: bool) -> Optional[str]:
+    """Evidence token that states pickup / trip / pickup with trip explicitly."""
+    if any_pickup and any_trip:
+        return "protection_pickup_with_trip"
+    if any_pickup:
+        return "protection_pickup_asserted"
+    if any_trip:
+        return "protection_trip_asserted"
+    return None
+
+
+def _protection_assert_phrase(bag: set[str]) -> Optional[str]:
+    """Human phrase for narrative: pickup, trip, or pickup with trip."""
+    if "protection_pickup_with_trip" in bag:
+        return "protection pickup with trip"
+    if "protection_pickup_asserted" in bag:
+        return "protection pickup asserted"
+    if "protection_trip_asserted" in bag or "protection_operated" in bag:
+        return "protection trip asserted"
+    if "protection_responded" in bag:
+        return "protection response asserted"
+    return None
+
+
+def _element_assert_phrase(
+    bag: set[str],
+    *,
+    operated_tok: str,
+    pickup_tok: str,
+    label: str,
+) -> Optional[str]:
+    """Say trip vs pickup clearly — never 'operated' for pickup-only.
+
+    Prefer ``_family_assert_phrase`` when assessments are available so the
+    narrative lists exact ANSI codes (50N, 51N) instead of a family range.
+    """
+    if operated_tok in bag:
+        if pickup_tok in bag or "protection_pickup_with_trip" in bag:
+            return f"{label} pickup with trip"
+        return f"{label} trip asserted"
+    if pickup_tok in bag:
+        return f"{label} pickup asserted (no trip digital)"
+    return None
+
+
+def _family_assert_phrase(
+    assessments: list[ProtectionAssessment],
+    family: frozenset[str],
+) -> Optional[str]:
+    """Exact asserted codes — e.g. ``50N, 51N pickup with trip`` (never invent 67N)."""
+    tripped: list[str] = []
+    pickup_only: list[str] = []
+    seen_t: set[str] = set()
+    seen_p: set[str] = set()
+    for a in assessments:
+        code = _element_code(a)
+        if not code or code not in family:
+            continue
+        if not _assessment_has_digital_evidence(a):
+            continue
+        if _assessment_tripped(a):
+            if code not in seen_t:
+                seen_t.add(code)
+                tripped.append(code)
+        elif a.pickup is True or (
+            _assessment_operated(a) and not _assessment_tripped(a)
+        ):
+            if code not in seen_p and code not in seen_t:
+                seen_p.add(code)
+                pickup_only.append(code)
+    parts: list[str] = []
+    if tripped:
+        parts.append(f"{', '.join(tripped)} pickup with trip")
+    if pickup_only:
+        parts.append(f"{', '.join(pickup_only)} pickup asserted (no trip digital)")
+    return "; ".join(parts) if parts else None
 
 
 def _diff_dict_from_assessment(
@@ -217,13 +330,20 @@ def _through_fault_excluded_from_xfmr(
 def _active_protection_zones(bag: set[str]) -> frozenset[str]:
     """Infer which protection zones are active from operated-element evidence tokens."""
     zones: set[str] = set()
-    if "distance_element_operated" in bag or "line_diff_operated" in bag:
+    if (
+        "distance_element_operated" in bag
+        or "distance_element_picked_up" in bag
+        or "line_diff_operated" in bag
+    ):
         zones.add("line")
     if (
-        "overcurrent_element_operated" in bag or "earth_fault_element_operated" in bag
+        "overcurrent_element_operated" in bag
+        or "earth_fault_element_operated" in bag
+        or "overcurrent_element_picked_up" in bag
+        or "earth_fault_element_picked_up" in bag
     ) and "transformer_diff_operated" not in bag and "bus_diff_operated" not in bag and "generator_diff_operated" not in bag and "line_diff_operated" not in bag:
-        # OC/EF alone → feeder/local; 87RGF also sets earth_fault but usually with xfmr
-        if "distance_element_operated" not in bag:
+        # OC/EF trip or pickup → feeder/local; 87RGF also sets earth_fault but usually with xfmr
+        if "distance_element_operated" not in bag and "distance_element_picked_up" not in bag:
             zones.add("feeder")
         else:
             zones.add("line")
@@ -351,58 +471,150 @@ def _hypothesis_scheme_fit(hid: str, bag: set[str]) -> str:
             return "match"
         return "pending" if zones else "open"
 
+    if hid == "MOTOR_START":
+        if "motor_start_possible" in bag:
+            return "match"
+        if "motor_protection_present" in bag or "scheme_motor" in bag:
+            return "pending"
+        return "open"
+
     return "open"
 
 
 def _scheme_tokens_from_assessments(assessments: list[ProtectionAssessment]) -> set[str]:
-    """Map operated (or consistently assessed) elements to scheme evidence tokens."""
+    """Map operated (or consistently assessed) elements to scheme evidence tokens.
+
+    Unit-differential ``*_operated`` tokens require a **trip** assert. Pickup-only
+    (common on magnetizing inrush / restrained 87) is tracked separately so RCA
+    does not treat energization pickup as an internal-fault operate.
+    """
     tokens: set[str] = set()
     for a in assessments:
         code = _element_code(a)
         if not code:
             continue
         operated = _assessment_operated(a)
+        tripped = _assessment_tripped(a)
 
-        def _mark(present: str, operated_tok: str, scheme: str) -> None:
+        def _mark(
+            present: str,
+            operated_tok: str,
+            scheme: str,
+            *,
+            require_trip: bool = False,
+            pickup_tok: Optional[str] = None,
+        ) -> None:
             tokens.add(present)
-            if operated:
-                tokens.add(operated_tok)
-                tokens.add(scheme)
+            if require_trip:
+                if tripped:
+                    tokens.add(operated_tok)
+                    tokens.add(scheme)
+                elif operated and pickup_tok:
+                    tokens.add(pickup_tok)
+                    tokens.add(scheme)
+            else:
+                if operated:
+                    tokens.add(operated_tok)
+                    tokens.add(scheme)
 
         if code in _FAMILY_DISTANCE:
-            _mark("scheme_distance_present", "distance_element_operated", "scheme_distance")
+            _mark(
+                "scheme_distance_present",
+                "distance_element_operated",
+                "scheme_distance",
+                require_trip=True,
+                pickup_tok="distance_element_picked_up",
+            )
         if code in _FAMILY_OVERCURRENT:
-            _mark("scheme_overcurrent_present", "overcurrent_element_operated", "scheme_overcurrent")
+            _mark(
+                "scheme_overcurrent_present",
+                "overcurrent_element_operated",
+                "scheme_overcurrent",
+                require_trip=True,
+                pickup_tok="overcurrent_element_picked_up",
+            )
         if code in _FAMILY_EARTH_FAULT:
-            _mark("scheme_earth_fault_present", "earth_fault_element_operated", "scheme_earth_fault")
+            _mark(
+                "scheme_earth_fault_present",
+                "earth_fault_element_operated",
+                "scheme_earth_fault",
+                require_trip=True,
+                pickup_tok="earth_fault_element_picked_up",
+            )
         if code in _FAMILY_LINE_DIFF:
-            _mark("scheme_line_diff_present", "line_diff_operated", "scheme_line_diff")
-            if operated:
+            _mark(
+                "scheme_line_diff_present",
+                "line_diff_operated",
+                "scheme_line_diff",
+                require_trip=True,
+            )
+            if operated and not tripped:
+                tokens.add("line_diff_picked_up")
+            if tripped:
                 tokens.add("differential_operated")
                 tokens.add("scheme_differential")
         if code in _FAMILY_XFMR_DIFF:
-            _mark("scheme_xfmr_diff_present", "transformer_diff_operated", "scheme_xfmr_diff")
-            if operated:
+            _mark(
+                "scheme_xfmr_diff_present",
+                "transformer_diff_operated",
+                "scheme_xfmr_diff",
+                require_trip=True,
+            )
+            if operated and not tripped:
+                tokens.add("transformer_diff_picked_up")
+            if tripped:
                 tokens.add("differential_operated")
                 tokens.add("scheme_differential")
         if code in _FAMILY_BUS_DIFF:
-            _mark("scheme_bus_diff_present", "bus_diff_operated", "scheme_bus_diff")
-            if operated:
+            _mark(
+                "scheme_bus_diff_present",
+                "bus_diff_operated",
+                "scheme_bus_diff",
+                require_trip=True,
+            )
+            if operated and not tripped:
+                tokens.add("bus_diff_picked_up")
+            if tripped:
                 tokens.add("differential_operated")
                 tokens.add("scheme_differential")
         if code in _FAMILY_GEN_DIFF:
-            _mark("scheme_gen_diff_present", "generator_diff_operated", "scheme_gen_diff")
-            if operated:
+            _mark(
+                "scheme_gen_diff_present",
+                "generator_diff_operated",
+                "scheme_gen_diff",
+                require_trip=True,
+            )
+            if operated and not tripped:
+                tokens.add("generator_diff_picked_up")
+            if tripped:
                 tokens.add("differential_operated")
                 tokens.add("scheme_differential")
         if code in _FAMILY_BREAKER_FAILURE:
             _mark("scheme_breaker_failure_present", "bf_logic_satisfied", "scheme_breaker_failure")
         if code in _FAMILY_DIRECTIONAL:
-            _mark("scheme_directional_present", "directional_element_operated", "scheme_directional")
+            _mark(
+                "scheme_directional_present",
+                "directional_element_operated",
+                "scheme_directional",
+                require_trip=True,
+                pickup_tok="directional_element_picked_up",
+            )
         if code in _FAMILY_VOLTAGE:
-            _mark("scheme_voltage_present", "voltage_element_operated", "scheme_voltage")
+            _mark(
+                "scheme_voltage_present",
+                "voltage_element_operated",
+                "scheme_voltage",
+                require_trip=True,
+                pickup_tok="voltage_element_picked_up",
+            )
         if code in _FAMILY_FREQUENCY:
-            _mark("scheme_frequency_present", "frequency_element_operated", "scheme_frequency")
+            _mark(
+                "scheme_frequency_present",
+                "frequency_element_operated",
+                "scheme_frequency",
+                require_trip=True,
+                pickup_tok="frequency_element_picked_up",
+            )
         if code in _FAMILY_POWER_SWING:
             _mark("scheme_power_swing_present", "power_swing_element_operated", "scheme_power_swing")
         if code in _FAMILY_RECLOSE_LOCKOUT:
@@ -410,7 +622,21 @@ def _scheme_tokens_from_assessments(assessments: list[ProtectionAssessment]) -> 
         if code in _FAMILY_SYNC:
             _mark("scheme_sync_present", "sync_element_operated", "scheme_sync")
         if code in _FAMILY_POWER:
-            _mark("scheme_power_present", "power_unbalance_operated", "scheme_power")
+            _mark(
+                "scheme_power_present",
+                "power_unbalance_operated",
+                "scheme_power",
+                require_trip=True,
+                pickup_tok="power_unbalance_picked_up",
+            )
+        if code in _FAMILY_MOTOR:
+            _mark(
+                "scheme_motor_present",
+                "motor_element_operated",
+                "scheme_motor",
+                require_trip=True,
+                pickup_tok="motor_element_picked_up",
+            )
     return tokens
 
 
@@ -482,7 +708,8 @@ def _title(hid: str) -> str:
         "BUS_ZONE_FAULT": "Bus zone fault",
         "GENERATOR_INTERNAL_FAULT": "Generator internal fault",
         "EXTERNAL_GRID_DISTURBANCE": "External grid / system disturbance",
-        "SWITCHING_TRANSIENT": "Switching transient",
+        "SWITCHING_TRANSIENT": "Transformer energization / switching",
+        "MOTOR_START": "Motor start / starting current",
         "RELAY_MISOPERATION": "Relay misoperation",
         "PROTECTION_SETTING_ERROR": "Protection setting error",
         "RELAY_CONFIGURATION_ERROR": "Relay configuration error",
@@ -531,8 +758,26 @@ class HypothesisEngine:
         ml_supports = ml_supports or {}
         similarity_supports = similarity_supports or {}
 
+        # DFR event class from fault classifier (IEEE/PSRC order)
+        ec = getattr(fault, "event_class", None) or electrical_flags.get("event_class")
+        if not ec:
+            ec_feat = (fault.evidence or {}).get("event_classification")
+            if isinstance(ec_feat, dict):
+                ec = ec_feat.get("event_class")
+        if ec:
+            electrical_flags.setdefault("event_class", str(ec))
+            if str(ec) != "FAULT":
+                electrical_flags.setdefault("no_fault", True)
+                electrical_flags["fault_indicated"] = False
+                if str(ec) == "ENERGIZATION":
+                    electrical_flags.setdefault("magnetizing_inrush", True)
+                elif str(ec) == "MOTOR_START":
+                    electrical_flags.setdefault("motor_start", True)
+                elif str(ec) == "SWITCHING":
+                    electrical_flags.setdefault("switching_correlated", True)
+
         # Derive flags from fault when timeline did not flag them
-        if fault.status in ("CLASSIFIED", "PROBABLE"):
+        if str(ec or "") == "FAULT" and fault.status in ("CLASSIFIED", "PROBABLE"):
             electrical_flags.setdefault("fault_indicated", True)
             feat = fault.evidence if isinstance(fault.evidence, dict) else {}
             if feat.get("available") and any(
@@ -636,6 +881,28 @@ class HypothesisEngine:
                 status = HypothesisStatus.PROBABLE.value
                 missing.append("deterministic_evidence_insufficient_for_confirmed")
 
+            # Inrush/charging from H2 alone is PROBABLE, not CONFIRMED (needs SOE/ops confirm)
+            if (
+                hid == "SWITCHING_TRANSIENT"
+                and status == HypothesisStatus.CONFIRMED.value
+                and "magnetizing_inrush_possible" in evidence_bag
+                and "switching_event_correlated" in evidence_bag
+                and "power_swing_element_operated" not in evidence_bag
+            ):
+                # switching_event_correlated was derived from inrush — require field SOE for CONFIRMED
+                status = HypothesisStatus.PROBABLE.value
+                if "energization_schedule_or_soe" not in missing:
+                    missing = missing + ["energization_schedule_or_soe"]
+
+            # Motor start from DR digitals alone — PROBABLE until ops/SOE confirm
+            if (
+                hid == "MOTOR_START"
+                and status == HypothesisStatus.CONFIRMED.value
+            ):
+                status = HypothesisStatus.PROBABLE.value
+                if "motor_start_soe_or_ops_confirm" not in missing:
+                    missing = missing + ["motor_start_soe_or_ops_confirm"]
+
             # Never promote mismatch / pending-cause above their gate
             if scheme_fit == "mismatch":
                 status = HypothesisStatus.UNLIKELY.value
@@ -656,7 +923,14 @@ class HypothesisEngine:
             )
 
             narrative = self._narrative(
-                hid, status, fault, supporting, missing, evidence_bag, consistency
+                hid,
+                status,
+                fault,
+                supporting,
+                missing,
+                evidence_bag,
+                consistency,
+                assessments=assessments,
             )
 
             result.hypotheses.append(
@@ -765,34 +1039,52 @@ class HypothesisEngine:
         electrical_flags: dict[str, Any],
     ) -> set[str]:
         bag: set[str] = set()
-        if fault.status in ("CLASSIFIED", "PROBABLE"):
+        ec = getattr(fault, "event_class", None) or electrical_flags.get("event_class")
+        if not ec:
+            ec_feat = (fault.evidence or {}).get("event_classification")
+            if isinstance(ec_feat, dict):
+                ec = ec_feat.get("event_class")
+        if ec:
+            bag.add(f"event_class_{ec}")
+            if str(ec) in (
+                "ENERGIZATION",
+                "MOTOR_START",
+                "SWITCHING",
+                "DISTURBANCE",
+            ):
+                bag.add("electrical_no_fault")
+                bag.add("dfr_non_fault_event")
+                if str(ec) == "ENERGIZATION":
+                    bag.add("magnetizing_inrush_possible")
+                    bag.add("switching_event_correlated")
+                    bag.add("harmonic_evidence")
+                elif str(ec) == "MOTOR_START":
+                    bag.add("motor_start_possible")
+                    bag.add("switching_event_correlated")
+                elif str(ec) == "SWITCHING":
+                    bag.add("switching_event_correlated")
+
+        if str(ec or "") == "FAULT" and fault.status in ("CLASSIFIED", "PROBABLE"):
             bag.add("fault_classified")
             bag.add(f"fault_type_{fault.fault_type}")
-        if fault.status == "CLASSIFIED":
+        if str(ec or "") == "FAULT" and fault.status == "CLASSIFIED":
             bag.add("fault_classified_strong")
 
-        any_trip = any(a.trip is True for a in assessments)
+        any_trip = any(_assessment_tripped(a) for a in assessments)
         any_pickup = any(a.pickup is True for a in assessments)
-        any_operated = any(
-            a.trip is True or str(a.actual_operation or "").upper() == "OPERATED"
-            for a in assessments
-        )
+        # Trip assert only — pickup-alone is not "protection operated" for RCA
         if any_trip:
             bag.add("trip_observed")
+            bag.add("protection_operated")
         if any_pickup or any_trip:
             bag.add("protection_responded")
-        # Industry practice (e.g. NERC PRC-004 / DME review): observed operate from
-        # targets / DR / SOE is enough to evidence that protection operated.
-        # Full settings-consistency is a separate check — do not require it here.
-        if any_operated:
-            bag.add("protection_operated")
-        if any(
-            a.consistency == "CONSISTENT"
-            and (
-                a.trip is True
-                or str(a.actual_operation or "").upper() == "OPERATED"
+            assert_tok = _protection_assert_token(
+                any_pickup=any_pickup, any_trip=any_trip
             )
-            for a in assessments
+            if assert_tok:
+                bag.add(assert_tok)
+        if any(
+            a.consistency == "CONSISTENT" and _assessment_tripped(a) for a in assessments
         ):
             bag.add("protection_operated_consistently")
         if any(a.consistency == "CONSISTENT" for a in assessments):
@@ -820,6 +1112,29 @@ class HypothesisEngine:
             bag.add("switching_event_correlated")
         if electrical_flags.get("external_event_correlated"):
             bag.add("external_event_correlated")
+        # Magnetizing inrush / transformer charging (H2 detector)
+        det = electrical_flags.get("detectors") if isinstance(electrical_flags.get("detectors"), dict) else {}
+        inrush = det.get("magnetizing_inrush") if isinstance(det, dict) else None
+        if electrical_flags.get("magnetizing_inrush") or (
+            isinstance(inrush, dict) and str(inrush.get("status") or "").upper() == "POSSIBLE"
+        ):
+            bag.add("magnetizing_inrush_possible")
+            bag.add("switching_event_correlated")
+            bag.add("harmonic_evidence")
+        # Motor start / motor-protection DR (Start I>, 46/48/49, Any Start, …)
+        dig_names = electrical_flags.get("digital_channel_names")
+        if not isinstance(dig_names, (list, tuple)):
+            dig_names = []
+        motor = motor_start_context(
+            list(dig_names),
+            detectors=det if isinstance(det, dict) else {},
+            assessments=assessments,
+        )
+        if motor.get("present"):
+            bag.add("motor_protection_present")
+        if motor.get("likely") or electrical_flags.get("motor_start"):
+            bag.add("motor_start_possible")
+            bag.add("switching_event_correlated")
         # Scheme-library tokens passed via electrical_flags["scheme_tokens"]
         scheme_toks = electrical_flags.get("scheme_tokens")
         if isinstance(scheme_toks, (list, set, tuple)):
@@ -871,6 +1186,9 @@ class HypothesisEngine:
                 "fault_classified",
                 "fault_classified_strong",
                 "current_increase_observed",
+                "protection_pickup_with_trip",
+                "protection_pickup_asserted",
+                "protection_trip_asserted",
                 "protection_operated",
                 "protection_operated_consistently",
                 "protection_responded",
@@ -936,7 +1254,28 @@ class HypothesisEngine:
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         if hid == "SWITCHING_TRANSIENT":
-            for tok in ("power_swing_element_operated", "scheme_power_swing", "reclose_or_lockout_operated"):
+            for tok in (
+                "power_swing_element_operated",
+                "scheme_power_swing",
+                "reclose_or_lockout_operated",
+                "switching_event_correlated",
+                "magnetizing_inrush_possible",
+                "transformer_diff_picked_up",
+                "harmonic_evidence",
+            ):
+                if tok in bag and tok not in supporting:
+                    extras.append(tok)
+        if hid == "MOTOR_START":
+            for tok in (
+                "motor_start_possible",
+                "motor_protection_present",
+                "scheme_motor",
+                "motor_element_operated",
+                "overcurrent_element_operated",
+                "protection_pickup_asserted",
+                "current_increase_observed",
+                "switching_event_correlated",
+            ):
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         if hid == "BREAKER_FAILURE":
@@ -961,6 +1300,27 @@ class HypothesisEngine:
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         supporting = supporting + extras
+        # Prefer explicit pickup / trip / pickup-with-trip over vague "responded"
+        _assert_specific = (
+            "protection_pickup_with_trip",
+            "protection_pickup_asserted",
+            "protection_trip_asserted",
+        )
+        if any(t in supporting for t in _assert_specific):
+            supporting = [
+                t
+                for t in supporting
+                if t
+                not in (
+                    "protection_responded",
+                    # When both pickup+trip, the combined token is enough
+                    *(
+                        ("protection_operated",)
+                        if "protection_pickup_with_trip" in supporting
+                        else ()
+                    ),
+                )
+            ]
 
         contradicting: list[str] = []
         if hid == "RELAY_MISOPERATION" and "fault_classified" in bag:
@@ -1064,10 +1424,16 @@ class HypothesisEngine:
             score = self._fault_side_base(bag)
             if "overcurrent_element_operated" in bag:
                 score += 0.22
+            elif "overcurrent_element_picked_up" in bag:
+                score += 0.08  # pickup-only — weak for feeder fault
             if "earth_fault_element_operated" in bag:
                 score += 0.18
+            elif "earth_fault_element_picked_up" in bag:
+                score += 0.08
             if "directional_element_operated" in bag:
                 score += 0.08
+            elif "directional_element_picked_up" in bag:
+                score += 0.03
             if "scheme_overcurrent" in bag or "scheme_earth_fault" in bag:
                 score += 0.05
             if "distance_element_operated" in bag:
@@ -1084,6 +1450,9 @@ class HypothesisEngine:
                 and "fault_classified" in bag
             ):
                 score += 0.06
+            # Motor start DRs are not feeder shunt faults
+            if "motor_start_possible" in bag:
+                score -= 0.40
             return min(max(score, 0.0), 1.0)
 
         if hid == "CABLE_FAULT":
@@ -1121,13 +1490,20 @@ class HypothesisEngine:
             return 0.14 if "fault_classified" in bag else 0.08
 
         if hid == "TRANSFORMER_INTERNAL_FAULT":
+            # Pickup-only 87 during inrush/charging is not an internal-fault operate
+            if "magnetizing_inrush_possible" in bag and "transformer_diff_operated" not in bag:
+                return 0.12
             if "transformer_diff_operated" in bag:
                 base = 0.82 if "fault_classified" in bag else 0.60
+                if "magnetizing_inrush_possible" in bag:
+                    base = min(base, 0.45)  # trip during inrush still needs restrain review
                 if "through_fault_excluded" in bag:
                     base = min(base + 0.12, 0.95)
                 return base
             if "differential_operated" in bag and "bus_diff_operated" not in bag and "line_diff_operated" not in bag and "generator_diff_operated" not in bag:
                 return 0.55
+            if "transformer_diff_picked_up" in bag:
+                return 0.22
             return 0.10
 
         if hid == "BUS_ZONE_FAULT":
@@ -1160,7 +1536,38 @@ class HypothesisEngine:
                 score += 0.15
             if "switching_event_correlated" in bag:
                 score += 0.30
-            return min(score, 1.0)
+            # Transformer energization / magnetizing inrush (87 pickup, no trip)
+            if "magnetizing_inrush_possible" in bag:
+                score += 0.40
+            if (
+                "transformer_diff_picked_up" in bag
+                and "transformer_diff_operated" not in bag
+            ):
+                score += 0.18
+            # Prefer dedicated MOTOR_START when motor context is present
+            if "motor_start_possible" in bag:
+                score -= 0.25
+            return min(max(score, 0.0), 1.0)
+
+        if hid == "MOTOR_START":
+            score = 0.10
+            if "motor_start_possible" in bag:
+                score += 0.48
+            if "motor_protection_present" in bag or "scheme_motor" in bag:
+                score += 0.12
+            if "motor_element_operated" in bag:
+                score += 0.10
+            if "overcurrent_element_operated" in bag and "protection_operated" not in bag:
+                score += 0.12
+            if "protection_pickup_asserted" in bag and "protection_operated" not in bag:
+                score += 0.08
+            if "current_increase_observed" in bag:
+                score += 0.06
+            if "fault_classified" in bag:
+                score -= 0.12
+            if "magnetizing_inrush_possible" in bag:
+                score -= 0.20
+            return min(max(score, 0.0), 1.0)
 
         if hid == "RELAY_MISOPERATION":
             if "setting_inconsistency_unverified" in bag:
@@ -1307,29 +1714,37 @@ class HypothesisEngine:
         missing: list[str],
         bag: set[str],
         consistency: ConsistencyResult,
+        *,
+        assessments: Optional[list[ProtectionAssessment]] = None,
     ) -> dict[str, Any]:
         ft = fault.fault_type if fault.fault_type and fault.fault_type != "UNKNOWN" else None
         fault_bit = f"{ft} fault" if ft else "disturbance"
         title = _title(hid)
+        asses = list(assessments or [])
 
         if hid == "EXTERNAL_LINE_FAULT":
             parts = []
             if "fault_classified" in bag:
                 parts.append(f"COMTRADE indicates a {fault_bit}")
-            if "distance_element_operated" in bag:
-                parts.append("distance element (21) operated")
-            if "line_diff_operated" in bag:
-                parts.append("line differential (87L) operated")
+            dist_ph = _family_assert_phrase(asses, _FAMILY_DISTANCE)
+            if dist_ph:
+                parts.append(dist_ph)
+            elif "distance_element_operated" in bag:
+                parts.append("distance element (21) trip asserted")
+            line_ph = _family_assert_phrase(asses, _FAMILY_LINE_DIFF)
+            if line_ph:
+                parts.append(line_ph)
+            elif "line_diff_operated" in bag:
+                parts.append("line differential (87L) trip asserted")
             if "distance_estimate_available" in bag:
                 parts.append("a location estimate is available")
             if "current_increase_observed" in bag:
                 parts.append("elevated phase/ground current observed")
-            if "protection_operated" in bag:
-                parts.append("protection trip/operate observed on DR")
+            _prot = _protection_assert_phrase(bag)
+            if _prot:
+                parts.append(_prot)
             if "protection_operated_consistently" in bag:
                 parts.append("operate also consistent with settings")
-            elif "protection_responded" in bag and "protection_operated" not in bag:
-                parts.append("protection pickup/trip asserted")
             statement = (
                 f"{title} is {status} based on: " + "; ".join(parts) + "."
                 if parts
@@ -1363,10 +1778,16 @@ class HypothesisEngine:
                     c
                     for c in (
                         f"Fault classification: {fault.status} ({ft or 'UNKNOWN'})",
-                        "Distance element operated"
-                        if "distance_element_operated" in bag
-                        else None,
-                        "Line differential operated" if "line_diff_operated" in bag else None,
+                        dist_ph or (
+                            "Distance element operated"
+                            if "distance_element_operated" in bag
+                            else None
+                        ),
+                        line_ph or (
+                            "Line differential operated"
+                            if "line_diff_operated" in bag
+                            else None
+                        ),
                         f"Consistency summary: {consistency.summary_status}",
                     )
                     if c
@@ -1378,20 +1799,39 @@ class HypothesisEngine:
             parts = []
             if "fault_classified" in bag:
                 parts.append(f"COMTRADE indicates a {fault_bit}")
-            if "overcurrent_element_operated" in bag:
-                parts.append("overcurrent element (50/51) operated")
-            if "earth_fault_element_operated" in bag:
-                parts.append("earth-fault element (50N/51N/67N) operated")
-            if "directional_element_operated" in bag:
-                parts.append("directional element (67) operated")
+            # Exact ANSI codes only — never invent 67N when only 50N/51N asserted
+            oc_ph = _family_assert_phrase(asses, _FAMILY_OVERCURRENT) or _element_assert_phrase(
+                bag,
+                operated_tok="overcurrent_element_operated",
+                pickup_tok="overcurrent_element_picked_up",
+                label="overcurrent element",
+            )
+            if oc_ph:
+                parts.append(oc_ph)
+            ef_ph = _family_assert_phrase(asses, _FAMILY_EARTH_FAULT) or _element_assert_phrase(
+                bag,
+                operated_tok="earth_fault_element_operated",
+                pickup_tok="earth_fault_element_picked_up",
+                label="earth-fault element",
+            )
+            if ef_ph:
+                parts.append(ef_ph)
+            dir_family = frozenset({"67", "67P"})  # 67N already under earth-fault family
+            dir_ph = _family_assert_phrase(asses, dir_family) or _element_assert_phrase(
+                bag,
+                operated_tok="directional_element_operated",
+                pickup_tok="directional_element_picked_up",
+                label="directional element",
+            )
+            if dir_ph:
+                parts.append(dir_ph)
             if "current_increase_observed" in bag:
                 parts.append("elevated phase/ground current observed")
-            if "protection_operated" in bag:
-                parts.append("protection trip/operate observed on DR")
+            _prot = _protection_assert_phrase(bag)
+            if _prot:
+                parts.append(_prot)
             if "protection_operated_consistently" in bag:
                 parts.append("operate also consistent with settings")
-            elif "protection_responded" in bag and "protection_operated" not in bag:
-                parts.append("protection pickup/trip asserted")
             statement = (
                 f"{title} is {status} based on: " + "; ".join(parts) + "."
                 if parts
@@ -1412,22 +1852,16 @@ class HypothesisEngine:
             return {
                 "statement": statement,
                 "explanation": (
-                    "Feeder / local-circuit hypothesis — boosted for 50/51/EF/67; "
-                    "demoted when distance or unit differential is primary."
+                    "Feeder / local-circuit hypothesis — boosted for 50/51/EF/67 trip; "
+                    "pickup-only is stated as pickup, not trip/operate."
                 ),
                 "causal_chain": [
                     c
                     for c in (
                         f"Fault classification: {fault.status} ({ft or 'UNKNOWN'})",
-                        "Overcurrent element operated"
-                        if "overcurrent_element_operated" in bag
-                        else None,
-                        "Earth-fault element operated"
-                        if "earth_fault_element_operated" in bag
-                        else None,
-                        "Directional element operated"
-                        if "directional_element_operated" in bag
-                        else None,
+                        oc_ph.title() if oc_ph else None,
+                        ef_ph.title() if ef_ph else None,
+                        dir_ph.title() if dir_ph else None,
                         f"Consistency summary: {consistency.summary_status}",
                     )
                     if c
@@ -1437,17 +1871,23 @@ class HypothesisEngine:
 
         if hid == "TRANSFORMER_INTERNAL_FAULT":
             tf_ok = "through_fault_excluded" in bag
+            if "transformer_diff_operated" in bag or "differential_operated" in bag:
+                xfmr_ev = "transformer differential (87T/87RGF) trip"
+            elif "transformer_diff_picked_up" in bag:
+                xfmr_ev = "transformer differential (87T/87RGF) pickup"
+            else:
+                xfmr_ev = None
             return {
                 "statement": (
                     f"{title} is {status}"
                     + (
-                        " based on transformer differential (87T/87RGF) operation"
+                        f" based on {xfmr_ev}"
                         + (
                             " with Id/Ir through-fault exclusion."
                             if tf_ok
                             else "."
                         )
-                        if "transformer_diff_operated" in bag or "differential_operated" in bag
+                        if xfmr_ev
                         else " — transformer differential evidence is incomplete."
                     )
                 ),
@@ -1541,15 +1981,106 @@ class HypothesisEngine:
                 ],
             }
 
-        if hid == "SWITCHING_TRANSIENT":
+        if hid == "MOTOR_START":
+            pu_only = (
+                "protection_pickup_asserted" in bag
+                or (
+                    (
+                        "overcurrent_element_operated" in bag
+                        or "motor_element_operated" in bag
+                    )
+                    and "protection_operated" not in bag
+                )
+            )
+            detail = " — motor-protection / starting-current signature"
+            if pu_only:
+                detail += " (pickup without trip)."
+            else:
+                detail += "."
             return {
-                "statement": f"{title} is {status} from switching / power-swing related evidence.",
-                "explanation": "Boosted for 68/78 (/79) evidence; not a shunt-fault default.",
+                "statement": f"{title} is {status}{detail}",
+                "explanation": (
+                    "Motor start path when Start/Thermal/Stall digitals or START-bay "
+                    "prefixes are present with OC/46 pickup and no trip. Not a feeder "
+                    "shunt-fault default."
+                ),
                 "causal_chain": supporting[:6],
                 "recommended_actions": [
+                    "Confirm motor start / process sequence with SOE or ops log",
+                    "Review start supervision (48), thermal (49), and NPS (46) settings",
+                    "Do not treat starting current as a feeder AB/ABC fault",
+                ],
+            }
+
+        if hid == "SWITCHING_TRANSIENT":
+            inrush = "magnetizing_inrush_possible" in bag
+            diff_pu = (
+                "transformer_diff_picked_up" in bag
+                or "line_diff_picked_up" in bag
+                or "bus_diff_picked_up" in bag
+                or "generator_diff_picked_up" in bag
+            ) and "differential_operated" not in bag and "transformer_diff_operated" not in bag
+            oc_pu = (
+                "overcurrent_element_picked_up" in bag
+                or "earth_fault_element_picked_up" in bag
+                or (
+                    (
+                        "overcurrent_element_operated" in bag
+                        or "earth_fault_element_operated" in bag
+                    )
+                    and "protection_operated" not in bag
+                )
+            )
+            if inrush and diff_pu:
+                detail = (
+                    " — magnetizing inrush / transformer charging signature (elevated H2); "
+                    "87 pickup without trip is consistent with restrained energization."
+                )
+                actions = [
+                    "Confirm transformer energization / charging sequence with SOE",
+                    "Verify 87 harmonic restraint / inrush blocking settings",
+                    "Do not treat 87 pickup-only as internal fault without trip + Id/Ir",
+                ]
+                expl = (
+                    "Energization / inrush path when H2 is elevated and 87 picks up without trip; "
+                    "also boosted for 68/78 (/79). Not a shunt-fault default."
+                )
+            elif inrush and oc_pu:
+                detail = (
+                    " — magnetizing inrush / transformer charging signature (elevated H2); "
+                    "overcurrent pickup without trip."
+                )
+                actions = [
+                    "Confirm transformer energization / charging sequence with SOE",
+                    "Review OC pickup vs inrush / charging current",
+                ]
+                expl = (
+                    "Energization / inrush from elevated H2; protection digitals show OC/EF "
+                    "pickup without trip."
+                )
+            elif inrush:
+                detail = (
+                    " — magnetizing inrush / transformer charging signature (elevated H2)."
+                )
+                actions = [
+                    "Confirm transformer energization / charging sequence with SOE",
+                    "Correlate with switching / charging schedule",
+                ]
+                expl = "Energization / inrush from elevated H2; not a shunt-fault default."
+            else:
+                detail = " from switching / power-swing related evidence."
+                actions = [
                     "Correlate with switching schedule / SOE",
                     "Review power-swing blocking / out-of-step logic",
-                ],
+                ]
+                expl = (
+                    "Boosted for 68/78 (/79) / correlated switching. Not a shunt-fault default."
+                )
+            return {
+                "statement": f"{title} is {status}{detail}",
+                "explanation": expl,
+                "causal_chain": supporting[:6],
+                "recommended_actions": actions,
             }
 
         if hid == "LIGHTNING":
@@ -1683,20 +2214,40 @@ class HypothesisEngine:
             "CABLE_FAULT",
             "EXTERNAL_GRID_DISTURBANCE",
             "SWITCHING_TRANSIENT",
+            "MOTOR_START",
         ):
             parts = []
             if "fault_classified" in bag:
                 parts.append(f"COMTRADE indicates a {fault_bit}")
-            if "protection_operated" in bag:
-                parts.append("protection trip/operate observed on DR")
+            _prot = _protection_assert_phrase(bag)
+            if _prot:
+                parts.append(_prot)
             if "protection_operated_consistently" in bag:
                 parts.append("operate also consistent with settings")
-            elif "protection_responded" in bag and "protection_operated" not in bag:
-                parts.append("protection pickup/trip asserted")
             statement = (
                 f"{title} is {status} based on: " + "; ".join(parts) + "."
                 if parts
                 else f"{title} ranked {status} from available analysis fields."
+            )
+            _prot_title = (
+                "Protection pickup with trip"
+                if "protection_pickup_with_trip" in bag
+                else (
+                    "Protection pickup asserted"
+                    if "protection_pickup_asserted" in bag
+                    else (
+                        "Protection trip asserted"
+                        if (
+                            "protection_trip_asserted" in bag
+                            or "protection_operated" in bag
+                        )
+                        else (
+                            "Protection response observed"
+                            if "protection_responded" in bag
+                            else None
+                        )
+                    )
+                )
             )
             return {
                 "statement": statement,
@@ -1708,13 +2259,7 @@ class HypothesisEngine:
                     c
                     for c in (
                         f"Fault classification: {fault.status} ({ft or 'UNKNOWN'})",
-                        "Protection operate observed"
-                        if "protection_operated" in bag
-                        else (
-                            "Protection response observed"
-                            if "protection_responded" in bag
-                            else None
-                        ),
+                        _prot_title,
                         f"Consistency summary: {consistency.summary_status}",
                     )
                     if c

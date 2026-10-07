@@ -113,6 +113,16 @@ def test_timestamp_monotonic(parsed_record):
     assert parsed_record.timestamps[1] == 1000  # 1 ms at 1 kHz
 
 
+def test_infer_sample_rate_from_timestamps():
+    """When CFG omits/zeros nrates, recover Hz from DAT Δt (any vendor)."""
+    eng = TimestampEngine()
+    # 800 Hz → 1250 µs
+    ts = [i * 1250 for i in range(20)]
+    rate = eng.infer_sample_rate_hz(ts)
+    assert rate == pytest.approx(800.0)
+    assert eng.infer_sample_rate_hz([0]) is None
+
+
 def test_validator_valid(parsed_record):
     result = ComtradeValidator().validate(parsed_record)
     assert result.status in ("VALID", "VALID_WITH_WARNINGS", "PARTIALLY_SUPPORTED")

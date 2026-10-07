@@ -8,8 +8,9 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import type { WaveformChannelData, WaveformMarker } from '@/types';
-import { unitLabel } from '@/utils/formatElectrical';
+import { formatElectrical, unitLabel } from '@/utils/formatElectrical';
 import { classifyChannelSide } from '@/utils/quantitySide';
+import { sampleAtTime } from '@/utils/waveformCalc';
 import styles from './WaveformViewer.module.css';
 
 /** Warm tones — secondary (A / V) */
@@ -42,8 +43,15 @@ function sideBadge(ch: WaveformChannelData): string | null {
   return null;
 }
 
+function isDigitalChannel(ch: WaveformChannelData): boolean {
+  const t = String(ch.channel.channel_type || '').toUpperCase();
+  if (t === 'DIGITAL' || t === 'STATUS' || t === 'BOOL' || t === 'BINARY') return true;
+  const u = String(ch.channel.units || '').toUpperCase();
+  return u === 'BOOL' || u === 'BOOLEAN' || u === 'STATUS' || u === 'BIT';
+}
+
 function channelGroup(ch: WaveformChannelData): 'current' | 'voltage' | 'digital' | 'other' {
-  if (ch.channel.channel_type === 'DIGITAL') return 'digital';
+  if (isDigitalChannel(ch)) return 'digital';
   const n = `${ch.channel.name} ${ch.channel.units || ''} ${ch.channel.phase || ''}`.toUpperCase();
   if (/\bI[ABC0N]?\b|CURRENT|AMP/.test(n) || (ch.channel.units || '').toUpperCase() === 'A') {
     return 'current';
@@ -62,6 +70,22 @@ function displayName(ch: WaveformChannelData): string {
   if (g === 'voltage') return `${n}.inst`;
   return n;
 }
+
+/** Shorter legend text — drop redundant .inst suffix to reduce crowding. */
+function legendLabel(ch: WaveformChannelData): string {
+  return displayName(ch).replace(/\.inst$/i, '');
+}
+
+/** Left-margin label (SIGRA-style) — truncate to fit padL. */
+function marginLabel(ch: WaveformChannelData, maxW: number, ctx: CanvasRenderingContext2D): string {
+  let name = legendLabel(ch);
+  while (name.length > 3 && ctx.measureText(name).width > maxW) {
+    name = `${name.slice(0, -2)}…`;
+  }
+  return name;
+}
+
+type AnalogLayout = 'separate' | 'group';
 
 interface Props {
   channels: WaveformChannelData[];
@@ -111,6 +135,8 @@ export function WaveformViewer({
   const [showRms, setShowRms] = useState(false);
   const [showAnalog, setShowAnalog] = useState(true);
   const [showDigital, setShowDigital] = useState(true);
+  /** separate = one subplot per analog (DFR/SIGRA); group = overlay I then V */
+  const [analogLayout, setAnalogLayout] = useState<AnalogLayout>('separate');
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [canvasHeight, setCanvasHeight] = useState(height);
   const dragRef = useRef<{ x: number; start: number; end: number } | null>(null);
@@ -175,6 +201,27 @@ export function WaveformViewer({
     [channels, selected, showAnalog, showDigital],
   );
 
+  /** Grow plot so digital status bits are not clipped under analogs. */
+  const plotHeight = useMemo(() => {
+    const digCount = visible.filter((c) => channelGroup(c) === 'digital').length;
+    const digH = digCount ? 18 + digCount * 22 + 24 : 0;
+    const analogs = visible.filter((c) => channelGroup(c) !== 'digital');
+    let analogH: number;
+    if (analogLayout === 'separate') {
+      // One row per channel — industry DFR / OscilloViewer style
+      const rowH = analogs.length > 8 ? 64 : analogs.length > 4 ? 78 : 96;
+      analogH = analogs.length * rowH + 24;
+    } else {
+      const bands =
+        (analogs.some((c) => channelGroup(c) === 'current' || channelGroup(c) === 'other')
+          ? 1
+          : 0) + (analogs.some((c) => channelGroup(c) === 'voltage') ? 1 : 0) || 1;
+      analogH = bands * 160 + 40;
+    }
+    const needed = Math.max(320, analogH + digH);
+    return Math.max(canvasHeight, needed);
+  }, [visible, canvasHeight, analogLayout]);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -191,7 +238,7 @@ export function WaveformViewer({
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--wf-bg').trim() || '#0a0e13';
     ctx.fillRect(0, 0, w, h);
 
-    const padL = 118;
+    const padL = 148;
     const padR = 12;
     const padT = 10;
     const padB = 28;
@@ -208,13 +255,6 @@ export function WaveformViewer({
       ctx.lineTo(x, padT + plotH);
       ctx.stroke();
     }
-    for (let i = 0; i <= 8; i++) {
-      const y = padT + (plotH * i) / 8;
-      ctx.beginPath();
-      ctx.moveTo(padL, y);
-      ctx.lineTo(padL + plotW, y);
-      ctx.stroke();
-    }
 
     const winSpan = winEnd - winStart || 1;
     const xOf = (t: number) => padL + ((t - winStart) / winSpan) * plotW;
@@ -223,19 +263,130 @@ export function WaveformViewer({
     const voltages = visible.filter((c) => channelGroup(c) === 'voltage');
     const others = visible.filter((c) => channelGroup(c) === 'other');
     const digitals = visible.filter((c) => channelGroup(c) === 'digital');
+    const analogsOrdered = [...currents, ...others, ...voltages];
 
     const digHeaderH = digitals.length ? 18 : 0;
     const digRowH = 22;
     const digNeeded = digitals.length ? digHeaderH + digitals.length * digRowH + 10 : 0;
     const analogAvail = Math.max(120, plotH - digNeeded);
-    const analogBands =
-      (currents.length || others.length ? 1 : 0) + (voltages.length ? 1 : 0) || 1;
-    const analogBandH = Math.max(72, (analogAvail - (analogBands - 1) * 8) / analogBands);
-    const legendStrip = 18;
 
-    let yCursor = padT;
-    const drawAnalogBand = (
-      label: string,
+    const strokeChannel = (
+      ch: WaveformChannelData,
+      idx: number,
+      waveTop: number,
+      waveH: number,
+      opts?: { zeroLine?: boolean },
+    ) => {
+      const samples = ch.samples;
+      const times = ch.time_us;
+      let ymin = Infinity;
+      let ymax = -Infinity;
+      for (let i = 0; i < samples.length; i++) {
+        const t = Number(times[i]);
+        if (t < winStart || t > winEnd) continue;
+        const v = Number(samples[i]);
+        ymin = Math.min(ymin, v);
+        ymax = Math.max(ymax, v);
+      }
+      if (!Number.isFinite(ymin)) {
+        ymin = -1;
+        ymax = 1;
+      }
+      const mid = (ymin + ymax) / 2;
+      const half = Math.max((ymax - ymin) / 2, 1e-6) * 1.1;
+      const yOf = (v: number) => waveTop + waveH / 2 - ((v - mid) / half) * (waveH / 2) * 0.85;
+
+      if (opts?.zeroLine && ymin <= 0 && ymax >= 0) {
+        ctx.strokeStyle = '#2a3544';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padL, yOf(0));
+        ctx.lineTo(padL + plotW, yOf(0));
+        ctx.stroke();
+      }
+
+      const stroke = analogColor(ch, idx);
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.35;
+      ctx.beginPath();
+      let started = false;
+      for (let i = 0; i < samples.length; i++) {
+        const t = Number(times[i]);
+        if (t < winStart - winSpan * 0.01 || t > winEnd + winSpan * 0.01) continue;
+        const x = xOf(t);
+        const y = yOf(Number(samples[i]));
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+
+      if (showRms && samples.length > 8) {
+        const winN = Math.max(4, Math.floor(samples.length / 40));
+        ctx.strokeStyle = stroke;
+        ctx.globalAlpha = 0.45;
+        ctx.setLineDash([3, 3]);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        let startedR = false;
+        for (let i = winN; i < samples.length; i++) {
+          const t = Number(times[i]);
+          if (t < winStart - winSpan * 0.01 || t > winEnd + winSpan * 0.01) continue;
+          let acc = 0;
+          for (let j = i - winN; j <= i; j++) acc += Number(samples[j]) ** 2;
+          const rms = Math.sqrt(acc / (winN + 1));
+          const x = xOf(t);
+          const y = yOf(rms);
+          if (!startedR) {
+            ctx.moveTo(x, y);
+            startedR = true;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+    };
+
+    /** One subplot per analog — name in left margin (no stacked in-plot legend). */
+    const drawSeparateRow = (ch: WaveformChannelData, idx: number, bandH: number, y0: number) => {
+      ctx.strokeStyle = '#2a3544';
+      ctx.beginPath();
+      ctx.moveTo(padL, y0);
+      ctx.lineTo(padL + plotW, y0);
+      ctx.stroke();
+
+      const color = analogColor(ch, idx);
+      ctx.fillStyle = color;
+      ctx.fillRect(padL - 14, y0 + bandH / 2 - 5, 6, 10);
+
+      ctx.font = '10px Consolas, Courier New, monospace';
+      ctx.fillStyle = '#c5d0dc';
+      ctx.textAlign = 'right';
+      const name = marginLabel(ch, padL - 20, ctx);
+      ctx.fillText(name, padL - 18, y0 + bandH / 2 + 3);
+      ctx.textAlign = 'left';
+
+      const unit = unitLabel(ch.channel.units, ch.channel.name);
+      if (unit && unit !== '—') {
+        ctx.fillStyle = '#7a8a9c';
+        ctx.font = '9px Segoe UI, Tahoma, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(unit, padL - 18, y0 + bandH / 2 + 14);
+        ctx.textAlign = 'left';
+      }
+
+      strokeChannel(ch, idx, y0 + 4, Math.max(36, bandH - 8), { zeroLine: true });
+    };
+
+    /** Group overlay: I and V bands; names stay in sidebar (no in-plot legend). */
+    const drawGroupBand = (
+      title: string,
       chans: WaveformChannelData[],
       bandH: number,
       y0: number,
@@ -246,117 +397,52 @@ export function WaveformViewer({
       ctx.lineTo(padL + plotW, y0);
       ctx.stroke();
 
-      // Band title in left margin (avoids plot clutter)
       ctx.fillStyle = '#9aabbd';
       ctx.font = '11px Segoe UI, Tahoma, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText(label, padL - 8, y0 + 14);
+      ctx.fillText(title, padL - 10, y0 + 14);
       ctx.textAlign = 'left';
 
-      // Color legend across top of band (measured spacing, no pile-up)
-      ctx.font = '11px Consolas, Courier New, monospace';
-      let lx = padL + 6;
-      const ly = y0 + 13;
+      // Compact color ticks in left margin instead of stacked names on the plot
       chans.forEach((ch, idx) => {
-        const name = displayName(ch);
-        const color = analogColor(ch, idx);
-        const tw = ctx.measureText(name).width;
-        if (lx + tw + 14 > padL + plotW - 4) {
-          return; // skip overflow rather than overlap
-        }
-        ctx.fillStyle = color;
-        ctx.fillRect(lx, ly - 7, 8, 8);
-        ctx.fillText(name, lx + 11, ly);
-        lx += tw + 22;
+        ctx.fillStyle = analogColor(ch, idx);
+        ctx.fillRect(padL - 14, y0 + 22 + idx * 10, 6, 6);
       });
 
-      const waveTop = y0 + legendStrip;
-      const waveH = Math.max(40, bandH - legendStrip);
-
-      chans.forEach((ch, idx) => {
-        const samples = ch.samples;
-        const times = ch.time_us;
-        let ymin = Infinity;
-        let ymax = -Infinity;
-        for (let i = 0; i < samples.length; i++) {
-          const t = Number(times[i]);
-          if (t < winStart || t > winEnd) continue;
-          const v = Number(samples[i]);
-          ymin = Math.min(ymin, v);
-          ymax = Math.max(ymax, v);
-        }
-        if (!Number.isFinite(ymin)) {
-          ymin = -1;
-          ymax = 1;
-        }
-        const mid = (ymin + ymax) / 2;
-        const half = Math.max((ymax - ymin) / 2, 1e-6) * 1.1;
-        const yOf = (v: number) => waveTop + waveH / 2 - ((v - mid) / half) * (waveH / 2) * 0.85;
-
-        const stroke = analogColor(ch, idx);
-        ctx.strokeStyle = stroke;
-        ctx.lineWidth = 1.25;
-        ctx.beginPath();
-        let started = false;
-        for (let i = 0; i < samples.length; i++) {
-          const t = Number(times[i]);
-          if (t < winStart - winSpan * 0.01 || t > winEnd + winSpan * 0.01) continue;
-          const x = xOf(t);
-          const y = yOf(Number(samples[i]));
-          if (!started) {
-            ctx.moveTo(x, y);
-            started = true;
-          } else {
-            ctx.lineTo(x, y);
-          }
-        }
-        ctx.stroke();
-
-        // Optional 1-cycle RMS envelope (approx, sliding window ~1/50 of span samples)
-        if (showRms && samples.length > 8) {
-          const winN = Math.max(4, Math.floor(samples.length / 40));
-          ctx.strokeStyle = stroke;
-          ctx.globalAlpha = 0.45;
-          ctx.setLineDash([3, 3]);
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          let startedR = false;
-          for (let i = winN; i < samples.length; i++) {
-            const t = Number(times[i]);
-            if (t < winStart - winSpan * 0.01 || t > winEnd + winSpan * 0.01) continue;
-            let acc = 0;
-            for (let j = i - winN; j <= i; j++) acc += Number(samples[j]) ** 2;
-            const rms = Math.sqrt(acc / (winN + 1));
-            const x = xOf(t);
-            const y = yOf(rms);
-            if (!startedR) {
-              ctx.moveTo(x, y);
-              startedR = true;
-            } else {
-              ctx.lineTo(x, y);
-            }
-          }
-          ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.globalAlpha = 1;
-        }
-      });
+      chans.forEach((ch, idx) => strokeChannel(ch, idx, y0 + 8, Math.max(40, bandH - 12)));
     };
 
-    if (currents.length || others.length) {
-      drawAnalogBand('Current', [...currents, ...others], analogBandH, yCursor);
-      yCursor += analogBandH + 8;
-    }
-    if (voltages.length) {
-      drawAnalogBand('Voltage', voltages, analogBandH, yCursor);
-      yCursor += analogBandH + 8;
+    let yCursor = padT;
+
+    if (analogLayout === 'separate' && analogsOrdered.length) {
+      const gap = 4;
+      const rowH = Math.max(
+        56,
+        (analogAvail - (analogsOrdered.length - 1) * gap) / analogsOrdered.length,
+      );
+      analogsOrdered.forEach((ch, idx) => {
+        drawSeparateRow(ch, idx, rowH, yCursor);
+        yCursor += rowH + gap;
+      });
+    } else {
+      const currentBandChans = [...currents, ...others];
+      const bands = (currentBandChans.length ? 1 : 0) + (voltages.length ? 1 : 0) || 1;
+      const analogBandH = Math.max(88, (analogAvail - (bands - 1) * 8) / bands);
+      if (currentBandChans.length) {
+        drawGroupBand('Current', currentBandChans, analogBandH, yCursor);
+        yCursor += analogBandH + 8;
+      }
+      if (voltages.length) {
+        drawGroupBand('Voltage', voltages, analogBandH, yCursor);
+        yCursor += analogBandH + 8;
+      }
     }
 
     if (digitals.length) {
       ctx.fillStyle = '#9aabbd';
       ctx.font = '11px Segoe UI, Tahoma, sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText('Digitals', padL - 8, yCursor + 12);
+      ctx.fillText('Digitals', padL - 10, yCursor + 12);
       ctx.textAlign = 'left';
 
       digitals.forEach((ch, idx) => {
@@ -388,16 +474,11 @@ export function WaveformViewer({
         }
         ctx.stroke();
 
-        // Name in left margin, truncated to fit
-        const raw = displayName(ch);
         ctx.font = '10px Consolas, Courier New, monospace';
         ctx.fillStyle = '#9aabbd';
-        let name = raw;
-        while (name.length > 4 && ctx.measureText(name).width > padL - 10) {
-          name = `${name.slice(0, -2)}…`;
-        }
+        const name = marginLabel(ch, padL - 12, ctx);
         ctx.textAlign = 'right';
-        ctx.fillText(name, padL - 8, yBase - 1);
+        ctx.fillText(name, padL - 10, yBase - 1);
         ctx.textAlign = 'left';
       });
     }
@@ -447,9 +528,42 @@ export function WaveformViewer({
       }
     }
 
-    // Avoid stacking key labels that sit on nearly the same x
-    const usedLabelBoxes: { x: number; y: number; w: number }[] = [];
-    ctx.font = '10px Segoe UI, Tahoma, sans-serif';
+    // Marker / cursor chips sit near the bottom of the plot.
+    const usedLabelBoxes: { x: number; y: number; w: number; h: number }[] = [];
+    const placeChip = (
+      text: string,
+      xAnchor: number,
+      color: string,
+      font: string,
+      preferY: number,
+    ) => {
+      ctx.font = font;
+      const tw = ctx.measureText(text).width + 8;
+      const th = 13;
+      let labelX = xAnchor + 4;
+      if (labelX + tw > padL + plotW - 2) labelX = xAnchor - tw - 4;
+      let labelY = preferY;
+      for (let i = 0; i < 8; i++) {
+        const hit = usedLabelBoxes.some(
+          (b) =>
+            labelX < b.x + b.w &&
+            labelX + tw > b.x &&
+            labelY - th < b.y &&
+            labelY > b.y - b.h,
+        );
+        if (!hit) break;
+        labelY -= th + 2;
+      }
+      if (labelY < padT + 12) labelY = padT + 12;
+      ctx.fillStyle = 'rgba(10, 14, 19, 0.88)';
+      ctx.fillRect(labelX - 2, labelY - 10, tw, th);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(labelX - 2, labelY - 10, tw, th);
+      ctx.fillStyle = color;
+      ctx.fillText(text, labelX + 2, labelY);
+      usedLabelBoxes.push({ x: labelX - 2, y: labelY, w: tw, h: th });
+    };
 
     clusters.forEach((cl) => {
       const x = xOf(cl.t_us);
@@ -463,41 +577,26 @@ export function WaveformViewer({
       ctx.setLineDash([]);
 
       if (!cl.label) return;
-      const tw = ctx.measureText(cl.label).width + 6;
-      let labelX = x + 4;
-      if (labelX + tw > padL + plotW - 2) labelX = x - tw - 4;
-      let labelY = padT + 12;
-      for (let i = 0; i < 6; i++) {
-        const hit = usedLabelBoxes.some(
-          (b) => labelX < b.x + b.w && labelX + tw > b.x && Math.abs(labelY - b.y) < 12,
-        );
-        if (!hit) break;
-        labelY += 12;
-      }
-      ctx.fillStyle = 'rgba(15, 22, 32, 0.75)';
-      ctx.fillRect(labelX - 2, labelY - 10, tw, 12);
-      ctx.fillStyle = cl.color;
-      ctx.fillText(cl.label, labelX, labelY);
-      usedLabelBoxes.push({ x: labelX - 2, y: labelY, w: tw });
+      placeChip(cl.label, x, cl.color, '10px Segoe UI, Tahoma, sans-serif', padT + plotH - 16);
     });
 
-    // cursors A / B
+    // cursors A / B — time chip only (channel values live in the bottom readout)
     const drawCursor = (t: number | null, color: string, tag: string) => {
       if (t == null || t < winStart || t > winEnd) return;
       const x = xOf(t);
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.25;
       ctx.beginPath();
       ctx.moveTo(x, padT);
       ctx.lineTo(x, padT + plotH);
       ctx.stroke();
-      ctx.fillStyle = color;
-      ctx.font = '10px Consolas, Courier New, monospace';
-      const ct = `${tag} ${((t - tMin) / 1000).toFixed(2)} ms`;
-      const tw = ctx.measureText(ct).width;
-      let cx = x + 4;
-      if (cx + tw > padL + plotW - 4) cx = x - tw - 4;
-      ctx.fillText(ct, cx, padT + (tag === 'A' ? 12 : 24));
+      placeChip(
+        `${tag} ${((t - tMin) / 1000).toFixed(2)} ms`,
+        x,
+        color,
+        '10px Consolas, Courier New, monospace',
+        padT + plotH - (tag === 'A' ? 32 : 16),
+      );
     };
     drawCursor(cursorA, '#e8c547', 'A');
     drawCursor(cursorB, '#7ec8e3', 'B');
@@ -511,7 +610,7 @@ export function WaveformViewer({
       ctx.fillText(`${((t - tMin) / 1000).toFixed(0)}`, x - 8, padT + plotH + 16);
     }
     ctx.fillText('ms', w - 28, h - 8);
-  }, [visible, winStart, winEnd, markers, cursorA, cursorB, tMin, canvasHeight, showRms]);
+  }, [visible, winStart, winEnd, markers, cursorA, cursorB, tMin, plotHeight, showRms, analogLayout]);
 
   useEffect(() => {
     draw();
@@ -556,7 +655,7 @@ export function WaveformViewer({
     // Click near a marker → snap active cursor
     if (markers.length && canvasRef.current) {
       const rect = canvasRef.current.getBoundingClientRect();
-      const padL = 118;
+      const padL = 148;
       const padR = 12;
       const plotW = rect.width - padL - padR;
       const rel = (e.clientX - rect.left - padL) / plotW;
@@ -573,7 +672,7 @@ export function WaveformViewer({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const padL = 118;
+    const padL = 148;
     const padR = 12;
     const plotW = rect.width - padL - padR;
     const rel = (e.clientX - rect.left - padL) / plotW;
@@ -766,6 +865,18 @@ export function WaveformViewer({
             RMS overlay
           </label>
           <label>
+            Layout{' '}
+            <select
+              value={analogLayout}
+              onChange={(e) => setAnalogLayout(e.target.value as AnalogLayout)}
+              style={{ marginLeft: 4 }}
+              title="Separate = one subplot per analog (recommended). Group = overlay currents / voltages."
+            >
+              <option value="separate">Separate channels</option>
+              <option value="group">Group I / V</option>
+            </select>
+          </label>
+          <label>
             Cursor{' '}
             <select
               value={activeCursor}
@@ -847,7 +958,7 @@ export function WaveformViewer({
           <canvas
             ref={canvasRef}
             className={styles.canvas}
-            style={{ height: fill ? '100%' : canvasHeight }}
+            style={{ height: plotHeight, minHeight: fill ? '100%' : undefined }}
             onWheel={onWheel}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
@@ -877,37 +988,118 @@ export function WaveformViewer({
       </div>
       {!hideReadout && (cursorA != null || cursorB != null) && (
         <div className={styles.readout}>
-          {cursorA != null && (
-            <>
-              A: <span className="mono">{(cursorA / 1000).toFixed(3)} ms</span>
-            </>
+          <div>
+            {cursorA != null && (
+              <>
+                A:{' '}
+                <span className="mono">{((cursorA - tMin) / 1000).toFixed(3)} ms</span>
+              </>
+            )}
+            {cursorA != null && cursorB != null ? ' · ' : null}
+            {cursorB != null && (
+              <>
+                B:{' '}
+                <span className="mono">{((cursorB - tMin) / 1000).toFixed(3)} ms</span>
+              </>
+            )}
+            {deltaUs != null && (
+              <>
+                {' · '}
+                Δt: <span className="mono">{(deltaUs / 1000).toFixed(3)} ms</span>
+              </>
+            )}
+            {' · '}
+            Window:{' '}
+            <span className="mono">
+              {((winStart - tMin) / 1000).toFixed(2)} – {((winEnd - tMin) / 1000).toFixed(2)} ms
+            </span>
+            {zoomed ? (
+              <>
+                {' · '}
+                <span className="mono">zoom {zoomPct}%</span>
+              </>
+            ) : null}
+          </div>
+          <div className={styles.readoutValues}>
+            {visible
+              .filter((c) => !isDigitalChannel(c))
+              .map((ch, idx) => {
+                const a =
+                  cursorA != null
+                    ? formatElectrical(sampleAtTime(ch, cursorA), ch.channel.units, {
+                        nameHint: ch.channel.name,
+                        digits: 3,
+                      })
+                    : null;
+                const b =
+                  cursorB != null
+                    ? formatElectrical(sampleAtTime(ch, cursorB), ch.channel.units, {
+                        nameHint: ch.channel.name,
+                        digits: 3,
+                      })
+                    : null;
+                return (
+                  <span key={ch.channel.id || `${ch.channel.name}-${idx}`} className={styles.readoutCh}>
+                    <i style={{ background: analogColor(ch, idx) }} />
+                    <span className="mono">{legendLabel(ch)}</span>
+                    {a != null && (
+                      <span className="mono" style={{ color: '#e8c547' }} title="At cursor A">
+                        {a}
+                      </span>
+                    )}
+                    {a != null && b != null && <span className={styles.readoutSep}>/</span>}
+                    {b != null && (
+                      <span className="mono" style={{ color: '#7ec8e3' }} title="At cursor B">
+                        {b}
+                      </span>
+                    )}
+                  </span>
+                );
+              })}
+          </div>
+          {visible.some(isDigitalChannel) && (
+            <div className={styles.readoutStatus}>
+              <span className={styles.readoutStatusLabel}>Status</span>
+              {visible.filter(isDigitalChannel).map((ch, idx) => {
+                const fmt = (t: number | null) => {
+                  if (t == null) return null;
+                  const v = sampleAtTime(ch, t);
+                  if (v == null || Number.isNaN(Number(v))) return '—';
+                  return Number(v) > 0.5 ? '1' : '0';
+                };
+                const a = fmt(cursorA);
+                const b = fmt(cursorB);
+                return (
+                  <span
+                    key={ch.channel.id || `dig-${ch.channel.name}-${idx}`}
+                    className={styles.readoutCh}
+                  >
+                    <i style={{ background: '#3dbeb0' }} />
+                    <span className="mono">{legendLabel(ch)}</span>
+                    {a != null && (
+                      <span
+                        className="mono"
+                        style={{ color: a === '1' ? '#e8c547' : '#7a8a9c' }}
+                        title="At cursor A"
+                      >
+                        {a}
+                      </span>
+                    )}
+                    {a != null && b != null && <span className={styles.readoutSep}>/</span>}
+                    {b != null && (
+                      <span
+                        className="mono"
+                        style={{ color: b === '1' ? '#7ec8e3' : '#7a8a9c' }}
+                        title="At cursor B"
+                      >
+                        {b}
+                      </span>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
           )}
-          {cursorA != null && cursorB != null ? ' · ' : null}
-          {cursorB != null && (
-            <>
-              B: <span className="mono">{(cursorB / 1000).toFixed(3)} ms</span>
-            </>
-          )}
-          {deltaUs != null && (
-            <>
-              {' · '}
-              Δt: <span className="mono">{(deltaUs / 1000).toFixed(3)} ms</span>
-              {' ('}
-              <span className="mono">{deltaUs.toFixed(0)} µs</span>
-              {')'}
-            </>
-          )}
-          {' · '}
-          Window:{' '}
-          <span className="mono">
-            {(winStart / 1000).toFixed(2)} – {(winEnd / 1000).toFixed(2)} ms
-          </span>
-          {zoomed ? (
-            <>
-              {' · '}
-              <span className="mono">zoom {zoomPct}%</span>
-            </>
-          ) : null}
         </div>
       )}
     </div>

@@ -27,10 +27,12 @@ from app.schemas.assets import (
     AssetOut,
     BayCreate,
     BayOut,
+    BayUpdate,
     BreakerCreate,
     BreakerOut,
     FeederCreate,
     FeederOut,
+    FeederUpdate,
     IedContextOut,
     PlantBayNode,
     PlantFeederNode,
@@ -40,10 +42,13 @@ from app.schemas.assets import (
     PlantVoltageLevelNode,
     RelayCreate,
     RelayOut,
+    RelayUpdate,
     SubstationCreate,
     SubstationOut,
+    SubstationUpdate,
     VoltageLevelCreate,
     VoltageLevelOut,
+    VoltageLevelUpdate,
 )
 
 router = APIRouter(prefix="/api", tags=["plant"])
@@ -52,6 +57,45 @@ router = APIRouter(prefix="/api", tags=["plant"])
 def _slug_code(name: str, *, max_len: int = 64) -> str:
     raw = re.sub(r"[^A-Za-z0-9]+", "-", (name or "").strip()).strip("-").upper()
     return (raw or "ITEM")[:max_len]
+
+
+def _parse_kv_from_name(name: str) -> Optional[float]:
+    """Extract kilovolts from names like '33', '33kV', '33 kV', '33000 V', 'Bus 33 kV'."""
+    text = (name or "").strip()
+    if not text:
+        return None
+    with_unit = re.search(r"(\d+(?:\.\d+)?)\s*(kV|V)\b", text, flags=re.I)
+    if with_unit:
+        try:
+            val = float(with_unit.group(1))
+        except ValueError:
+            return None
+        if val <= 0:
+            return None
+        if with_unit.group(2).lower() == "v":
+            val = val / 1000.0
+        return float(f"{val:.8g}")
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*k?v?", text, flags=re.I)
+    if not m:
+        return None
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return None
+    return val if val > 0 else None
+
+
+def _voltage_level_name(name: str, kv: Optional[float]) -> str:
+    text = (name or "").strip()
+    if not text and kv is not None:
+        return f"{kv:g} kV"
+    if kv is None:
+        return text
+    if re.search(r"\bkV\b", text, flags=re.I):
+        return text
+    if re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return f"{kv:g} kV"
+    return text
 
 
 # --- Substations ---
@@ -96,6 +140,32 @@ async def get_substation(
     return SubstationOut.model_validate(row)
 
 
+@router.patch("/substations/{substation_id}", response_model=SubstationOut)
+async def update_substation(
+    substation_id: str,
+    body: SubstationUpdate,
+    db: DbSession,
+    user: User = Depends(require_role(Role.ANALYST)),
+) -> SubstationOut:
+    row = await db.get(Substation, substation_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Substation not found")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data:
+        name = str(data["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name is required")
+        row.name = name
+    if "code" in data and data["code"]:
+        row.code = str(data["code"]).strip()
+    if "region" in data:
+        row.region = data["region"]
+    if "owner" in data:
+        row.owner = data["owner"]
+    await db.flush()
+    return SubstationOut.model_validate(row)
+
+
 @router.delete("/substations/{substation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_substation(
     substation_id: str,
@@ -125,14 +195,18 @@ async def create_voltage_level(
     sub = await db.get(Substation, body.substation_id)
     if sub is None:
         raise HTTPException(status_code=404, detail="Substation not found")
-    code = body.code or _slug_code(
-        body.name if not body.nominal_voltage_kv else f"{body.nominal_voltage_kv}kV"
-    )
+    kv = body.nominal_voltage_kv
+    if kv is None:
+        kv = _parse_kv_from_name(body.name)
+    name = _voltage_level_name(body.name, kv)
+    if not name:
+        raise HTTPException(status_code=400, detail="Voltage level name or kV value required")
+    code = body.code or _slug_code(name if kv is None else f"{kv:g}kV")
     obj = VoltageLevel(
         substation_id=body.substation_id,
-        name=body.name.strip(),
+        name=name,
         code=code,
-        nominal_voltage_kv=body.nominal_voltage_kv,
+        nominal_voltage_kv=kv,
     )
     db.add(obj)
     await db.flush()
@@ -150,6 +224,34 @@ async def list_voltage_levels(
         q = q.where(VoltageLevel.substation_id == substation_id)
     rows = (await db.execute(q.order_by(VoltageLevel.name))).scalars().all()
     return [VoltageLevelOut.model_validate(r) for r in rows]
+
+
+@router.patch("/voltage-levels/{voltage_level_id}", response_model=VoltageLevelOut)
+async def update_voltage_level(
+    voltage_level_id: str,
+    body: VoltageLevelUpdate,
+    db: DbSession,
+    user: User = Depends(require_role(Role.ANALYST)),
+) -> VoltageLevelOut:
+    row = await db.get(VoltageLevel, voltage_level_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Voltage level not found")
+    data = body.model_dump(exclude_unset=True)
+    kv = data["nominal_voltage_kv"] if "nominal_voltage_kv" in data else row.nominal_voltage_kv
+    name_in = data["name"] if "name" in data else row.name
+    if "nominal_voltage_kv" not in data and "name" in data:
+        parsed = _parse_kv_from_name(str(name_in or ""))
+        if parsed is not None:
+            kv = parsed
+    name = _voltage_level_name(str(name_in or ""), kv)
+    if not name:
+        raise HTTPException(status_code=400, detail="Voltage level name or kV value required")
+    row.name = name
+    row.nominal_voltage_kv = kv
+    if data.get("code"):
+        row.code = str(data["code"]).strip()
+    await db.flush()
+    return VoltageLevelOut.model_validate(row)
 
 
 @router.delete("/voltage-levels/{voltage_level_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -209,6 +311,30 @@ async def list_bays(
     return [BayOut.model_validate(r) for r in rows]
 
 
+@router.patch("/bays/{bay_id}", response_model=BayOut)
+async def update_bay(
+    bay_id: str,
+    body: BayUpdate,
+    db: DbSession,
+    user: User = Depends(require_role(Role.ANALYST)),
+) -> BayOut:
+    row = await db.get(Bay, bay_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Bay not found")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data:
+        name = str(data["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name is required")
+        row.name = name
+    if data.get("code"):
+        row.code = str(data["code"]).strip()
+    if "bay_type" in data:
+        row.bay_type = data["bay_type"]
+    await db.flush()
+    return BayOut.model_validate(row)
+
+
 @router.delete("/bays/{bay_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_bay(
     bay_id: str,
@@ -252,6 +378,28 @@ async def list_feeders(
         q = q.where(Feeder.bay_id == bay_id)
     rows = (await db.execute(q.order_by(Feeder.name))).scalars().all()
     return [FeederOut.model_validate(r) for r in rows]
+
+
+@router.patch("/feeders/{feeder_id}", response_model=FeederOut)
+async def update_feeder(
+    feeder_id: str,
+    body: FeederUpdate,
+    db: DbSession,
+    user: User = Depends(require_role(Role.ANALYST)),
+) -> FeederOut:
+    row = await db.get(Feeder, feeder_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Feeder not found")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data:
+        name = str(data["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name is required")
+        row.name = name
+    if data.get("code"):
+        row.code = str(data["code"]).strip()
+    await db.flush()
+    return FeederOut.model_validate(row)
 
 
 @router.delete("/feeders/{feeder_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -364,6 +512,35 @@ async def get_relay(relay_id: str, db: DbSession, user: CurrentUser) -> RelayOut
     row = await db.get(Relay, relay_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Relay not found")
+    return RelayOut.model_validate(row)
+
+
+@router.patch("/ieds/{ied_id}", response_model=RelayOut)
+@router.patch("/relays/{ied_id}", response_model=RelayOut)
+async def update_ied(
+    ied_id: str,
+    body: RelayUpdate,
+    db: DbSession,
+    user: User = Depends(require_role(Role.ANALYST)),
+) -> RelayOut:
+    row = await db.get(Relay, ied_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="IED not found")
+    data = body.model_dump(exclude_unset=True)
+    if "name" in data:
+        name = str(data["name"] or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Name is required")
+        row.name = name
+    if data.get("relay_tag"):
+        row.relay_tag = str(data["relay_tag"]).strip()
+    if "manufacturer" in data:
+        row.manufacturer = data["manufacturer"]
+    if "model" in data:
+        row.model = data["model"]
+    if "firmware_version" in data:
+        row.firmware_version = data["firmware_version"]
+    await db.flush()
     return RelayOut.model_validate(row)
 
 

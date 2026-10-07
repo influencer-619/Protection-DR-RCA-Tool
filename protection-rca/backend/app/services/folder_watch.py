@@ -20,11 +20,16 @@ _COMTRADE_EXTS = {
     ".zip",
     ".cev",
     ".dz5",
+    ".dex",
     ".dex5",
     ".d5z",
     ".pcmi",
     ".pcmp",
     ".rdb",
+    ".set",
+    ".pdf",
+    ".docx",
+    ".doc",
 }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Union
 
@@ -11,6 +12,10 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 BytesLike = Union[bytes, bytearray, memoryview]
+
+# Windows-illegal filename chars (and path separators) — COMTRADE names often
+# include ``>`` (e.g. Siemens ``>trig.wave.cap.``).
+_UNSAFE_KEY_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
 class StorageService:
@@ -66,12 +71,23 @@ class StorageService:
             return False
 
     @staticmethod
+    def safe_key_suffix(suffix: str) -> str:
+        """Make a storage key suffix safe on Windows and POSIX filesystems."""
+        if not suffix:
+            return ""
+        s = suffix if suffix.startswith(".") else f".{suffix}"
+        s = _UNSAFE_KEY_CHARS.sub("_", s)
+        s = re.sub(r"_+", "_", s)
+        s = s.lower()
+        # Avoid empty / dot-only suffixes after scrubbing
+        body = s.lstrip(".")
+        if not body or body.replace(".", "") == "":
+            return ".bin"
+        return s if s.startswith(".") else f".{s}"
+
+    @staticmethod
     def content_key(sha256: str, prefix: str = "files", suffix: str = "") -> str:
-        safe_suffix = ""
-        if suffix:
-            if not suffix.startswith("."):
-                suffix = f".{suffix}"
-            safe_suffix = suffix.lower()
+        safe_suffix = StorageService.safe_key_suffix(suffix)
         return f"{prefix}/{sha256[:2]}/{sha256}{safe_suffix}"
 
     def put_bytes(
