@@ -817,7 +817,7 @@ export function DashboardPage() {
                 <tr>
                   <th>Event ID</th>
                   <th title="Relay disturbance / COMTRADE trigger time">DR time</th>
-                  <th title="When this event was created in Protection RCA">Created</th>
+                  <th title="When this event was created in Protection Expert System">Created</th>
                   <th>Substation / Bay</th>
                   <th>Relay</th>
                   <th>Fault</th>

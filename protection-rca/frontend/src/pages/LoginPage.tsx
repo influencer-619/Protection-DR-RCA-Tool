@@ -51,8 +51,8 @@ export function LoginPage() {
         <div className={styles.heroWave} aria-hidden />
         <div className={styles.heroInner}>
           <div className={styles.mark}>PES</div>
-          <p className={styles.eyebrow}>Protection engineering workstation</p>
-          <h1 className={styles.heroTitle}>Protection RCA</h1>
+          <p className={styles.eyebrow}>IEC 61850 · COMTRADE · RCA</p>
+          <h1 className={styles.heroTitle}>Protection Expert System</h1>
           <p className={styles.heroLead}>
             Disturbance-record analysis for COMTRADE oscillography, protection
             operate evidence, and root-cause review.

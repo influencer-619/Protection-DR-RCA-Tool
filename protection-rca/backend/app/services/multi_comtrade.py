@@ -124,6 +124,7 @@ async def store_multi_end_config(
     local_file_id: Optional[str] = None,
     remote_file_id: Optional[str] = None,
     sync_offset_us_value: Optional[float] = None,
+    commit: bool = True,
 ) -> dict[str, Any]:
     extra = dict(event.extra) if isinstance(event.extra, dict) else {}
     cfg = dict(extra.get("multi_end") or {})
@@ -135,5 +136,44 @@ async def store_multi_end_config(
         cfg["sync_offset_us"] = float(sync_offset_us_value)
     extra["multi_end"] = cfg
     event.extra = extra
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     return cfg
+
+
+async def ensure_multi_end_from_labels(
+    db: AsyncSession,
+    event: Event,
+    *,
+    commit: bool = False,
+) -> Optional[dict[str, Any]]:
+    """If LOCAL + REMOTE COMTRADE ends exist, persist multi_end pairing (idempotent)."""
+    ends = await list_comtrade_ends(db, event.id)
+    local, remote = pair_local_remote(ends)
+    if not local or not remote:
+        return None
+    if local.get("comtrade_file_id") == remote.get("comtrade_file_id"):
+        return None
+
+    def _parse(ts: Optional[str]) -> Optional[datetime]:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(ts)
+        except ValueError:
+            return None
+
+    offset = sync_offset_us(
+        _parse(local.get("trigger_timestamp")),
+        _parse(remote.get("trigger_timestamp")),
+    )
+    return await store_multi_end_config(
+        db,
+        event,
+        local_file_id=str(local["comtrade_file_id"]),
+        remote_file_id=str(remote["comtrade_file_id"]),
+        sync_offset_us_value=offset,
+        commit=commit,
+    )

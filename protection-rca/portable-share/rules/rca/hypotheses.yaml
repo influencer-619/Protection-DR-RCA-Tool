@@ -84,6 +84,13 @@ hypotheses:
   - id: SWITCHING_TRANSIENT
     required_for_confirmed:
       - switching_event_correlated
+  - id: SWITCH_ONTO_FAULT
+    # Close / energize into a pre-existing or concurrent shunt fault (SOTF).
+    # Distinct from energization/inrush (no trip) and from zone-only fault labels.
+    required_for_confirmed:
+      - fault_classified
+      - protection_operated
+      - switch_onto_fault_context
   - id: MOTOR_START
     required_for_confirmed:
       - motor_start_possible

@@ -133,6 +133,16 @@ class RelayCreate(BaseModel):
     bay_id: Optional[str] = None
 
 
+class RemoteIedOut(BaseModel):
+    """Opposite-end IED for multi-end (87L) analysis."""
+
+    id: str
+    name: str
+    relay_tag: str
+    ip_address: Optional[str] = None
+    substation_id: Optional[str] = None
+
+
 class RelayOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -149,6 +159,7 @@ class RelayOut(BaseModel):
     ip_address: Optional[str] = None
     is_active: bool
     created_at: datetime
+    remote_ied: Optional[RemoteIedOut] = None
 
 
 class RelayUpdate(BaseModel):
@@ -157,6 +168,8 @@ class RelayUpdate(BaseModel):
     manufacturer: Optional[str] = None
     model: Optional[str] = None
     firmware_version: Optional[str] = None
+    # Set peer IED id, or null/"" to clear
+    remote_relay_id: Optional[str] = None
 
 
 class BreakerCreate(BaseModel):
@@ -266,6 +279,7 @@ class IedContextOut(BaseModel):
     voltage_level: Optional[VoltageLevelOut] = None
     substation: SubstationOut
     path_label: str
+    remote_ied: Optional[RemoteIedOut] = None
 
 
 class MapEventToIedRequest(BaseModel):

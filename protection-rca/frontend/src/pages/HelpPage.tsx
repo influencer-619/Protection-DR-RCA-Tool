@@ -50,7 +50,7 @@ export function HelpPage() {
                 <span className="mono">http://127.0.0.1:5173</span> (dev). The control window shows
                 LAN URLs for other PCs on your network.
               </li>
-              <li>Keep the “Protection RCA is running” window open while you work.</li>
+              <li>Keep the “Protection Expert System is running” window open while you work.</li>
               <li>Close that window (or Stop &amp; Close) to shut down API + UI.</li>
               <li>
                 Sharing: copy the whole <span className="mono">portable-share</span> folder — Python is

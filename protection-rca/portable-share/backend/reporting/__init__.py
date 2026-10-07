@@ -61,6 +61,7 @@ _HUMANIZE_LABELS = {
     "UNKNOWN": "Unknown",
     "MOTOR_START": "Motor start / starting current",
     "SWITCHING_TRANSIENT": "Transformer energization / switching",
+    "SWITCH_ONTO_FAULT": "Switch onto fault",
     "INTERNAL_FEEDER_FAULT": "Feeder / local circuit fault",
 }
 

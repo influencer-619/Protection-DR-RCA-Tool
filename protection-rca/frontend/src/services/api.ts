@@ -303,9 +303,26 @@ export const api = {
 
   async updateIed(
     id: string,
-    body: { name?: string; relay_tag?: string },
+    body: {
+      name?: string;
+      relay_tag?: string;
+      manufacturer?: string | null;
+      model?: string | null;
+      firmware_version?: string | null;
+      /** Peer IED id, or null to clear */
+      remote_relay_id?: string | null;
+    },
   ): Promise<Relay> {
     const { data } = await apiClient.patch(`/ieds/${id}`, body);
+    return data;
+  },
+
+  async listIeds(params?: {
+    substation_id?: string;
+    bay_id?: string;
+    feeder_id?: string;
+  }): Promise<Relay[]> {
+    const { data } = await apiClient.get<Relay[]>('/ieds', { params });
     return data;
   },
 
@@ -609,9 +626,14 @@ export const api = {
     return data;
   },
 
-  async uploadEventFiles(eventId: string, files: File[]): Promise<EventFile[]> {
+  async uploadEventFiles(
+    eventId: string,
+    files: File[],
+    opts?: { end_label?: 'LOCAL' | 'REMOTE' | string },
+  ): Promise<EventFile[]> {
     const form = new FormData();
     files.forEach((f) => form.append('files', f));
+    if (opts?.end_label) form.append('end_label', opts.end_label);
     const { data } = await apiClient.post<EventFile[]>(
       `/events/${eventId}/files`,
       form,

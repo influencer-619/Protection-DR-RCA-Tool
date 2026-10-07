@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Relay
+from app.models import Event, Relay
 from app.schemas.events import EventCreate
 from app.services import event_service, file_service
 from app.services.audit_service import write_audit
@@ -136,8 +136,10 @@ async def create_events(
     user_id: Optional[str],
     request_id: Optional[str],
     trigger: str,
+    end_label: str = "LOCAL",
 ) -> list[dict[str, Any]]:
     """One event per downloaded record (or one settings/events-only event)."""
+    label = (end_label or "LOCAL").strip().upper() or "LOCAL"
     groups: list[tuple[Optional[str], list[acq.Payload]]] = list(result.records.items())
     if not groups:
         if not result.shared:
@@ -201,6 +203,8 @@ async def create_events(
                     "trigger": trigger,
                     "ied_host": conn.host,
                     "ied_path": p.remote_path,
+                    "end_label": label,
+                    "relay_id": relay.id,
                 },
             )
             for ef in efs:
@@ -237,3 +241,42 @@ async def create_events(
     )
     await db.flush()
     return created
+
+
+async def store_payloads_on_event(
+    db: AsyncSession,
+    event: Event,
+    relay: Relay,
+    conn: acq.Connection,
+    payloads: list[acq.Payload],
+    *,
+    end_label: str = "REMOTE",
+    user_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+    trigger: str = "AUTO_REMOTE",
+) -> list[str]:
+    """Append acquired payloads onto an existing event with the given end_label."""
+    label = (end_label or "REMOTE").strip().upper() or "REMOTE"
+    stored_names: list[str] = []
+    for p in payloads:
+        efs = await file_service.store_acquired_bytes(
+            db,
+            event,
+            filename=p.filename,
+            data=p.data,
+            source_type=p.source_type,
+            uploaded_by=user_id,
+            request_id=request_id,
+            file_metadata={
+                "acquired_via": "IEC61850",
+                "trigger": trigger,
+                "ied_host": conn.host,
+                "ied_path": p.remote_path,
+                "end_label": label,
+                "relay_id": relay.id,
+            },
+        )
+        for ef in efs:
+            stored_names.append(ef.original_filename)
+    await db.flush()
+    return stored_names

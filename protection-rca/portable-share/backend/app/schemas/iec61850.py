@@ -65,6 +65,10 @@ class Iec61850AutoFetchIn(Iec61850Connection):
     import_existing: bool = Field(
         False, description="On enable, also ingest records already on the IED (default: only new ones)"
     )
+    also_fetch_remote: bool = Field(
+        False,
+        description="When a Remote IED is configured, also pull peer records into the same event as REMOTE",
+    )
 
 
 class Iec61850AutoFetchOut(BaseModel):
@@ -74,6 +78,7 @@ class Iec61850AutoFetchOut(BaseModel):
     include_events: bool = True
     auto_analyse: bool = True
     import_existing: bool = False
+    also_fetch_remote: bool = False
     last_run_at: Optional[str] = None
     next_run_at: Optional[str] = None
     last_status: Optional[str] = None
@@ -85,6 +90,7 @@ class Iec61850AutoFetchOut(BaseModel):
     baseline_done: bool = False
     scheduler_running: bool = False
     interval_choices: list[int] = Field(default_factory=list)
+    remote_fetch: Optional[dict[str, Any]] = None
 
 
 class VendorProfileOut(BaseModel):

@@ -318,7 +318,7 @@ export function EventSummaryPage() {
         <header className={styles.cover}>
           <div className={styles.header}>
             <div>
-              <div className={styles.eyebrow}>Protection RCA · Disturbance summary</div>
+              <div className={styles.eyebrow}>Protection Expert System · Disturbance summary</div>
               <h1 className={styles.title}>
                 <span className="mono">{event.event_id}</span>
                 {event.feeder ? ` · ${event.feeder}` : ''}

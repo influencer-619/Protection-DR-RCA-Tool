@@ -405,6 +405,7 @@ async def store_event_file(
     source_type: Optional[str] = None,
     uploaded_by: Optional[str] = None,
     request_id: Optional[str] = None,
+    file_metadata: Optional[dict] = None,
 ) -> list[EventFile]:
     """
     Store an uploaded file. ZIP archives are expanded; each allowed member
@@ -414,6 +415,7 @@ async def store_event_file(
     settings = get_settings()
     filename = upload.filename or "upload.bin"
     ext = _validate_extension(filename)
+    meta = dict(file_metadata) if file_metadata else None
 
     chunks: list[bytes] = []
     total = 0
@@ -451,6 +453,7 @@ async def store_event_file(
                 source_type=source_type or "PACKAGE",
                 uploaded_by=uploaded_by,
                 request_id=request_id,
+                file_metadata=meta,
             )
             return [ef]
 
@@ -487,6 +490,7 @@ async def store_event_file(
             source_type=source_type or "PACKAGE",
             uploaded_by=uploaded_by,
             request_id=request_id,
+            file_metadata=meta,
         )
         stored.append(package)
         for mem in member_payloads:
@@ -502,6 +506,7 @@ async def store_event_file(
                         data=mem_data,
                         uploaded_by=uploaded_by,
                         request_id=request_id,
+                        file_metadata=meta,
                     )
                 )
                 continue
@@ -514,6 +519,7 @@ async def store_event_file(
                 source_type=None,
                 uploaded_by=uploaded_by,
                 request_id=request_id,
+                file_metadata=meta,
             )
             stored.append(child)
         return stored
@@ -529,6 +535,7 @@ async def store_event_file(
             source_type=source_type,
             uploaded_by=uploaded_by,
             request_id=request_id,
+            file_metadata=meta,
         )
 
     ef = await _store_bytes(
@@ -540,6 +547,7 @@ async def store_event_file(
         source_type=source_type,
         uploaded_by=uploaded_by,
         request_id=request_id,
+        file_metadata=meta,
     )
     return [ef]
 
@@ -565,6 +573,7 @@ async def store_acquired_bytes(
             source_type=source_type,
             uploaded_by=uploaded_by,
             request_id=request_id,
+            file_metadata=file_metadata,
         )
     ef = await _store_bytes(
         db,
@@ -594,6 +603,7 @@ async def _store_cev_and_derivatives(
     source_type: Optional[str] = None,
     uploaded_by: Optional[str] = None,
     request_id: Optional[str] = None,
+    file_metadata: Optional[dict] = None,
 ) -> list[EventFile]:
     """Store CEV and, when convertible, derived CFG+DAT (+ optional settings)."""
     from app.services.vendor_formats import cev_to_comtrade_files
@@ -608,6 +618,7 @@ async def _store_cev_and_derivatives(
         source_type=source_type or "COMTRADE",
         uploaded_by=uploaded_by,
         request_id=request_id,
+        file_metadata=file_metadata,
     )
     stored.append(original)
 
@@ -622,6 +633,7 @@ async def _store_cev_and_derivatives(
             source_type="COMTRADE",
             uploaded_by=uploaded_by,
             request_id=request_id,
+            file_metadata=file_metadata,
         )
         dat_ef = await _store_bytes(
             db,
@@ -632,6 +644,7 @@ async def _store_cev_and_derivatives(
             source_type="COMTRADE",
             uploaded_by=uploaded_by,
             request_id=request_id,
+            file_metadata=file_metadata,
         )
         stored.extend([cfg_ef, dat_ef])
         settings_text = converted.get("settings_text") or ""
@@ -645,6 +658,7 @@ async def _store_cev_and_derivatives(
                 source_type="SETTINGS",
                 uploaded_by=uploaded_by,
                 request_id=request_id,
+                file_metadata=file_metadata,
             )
             stored.append(set_ef)
     return stored

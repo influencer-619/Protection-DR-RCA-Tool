@@ -451,6 +451,11 @@ class AnalysisPipeline:
             electrical_flags["intertrip"] = True
         if "reclose" in tl_types:
             electrical_flags["switching_correlated"] = True
+        # Breaker status change → close/open context for switch-onto-fault RCA
+        if "52a_change" in tl_types or "52b_change" in tl_types:
+            electrical_flags["breaker_close"] = True
+            electrical_flags["switching_correlated"] = True
+        electrical_flags["timeline_event_types"] = sorted({str(t) for t in tl_types if t})
 
         electrical_flags["digital_channel_names"] = [
             getattr(ch, "name", None) or str(ch)

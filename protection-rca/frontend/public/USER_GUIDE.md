@@ -553,7 +553,8 @@ On an IED row click **Open**. The breadcrumb shows **IED workspace**.
 
 - **Plant path**: Substation › Voltage › Bay › Feeder
 - **IED name** as the title
-- Chips: relay **Tag**, **kV** (from the voltage level), **IP** (once an IEC 61850 connection has been saved)
+- Chips: relay **Tag**, **kV** (from the voltage level), **IP** (once an IEC 61850 connection has been saved), **Remote** (opposite-end IED when configured)
+- **Remote IED (opposite end)** dropdown — pick the peer relay for 87L / multi-end work. The link is **bidirectional** (A↔B). Clear with **None — single-end only**. Optional; leave unset for single-ended analysis.
 - Stats: **Events** (total for this relay) · **In review** · **Last event** (how long ago the newest event occurred)
 
 ### Acquire panel — two modes
@@ -565,7 +566,14 @@ A segmented switch at the top of the panel selects how records come in:
 | **Fetch from IED** | The relay is reachable over the network (IEC 61850 / MMS). See [§10](#10-fetching-records-from-the-relay-iec-61850) and [§11](#11-automatic-fetch-auto-fetch) |
 | **Manual upload** | You have files exported from the relay tool, e-mail, USB, etc. See [§14](#14-uploading-files-manually) |
 
-**Manual upload** shows a drag-and-drop zone. Dropped or picked files appear as **file chips** (name + size, with × to remove) before you confirm; **Clear N files** empties the list.
+**Manual upload** shows **two** drop zones:
+
+| Zone | Stamp | Use for |
+|------|-------|---------|
+| **LOCAL** | `end_label = LOCAL` | COMTRADE / settings / SOE from **this** IED |
+| **REMOTE** (optional) | `end_label = REMOTE` | Files from the opposite end (label shows the Remote IED name when set) |
+
+Both zones feed **one event**. Dropped files appear as chips (× to remove); **Clear N files** empties both lists. Analysis auto-pairs LOCAL + REMOTE COMTRADE when both are present (`multi_end`).
 
 | Package | Button label | What happens |
 |---------|--------------|--------------|
@@ -732,6 +740,9 @@ Cannot enable without an IP. Settings save immediately on the IED.
 | **Events** | On | Download / read SOE / protection status **with every new DR** (then matched per [§10.7](#107-matching-soe--events-to-the-right-dr)) |
 | **Start analysis automatically** | On | Queue analysis when COMTRADE + settings are present |
 | **Also import records already on the IED** | Off | Editable only while auto-fetch is **off**. First cycle also imports the backlog (still max 10 per cycle) |
+| **Also fetch remote IED** | Off | Requires a **Remote IED** on this workspace. When on, after each local DR is imported (stamped **LOCAL**), the server also pulls a matching new record from the peer into the **same event** (stamped **REMOTE**). Peer offline / no new remote DR → local cycle still succeeds |
+
+Files acquired by auto-fetch (and manual Fetch) are stamped **LOCAL** for the polled IED. **Also fetch remote IED** stays **off by default** so enabling auto-fetch never silently polls another substation.
 
 **SCL is not fetched by auto-fetch** (use manual Fetch if needed).
 
@@ -855,11 +866,13 @@ Event ID · Date/Time · Location (substation + bay) · Relay · **Fault / eleme
 ### From the IED workspace (primary manual path)
 
 1. **Plant** → expand to the IED → **Open**
-2. Select **Manual upload**
-3. Optionally type a description; drag and drop files (or click the zone to pick them); check the file chips
-4. Click **Upload, analyse & open summary** (complete package) or **Upload & create event** (incomplete)
-5. For a complete package: analysis starts and the **Summary** tab opens. For incomplete: open **Files**, add the missing COMTRADE/settings members, then **Start analysis**
-6. Note **SHA-256** on the event **Files** tab when you need integrity / chain of custody
+2. Optionally set **Remote IED (opposite end)** for 87L / multi-end
+3. Select **Manual upload**
+4. Drop **this IED’s** files in the **LOCAL** zone; drop the opposite end’s files in **REMOTE** (optional)
+5. Optionally type a description; check the file chips
+6. Click **Upload, analyse & open summary** (complete package) or **Upload & create event** (incomplete)
+7. For a complete package: analysis starts and the **Summary** tab opens. For incomplete: open **Files**, add the missing COMTRADE/settings members, then **Start analysis**
+8. On **Files**, the **End** column shows LOCAL / REMOTE (editable for analysts)
 
 Original files are stored **immutably** (content-addressed; not overwritten).
 

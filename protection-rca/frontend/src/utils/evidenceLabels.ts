@@ -70,6 +70,10 @@ const EVIDENCE_LABELS: Record<string, string> = {
   event_class_SWITCHING: 'DFR event class: SWITCHING',
   event_class_DISTURBANCE: 'DFR event class: DISTURBANCE',
   event_class_UNKNOWN: 'DFR event class: UNKNOWN',
+  switch_onto_fault_possible: 'Switch-onto-fault pattern possible',
+  switch_onto_fault_context: 'Close / energize into fault context',
+  sotf_element_asserted: 'SOTF digital / element asserted',
+  breaker_close_observed: 'Breaker close / 52a change observed',
 };
 
 const EVENT_CLASS_LABELS: Record<string, string> = {

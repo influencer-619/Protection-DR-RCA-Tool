@@ -53,12 +53,17 @@ async def upload_event_files(
     user: User = Depends(require_role(Role.ANALYST)),
     files: list[UploadFile] = File(...),
     source_type: Optional[str] = Form(None),
+    end_label: Optional[str] = Form(None),
 ) -> list[EventFileOut]:
     event = await event_service.get_event(db, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
+    label = (end_label or "LOCAL").strip().upper() or "LOCAL"
+    if label not in ("LOCAL", "REMOTE") and not label.startswith("REMOTE"):
+        raise HTTPException(status_code=400, detail="end_label must be LOCAL or REMOTE")
+    file_meta = {"end_label": label}
     allowed = set(get_settings().allowed_extensions)
     stored: list[EventFileOut] = []
     skipped: list[str] = []
@@ -76,6 +81,7 @@ async def upload_event_files(
                 source_type=source_type,
                 uploaded_by=user.id,
                 request_id=getattr(request.state, "request_id", None),
+                file_metadata=file_meta,
             )
         except HTTPException as exc:
             # Do not fail the whole DIGSI/MiCOM folder drop for one side file

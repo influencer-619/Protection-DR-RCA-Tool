@@ -92,7 +92,7 @@ export function WaveformPage({ popout = false }: Props) {
   useEffect(() => {
     if (!popout) return;
     const prev = document.title;
-    document.title = 'Waveform viewer · Protection RCA';
+    document.title = 'Waveform viewer · Protection Expert System';
     // Browser zoom enlarges content past the viewport — allow document scroll
     // (default #root { height:100% } + overflow:hidden would trap the view).
     const root = document.getElementById('root');

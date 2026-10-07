@@ -73,7 +73,7 @@
 .heroInner {
   position: relative;
   z-index: 1;
-  max-width: 420px;
+  max-width: min(520px, 100%);
 }
 
 .mark {
@@ -104,11 +104,12 @@
 
 .heroTitle {
   margin: 0 0 12px;
-  font-size: clamp(1.85rem, 3.8vw, 2.4rem);
+  font-size: clamp(1.35rem, 2.6vw, 2.15rem);
   font-weight: 600;
   letter-spacing: -0.02em;
-  line-height: 1.15;
+  line-height: 1.2;
   color: #fff;
+  white-space: nowrap;
 }
 
 .heroLead {
@@ -328,7 +329,8 @@
   }
 
   .heroTitle {
-    font-size: 1.75rem;
+    font-size: clamp(1.15rem, 5.5vw, 1.65rem);
+    white-space: nowrap;
   }
 
   .heroWave {

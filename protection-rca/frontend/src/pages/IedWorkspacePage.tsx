@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+  type Ref,
+} from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { format, formatDistanceToNow } from 'date-fns';
 import { api } from '@/services/api';
-import type { Event, IedContext, Iec61850FetchResult } from '@/types';
+import type { Event, IedContext, Iec61850FetchResult, Relay } from '@/types';
 import { EventStatusCell } from '@/components/EventStatusCell';
 import { Iec61850FetchPanel } from '@/components/Iec61850FetchPanel';
 import { UPLOAD_ACCEPT, UPLOAD_ACCEPT_HINT, hasComtradePackage } from '@/utils/uploadAccept';
@@ -20,31 +29,43 @@ function eventTime(ev: Event): Date {
   return parseApiDate(ev.created_at) ?? new Date(0);
 }
 
+function mergeFiles(prev: File[], list: FileList | File[]): File[] {
+  const seen = new Set(prev.map((f) => `${f.name}:${f.size}`));
+  return [...prev, ...Array.from(list).filter((f) => !seen.has(`${f.name}:${f.size}`))];
+}
+
 export function IedWorkspacePage() {
   const { iedId } = useParams<{ iedId: string }>();
   const navigate = useNavigate();
   const [ctx, setCtx] = useState<IedContext | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
+  const [allIeds, setAllIeds] = useState<Relay[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [files, setFiles] = useState<File[]>([]);
-  const [dragging, setDragging] = useState(false);
+  const [localFiles, setLocalFiles] = useState<File[]>([]);
+  const [remoteFiles, setRemoteFiles] = useState<File[]>([]);
+  const [draggingLocal, setDraggingLocal] = useState(false);
+  const [draggingRemote, setDraggingRemote] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [savingPeer, setSavingPeer] = useState(false);
   const [description, setDescription] = useState('');
   const [source, setSource] = useState<'iec61850' | 'manual'>('iec61850');
-  const fileInput = useRef<HTMLInputElement>(null);
+  const localInput = useRef<HTMLInputElement>(null);
+  const remoteInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     if (!iedId) return;
     setLoading(true);
     setError(null);
     try {
-      const [context, evs] = await Promise.all([
+      const [context, evs, ieds] = await Promise.all([
         api.getIedContext(iedId),
         api.getEvents({ relay_id: iedId }),
+        api.listIeds().catch(() => [] as Relay[]),
       ]);
       setCtx(context);
       setEvents(evs);
+      setAllIeds(ieds.filter((r) => r.id !== iedId));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load IED');
     } finally {
@@ -64,46 +85,66 @@ export function IedWorkspacePage() {
       .catch(() => undefined);
   }, [iedId]);
 
-  const addFiles = (list: FileList | File[]) => {
-    const incoming = Array.from(list);
-    setFiles((prev) => {
-      const seen = new Set(prev.map((f) => `${f.name}:${f.size}`));
-      return [...prev, ...incoming.filter((f) => !seen.has(`${f.name}:${f.size}`))];
-    });
-  };
+  const remoteIed = ctx?.remote_ied || ctx?.ied.remote_ied || null;
+  const remoteLabel = remoteIed
+    ? `${remoteIed.name}${remoteIed.relay_tag ? ` (${remoteIed.relay_tag})` : ''}`
+    : null;
 
-  const onDrop = (e: DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    addFiles(e.dataTransfer.files);
+  const onSetRemotePeer = async (peerId: string) => {
+    if (!iedId) return;
+    setSavingPeer(true);
+    setError(null);
+    try {
+      const updated = await api.updateIed(iedId, {
+        remote_relay_id: peerId || null,
+      });
+      setCtx((prev) =>
+        prev
+          ? {
+              ...prev,
+              ied: updated,
+              remote_ied: updated.remote_ied ?? null,
+            }
+          : prev,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save remote IED');
+    } finally {
+      setSavingPeer(false);
+    }
   };
 
   const onUploadAnalyse = async (e?: FormEvent) => {
     e?.preventDefault();
-    if (!iedId || !files.length) return;
+    if (!iedId || (!localFiles.length && !remoteFiles.length)) return;
     setBusy(true);
     setError(null);
     try {
       const created = await api.createEvent({
         relay_id: iedId,
         description: description.trim() || undefined,
-        // Leave event_datetime empty — analysis fills relay DR time from COMTRADE.
       });
-      await api.uploadEventFiles(created.id, files);
-      const names = files.map((f) => f.name);
-      // COMTRADE present → run full pipeline, then land on one-page summary
+      if (localFiles.length) {
+        await api.uploadEventFiles(created.id, localFiles, { end_label: 'LOCAL' });
+      }
+      if (remoteFiles.length) {
+        await api.uploadEventFiles(created.id, remoteFiles, { end_label: 'REMOTE' });
+      }
+      const names = [...localFiles, ...remoteFiles].map((f) => f.name);
       if (hasComtradePackage(names)) {
         try {
           await api.startAnalysis(created.id, true);
         } catch {
-          /* still open summary; user can re-run analysis from the event header */
+          /* still open summary */
         }
-        setFiles([]);
+        setLocalFiles([]);
+        setRemoteFiles([]);
         setDescription('');
         navigate(`/events/${created.id}/summary`);
         return;
       }
-      setFiles([]);
+      setLocalFiles([]);
+      setRemoteFiles([]);
       setDescription('');
       navigate(`/events/${created.id}/files`);
     } catch (err) {
@@ -132,6 +173,97 @@ export function IedWorkspacePage() {
     return { total: events.length, latest: sorted[0], review, sorted };
   }, [events]);
 
+  const dropZone = (
+    end: 'LOCAL' | 'REMOTE',
+    files: File[],
+    setFiles: (fn: (prev: File[]) => File[]) => void,
+    dragging: boolean,
+    setDragging: (v: boolean) => void,
+    inputRef: Ref<HTMLInputElement>,
+    title: string,
+    subtitle: string,
+  ) => {
+    const onDrop = (ev: DragEvent) => {
+      ev.preventDefault();
+      setDragging(false);
+      setFiles((prev) => mergeFiles(prev, ev.dataTransfer.files));
+    };
+    const openPicker = () => {
+      const el = typeof inputRef === 'object' && inputRef && 'current' in inputRef ? inputRef.current : null;
+      el?.click();
+    };
+    return (
+      <div className={styles.zone}>
+        <div className={styles.zoneHead}>
+          <span className={end === 'LOCAL' ? styles.badgeLocal : styles.badgeRemote}>{end}</span>
+          <div>
+            <strong>{title}</strong>
+            <p className={styles.zoneSub}>{subtitle}</p>
+          </div>
+        </div>
+        <div
+          className={`${styles.drop} ${dragging ? styles.dragging : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={onDrop}
+          onClick={openPicker}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') openPicker();
+          }}
+        >
+          <div className={styles.dropIcon} aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M12 16V4M7 9l5-5 5 5" />
+              <path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" />
+            </svg>
+          </div>
+          <strong>Drop files here</strong>
+          <span>
+            or <span className={styles.linkish}>browse</span>
+          </span>
+          <span className={styles.dropHint}>{UPLOAD_ACCEPT_HINT}</span>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            hidden
+            accept={UPLOAD_ACCEPT}
+            onChange={(e) => {
+              if (e.target.files?.length) setFiles((prev) => mergeFiles(prev, e.target.files!));
+              e.target.value = '';
+            }}
+          />
+        </div>
+        {files.length > 0 && (
+          <ul className={styles.fileList}>
+            {files.map((f) => (
+              <li key={`${end}-${f.name}-${f.size}`} className={styles.fileChip}>
+                <span className={styles.fileExt}>{f.name.split('.').pop()?.toUpperCase()}</span>
+                <span className={styles.fileName} title={f.name}>
+                  {f.name}
+                </span>
+                <span className={styles.fileSize}>{formatSize(f.size)}</span>
+                <button
+                  type="button"
+                  className={styles.fileRemove}
+                  onClick={() => setFiles((prev) => prev.filter((x) => x !== f))}
+                  aria-label={`Remove ${f.name}`}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  };
+
   if (loading) return <p className={`page ${styles.muted}`}>Loading IED…</p>;
   if (!ctx) {
     return (
@@ -148,6 +280,8 @@ export function IedWorkspacePage() {
     ctx.bay?.name,
     ctx.feeder?.name,
   ].filter(Boolean) as string[];
+
+  const totalManual = localFiles.length + remoteFiles.length;
 
   return (
     <div className={`page ${styles.page}`}>
@@ -186,7 +320,31 @@ export function IedWorkspacePage() {
                 IP <span className="mono">{ctx.ied.ip_address}</span>
               </span>
             )}
+            <span className={`${styles.chip} ${remoteIed ? styles.chipRemote : ''}`}>
+              Remote{' '}
+              {remoteIed ? (
+                <Link to={`/plant/ieds/${remoteIed.id}`}>{remoteIed.name}</Link>
+              ) : (
+                <span className={styles.mutedInline}>not set</span>
+              )}
+            </span>
           </div>
+          <label className={styles.remotePicker}>
+            <span>Remote IED (opposite end)</span>
+            <select
+              className="form-control"
+              disabled={savingPeer}
+              value={remoteIed?.id || ''}
+              onChange={(e) => void onSetRemotePeer(e.target.value)}
+            >
+              <option value="">None — single-end only</option>
+              {allIeds.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name} ({r.relay_tag})
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <div className={styles.heroStats}>
           <div className={styles.stat}>
@@ -216,7 +374,8 @@ export function IedWorkspacePage() {
             <div>
               <h2>Acquire data for analysis</h2>
               <p className={styles.panelSub}>
-                Each disturbance record becomes an event under this IED.
+                Each disturbance record becomes an event under this IED. Set Remote IED for 87L /
+                multi-end pairing.
               </p>
             </div>
             <div className={styles.segment} role="tablist">
@@ -255,69 +414,34 @@ export function IedWorkspacePage() {
                 iedId={iedId!}
                 onFetched={(r) => void onFetched(r)}
                 onAutoFetched={refreshEvents}
+                remoteIedLabel={remoteLabel}
               />
             ) : (
               <form className={styles.upload} onSubmit={(ev) => void onUploadAnalyse(ev)}>
-                <div
-                  className={`${styles.drop} ${dragging ? styles.dragging : ''}`}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragging(true);
-                  }}
-                  onDragLeave={() => setDragging(false)}
-                  onDrop={onDrop}
-                  onClick={() => fileInput.current?.click()}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') fileInput.current?.click();
-                  }}
-                >
-                  <div className={styles.dropIcon} aria-hidden="true">
-                    <svg viewBox="0 0 24 24">
-                      <path d="M12 16V4M7 9l5-5 5 5" />
-                      <path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" />
-                    </svg>
-                  </div>
-                  <strong>Drop COMTRADE, settings and SOE files here</strong>
-                  <span>
-                    or <span className={styles.linkish}>browse your computer</span>
-                  </span>
-                  <span className={styles.dropHint}>{UPLOAD_ACCEPT_HINT}</span>
-                  <input
-                    ref={fileInput}
-                    type="file"
-                    multiple
-                    hidden
-                    accept={UPLOAD_ACCEPT}
-                    onChange={(e) => {
-                      if (e.target.files?.length) addFiles(e.target.files);
-                      e.target.value = '';
-                    }}
-                  />
+                <div className={styles.zones}>
+                  {dropZone(
+                    'LOCAL',
+                    localFiles,
+                    setLocalFiles,
+                    draggingLocal,
+                    setDraggingLocal,
+                    localInput,
+                    'Local end (this IED)',
+                    'COMTRADE / settings / SOE from this relay',
+                  )}
+                  {dropZone(
+                    'REMOTE',
+                    remoteFiles,
+                    setRemoteFiles,
+                    draggingRemote,
+                    setDraggingRemote,
+                    remoteInput,
+                    remoteLabel ? `Remote end — ${remoteLabel}` : 'Remote end (optional)',
+                    remoteLabel
+                      ? `Files from ${remoteLabel}; stamped REMOTE for multi-end`
+                      : 'Opposite-end files; set Remote IED above for a clearer label',
+                  )}
                 </div>
-
-                {files.length > 0 && (
-                  <ul className={styles.fileList}>
-                    {files.map((f) => (
-                      <li key={`${f.name}-${f.size}`} className={styles.fileChip}>
-                        <span className={styles.fileExt}>{f.name.split('.').pop()?.toUpperCase()}</span>
-                        <span className={styles.fileName} title={f.name}>
-                          {f.name}
-                        </span>
-                        <span className={styles.fileSize}>{formatSize(f.size)}</span>
-                        <button
-                          type="button"
-                          className={styles.fileRemove}
-                          onClick={() => setFiles((prev) => prev.filter((x) => x !== f))}
-                          aria-label={`Remove ${f.name}`}
-                        >
-                          ×
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
 
                 <input
                   className="form-control"
@@ -327,23 +451,31 @@ export function IedWorkspacePage() {
                 />
 
                 <div className={styles.actions}>
-                  <button type="submit" className="btn btn-primary" disabled={busy || !files.length}>
+                  <button type="submit" className="btn btn-primary" disabled={busy || !totalManual}>
                     {busy
                       ? 'Uploading & analysing…'
-                      : hasComtradePackage(files.map((f) => f.name))
+                      : hasComtradePackage([...localFiles, ...remoteFiles].map((f) => f.name))
                         ? 'Upload, analyse & open summary'
                         : 'Upload & create event'}
                   </button>
-                  {files.length > 0 && (
-                    <button type="button" className="btn" onClick={() => setFiles([])}>
-                      Clear {files.length} file{files.length === 1 ? '' : 's'}
+                  {totalManual > 0 && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setLocalFiles([]);
+                        setRemoteFiles([]);
+                      }}
+                    >
+                      Clear {totalManual} file{totalManual === 1 ? '' : 's'}
                     </button>
                   )}
-                  {files.length > 0 && !hasComtradePackage(files.map((f) => f.name)) && (
-                    <span className={styles.note}>
-                      Add CFG + DAT (or CFF) and a settings file to start analysis automatically.
-                    </span>
-                  )}
+                  {totalManual > 0 &&
+                    !hasComtradePackage([...localFiles, ...remoteFiles].map((f) => f.name)) && (
+                      <span className={styles.note}>
+                        Add CFG + DAT (or CFF) and a settings file to start analysis automatically.
+                      </span>
+                    )}
                 </div>
               </form>
             )}

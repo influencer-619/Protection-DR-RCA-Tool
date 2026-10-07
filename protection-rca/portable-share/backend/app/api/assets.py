@@ -43,6 +43,7 @@ from app.schemas.assets import (
     RelayCreate,
     RelayOut,
     RelayUpdate,
+    RemoteIedOut,
     SubstationCreate,
     SubstationOut,
     SubstationUpdate,
@@ -50,8 +51,17 @@ from app.schemas.assets import (
     VoltageLevelOut,
     VoltageLevelUpdate,
 )
+from app.services import remote_peer
 
 router = APIRouter(prefix="/api", tags=["plant"])
+
+
+async def _relay_out(db: DbSession, row: Relay) -> RelayOut:
+    out = RelayOut.model_validate(row)
+    peer = await remote_peer.resolve_remote_relay(db, row)
+    if peer is not None:
+        out.remote_ied = RemoteIedOut.model_validate(remote_peer.remote_summary(row, peer))
+    return out
 
 
 def _slug_code(name: str, *, max_len: int = 64) -> str:
@@ -497,13 +507,15 @@ async def get_ied_context(
     if vl:
         parts.append(vl.name)
     parts.extend([bay.name, feeder.name, row.name])
+    ied_out = await _relay_out(db, row)
     return IedContextOut(
-        ied=RelayOut.model_validate(row),
+        ied=ied_out,
         feeder=FeederOut.model_validate(feeder),
         bay=BayOut.model_validate(bay),
         voltage_level=VoltageLevelOut.model_validate(vl) if vl else None,
         substation=SubstationOut.model_validate(sub),
         path_label=" / ".join(parts),
+        remote_ied=ied_out.remote_ied,
     )
 
 
@@ -540,8 +552,17 @@ async def update_ied(
         row.model = data["model"]
     if "firmware_version" in data:
         row.firmware_version = data["firmware_version"]
+    if "remote_relay_id" in body.model_fields_set:
+        raw = body.remote_relay_id
+        peer_id = str(raw).strip() if raw else None
+        if peer_id == "":
+            peer_id = None
+        try:
+            await remote_peer.set_remote_peer(db, row, peer_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.flush()
-    return RelayOut.model_validate(row)
+    return await _relay_out(db, row)
 
 
 @router.delete("/ieds/{ied_id}", status_code=status.HTTP_204_NO_CONTENT)

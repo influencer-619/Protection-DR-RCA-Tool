@@ -285,7 +285,7 @@ export function EventsListPage() {
               <tr>
                 <th>Event ID</th>
                 <th title="Disturbance time from the relay COMTRADE record">DR time</th>
-                <th title="When this event was created in Protection RCA">Created</th>
+                <th title="When this event was created in Protection Expert System">Created</th>
                 <th>Location</th>
                 <th>Relay</th>
                 <th>Fault / element</th>

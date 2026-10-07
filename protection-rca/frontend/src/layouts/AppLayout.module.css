@@ -67,9 +67,12 @@
 
 .brandName {
   font-weight: 600;
-  font-size: 0.88rem;
+  font-size: 0.78rem;
   letter-spacing: -0.01em;
   color: var(--sb-text-strong);
+  line-height: 1.2;
+  white-space: normal;
+  max-width: 148px;
 }
 
 .brandSub {

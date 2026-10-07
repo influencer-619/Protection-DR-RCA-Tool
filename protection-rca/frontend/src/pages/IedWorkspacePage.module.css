@@ -283,6 +283,90 @@
   gap: 12px;
 }
 
+.zones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@container (max-width: 720px) {
+  .zones {
+    grid-template-columns: 1fr;
+  }
+}
+
+.zone {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.zoneHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.zoneHead strong {
+  display: block;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+}
+
+.zoneSub {
+  margin: 2px 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.badgeLocal,
+.badgeRemote {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 4px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.badgeLocal {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.badgeRemote {
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+}
+
+.remotePicker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  max-width: 360px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.remotePicker select {
+  font-size: 0.82rem;
+}
+
+.chipRemote a {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.mutedInline {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
 .drop {
   display: flex;
   flex-direction: column;

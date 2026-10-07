@@ -279,6 +279,14 @@ async def _execute_stage(db: AsyncSession, event: Event, stage: JobStage) -> Non
             )
             return
 
+        # Pair LOCAL/REMOTE COMTRADE ends into event.extra.multi_end when present
+        try:
+            from app.services.multi_comtrade import ensure_multi_end_from_labels
+
+            await ensure_multi_end_from_labels(db, event, commit=False)
+        except Exception:  # noqa: BLE001
+            logger.debug("multi_end auto-pair skipped for event %s", event.id, exc_info=True)
+
         # Run full engineering pipeline once (fault, protection, timeline, RCA…)
         from app.services.engineering_persist import persist_engineering_analysis
 

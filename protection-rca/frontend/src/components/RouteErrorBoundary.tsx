@@ -105,7 +105,7 @@ export class RouteErrorBoundary extends Component<Props, State> {
           ) : (
             <>
               Try refreshing the browser. If this keeps happening, check that the API is still
-              running in the Protection RCA control window.
+              running in the Protection Expert System control window.
             </>
           )}
         </p>

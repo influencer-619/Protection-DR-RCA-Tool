@@ -104,7 +104,7 @@ const PAGE_TITLES: Array<[RegExp, string]> = [
 ];
 
 function pageTitle(path: string): string {
-  return PAGE_TITLES.find(([re]) => re.test(path))?.[1] ?? 'Protection RCA';
+  return PAGE_TITLES.find(([re]) => re.test(path))?.[1] ?? 'Protection Expert System';
 }
 
 export function AppLayout() {
@@ -142,8 +142,8 @@ export function AppLayout() {
             </svg>
           </div>
           <div className={styles.brandText}>
-            <div className={styles.brandName}>Protection RCA</div>
-            <div className={styles.brandSub}>Disturbance Analysis</div>
+            <div className={styles.brandName}>Protection Expert System</div>
+            <div className={styles.brandSub}>IEC 61850 · DR / RCA</div>
           </div>
         </div>
 
@@ -188,16 +188,16 @@ export function AppLayout() {
       <div className={styles.main}>
         <header className={styles.topbar}>
           <div className={styles.crumbs}>
-            <span className={styles.crumbRoot}>Protection RCA</span>
+            <span className={styles.crumbRoot}>Protection Expert System</span>
             <svg className={styles.crumbSep} viewBox="0 0 24 24" aria-hidden="true">
               <path d="M9 6l6 6-6 6" />
             </svg>
             <span className={styles.crumbPage}>{pageTitle(location.pathname)}</span>
           </div>
           <div className={styles.userBlock}>
-            <span className={styles.envChip} title="Disturbance record / COMTRADE analysis">
+            <span className={styles.envChip} title="Protection Expert System — disturbance record analysis">
               <span className={styles.envDot} />
-              COMTRADE RCA
+              PES
             </span>
             <ThemeToggle className={styles.iconBtn} iconOnly />
             <div className={styles.userChip}>

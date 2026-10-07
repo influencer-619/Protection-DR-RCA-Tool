@@ -164,6 +164,14 @@ export interface Asset {
   is_active: boolean;
 }
 
+export interface RemoteIed {
+  id: string;
+  name: string;
+  relay_tag: string;
+  ip_address?: string | null;
+  substation_id?: string | null;
+}
+
 export interface Relay {
   id: string;
   substation_id?: string | null;
@@ -178,6 +186,7 @@ export interface Relay {
   ip_address?: string | null;
   is_active: boolean;
   created_at?: string;
+  remote_ied?: RemoteIed | null;
 }
 
 export interface Iec61850Vendor {
@@ -280,6 +289,8 @@ export interface Iec61850AutoFetchSettings {
   include_events: boolean;
   auto_analyse: boolean;
   import_existing: boolean;
+  /** When a Remote IED is set, also pull peer records into the same event as REMOTE (default off). */
+  also_fetch_remote?: boolean;
 }
 
 export interface Iec61850AutoFetch extends Iec61850AutoFetchSettings {
@@ -294,6 +305,7 @@ export interface Iec61850AutoFetch extends Iec61850AutoFetchSettings {
   baseline_done: boolean;
   scheduler_running: boolean;
   interval_choices: number[];
+  remote_fetch?: { status?: string; message?: string; remote_ied?: string; files_added?: number } | null;
 }
 
 export interface Iec61850ConnectionInput {
@@ -353,6 +365,7 @@ export interface IedContext {
   voltage_level?: VoltageLevel | null;
   substation: Substation;
   path_label: string;
+  remote_ied?: RemoteIed | null;
 }
 
 export interface Breaker {

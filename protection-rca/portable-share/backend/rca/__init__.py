@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
@@ -10,6 +11,13 @@ from common.rules_path import load_yaml, resolve_rules_root
 from consistency.engine import ConsistencyResult
 from fault_analysis import FaultClassificationResult, motor_start_context
 from protection.models import ProtectionAssessment
+
+_SOTF_NAME_RE = re.compile(
+    r"\bSOTF\b|SWITCH[\s_\-]?ON[\s_\-]?TO[\s_\-]?FAULT|"
+    r"CLOSE[\s_\-]?ON[\s_\-]?TO[\s_\-]?FAULT|SWITCH[\s_\-]?ONTO|"
+    r"ENERGI[sz]E[\s_\-]?ON[\s_\-]?FAULT",
+    re.I,
+)
 
 
 DEFAULT_WEIGHTS = {
@@ -34,6 +42,7 @@ FAULT_SIDE_HYPOTHESES = frozenset(
         "INSULATION_FLASHOVER",
         "EXTERNAL_GRID_DISTURBANCE",  # 27/59/81-leaning
         "SWITCHING_TRANSIENT",
+        "SWITCH_ONTO_FAULT",  # close / energize into a shunt fault (SOTF)
         "MOTOR_START",
     }
 )
@@ -140,6 +149,32 @@ def _protection_assert_token(*, any_pickup: bool, any_trip: bool) -> Optional[st
     if any_trip:
         return "protection_trip_asserted"
     return None
+
+
+def _sotf_name_hit(names: list[Any] | tuple[Any, ...] | None) -> bool:
+    """True when a digital / channel name indicates switch-onto-fault logic."""
+    for n in names or []:
+        if n is None:
+            continue
+        if _SOTF_NAME_RE.search(str(n)):
+            return True
+    return False
+
+
+def _sotf_from_assessments(assessments: list[ProtectionAssessment]) -> bool:
+    """True when an assessment evidence id / element label looks like SOTF."""
+    for a in assessments or []:
+        if _SOTF_NAME_RE.search(str(getattr(a, "element", "") or "")):
+            return True
+        for eid in getattr(a, "evidence_ids", None) or []:
+            if _SOTF_NAME_RE.search(str(eid)):
+                return True
+        meta = getattr(a, "metadata", None)
+        if isinstance(meta, dict):
+            for key in ("channel", "channel_name", "digital", "source"):
+                if _SOTF_NAME_RE.search(str(meta.get(key) or "")):
+                    return True
+    return False
 
 
 def _protection_assert_phrase(bag: set[str]) -> Optional[str]:
@@ -467,9 +502,26 @@ def _hypothesis_scheme_fit(hid: str, bag: set[str]) -> str:
         return "open"
 
     if hid == "SWITCHING_TRANSIENT":
+        # Trip + classified fault → prefer SWITCH_ONTO_FAULT / zone hyps
+        if "fault_classified" in bag and "protection_operated" in bag:
+            return "mismatch"
         if "switching_event_correlated" in bag:
             return "match"
         return "pending" if zones else "open"
+
+    if hid == "SWITCH_ONTO_FAULT":
+        if "switch_onto_fault_possible" in bag or "sotf_element_asserted" in bag:
+            return "match"
+        if (
+            "fault_classified" in bag
+            and "protection_operated" in bag
+            and (
+                "switching_event_correlated" in bag
+                or "breaker_close_observed" in bag
+            )
+        ):
+            return "pending"
+        return "open"
 
     if hid == "MOTOR_START":
         if "motor_start_possible" in bag:
@@ -709,6 +761,7 @@ def _title(hid: str) -> str:
         "GENERATOR_INTERNAL_FAULT": "Generator internal fault",
         "EXTERNAL_GRID_DISTURBANCE": "External grid / system disturbance",
         "SWITCHING_TRANSIENT": "Transformer energization / switching",
+        "SWITCH_ONTO_FAULT": "Switch onto fault",
         "MOTOR_START": "Motor start / starting current",
         "RELAY_MISOPERATION": "Relay misoperation",
         "PROTECTION_SETTING_ERROR": "Protection setting error",
@@ -860,6 +913,7 @@ class HypothesisEngine:
                 "COMMUNICATION_FAILURE",
                 "INTERTRIP_OPERATION",
                 "SWITCHING_TRANSIENT",
+                "SWITCH_ONTO_FAULT",
             }:
                 # Cause/instrument hyps without their specific evidence stay INCONCLUSIVE
                 status = HypothesisStatus.INCONCLUSIVE.value
@@ -902,6 +956,17 @@ class HypothesisEngine:
                 status = HypothesisStatus.PROBABLE.value
                 if "motor_start_soe_or_ops_confirm" not in missing:
                     missing = missing + ["motor_start_soe_or_ops_confirm"]
+
+            # SOTF: CONFIRMED only with explicit SOTF digital or breaker-close + trip + fault
+            if (
+                hid == "SWITCH_ONTO_FAULT"
+                and status == HypothesisStatus.CONFIRMED.value
+                and "sotf_element_asserted" not in evidence_bag
+                and "breaker_close_observed" not in evidence_bag
+            ):
+                status = HypothesisStatus.PROBABLE.value
+                if "breaker_close_or_sotf_digital" not in missing:
+                    missing = missing + ["breaker_close_or_sotf_digital"]
 
             # Never promote mismatch / pending-cause above their gate
             if scheme_fit == "mismatch":
@@ -1029,6 +1094,24 @@ class HypothesisEngine:
                 HypothesisStatus.POSSIBLE.value, 0
             ):
                 return alt
+        # Prefer Switch onto fault over zone-primary when SOTF context is strong
+        # and scores are close (mechanism explains the trip better than zone alone).
+        sotf = next((h for h in ranked if h.hypothesis_id == "SWITCH_ONTO_FAULT"), None)
+        if (
+            sotf is not None
+            and top.hypothesis_id in ZONE_PRIMARY_HYPOTHESES
+            and STATUS_RANK.get(sotf.status, 0)
+            >= STATUS_RANK.get(HypothesisStatus.PROBABLE.value, 0)
+            and sotf.score + 0.05 >= top.score
+        ):
+            support = set(sotf.supporting_evidence or [])
+            if support & {
+                "sotf_element_asserted",
+                "switch_onto_fault_possible",
+                "breaker_close_observed",
+                "switch_onto_fault_context",
+            }:
+                return sotf
         return top
 
     def _collect_evidence(
@@ -1112,6 +1195,15 @@ class HypothesisEngine:
             bag.add("switching_event_correlated")
         if electrical_flags.get("external_event_correlated"):
             bag.add("external_event_correlated")
+        # Breaker close / 52a change (switch-onto-fault context)
+        tl_types = electrical_flags.get("timeline_event_types")
+        if not isinstance(tl_types, (list, tuple, set)):
+            tl_types = []
+        if electrical_flags.get("breaker_close") or any(
+            str(t) in ("52a_change", "52b_change") for t in tl_types
+        ):
+            bag.add("breaker_close_observed")
+            bag.add("switching_event_correlated")
         # Magnetizing inrush / transformer charging (H2 detector)
         det = electrical_flags.get("detectors") if isinstance(electrical_flags.get("detectors"), dict) else {}
         inrush = det.get("magnetizing_inrush") if isinstance(det, dict) else None
@@ -1135,12 +1227,30 @@ class HypothesisEngine:
         if motor.get("likely") or electrical_flags.get("motor_start"):
             bag.add("motor_start_possible")
             bag.add("switching_event_correlated")
+        # Switch-onto-fault (SOTF) digital / channel names
+        if _sotf_name_hit(list(dig_names)) or _sotf_from_assessments(assessments):
+            bag.add("sotf_element_asserted")
+            bag.add("switching_event_correlated")
         # Scheme-library tokens passed via electrical_flags["scheme_tokens"]
         scheme_toks = electrical_flags.get("scheme_tokens")
         if isinstance(scheme_toks, (list, set, tuple)):
             bag |= {str(t) for t in scheme_toks if t}
         elif isinstance(scheme_toks, dict):
             bag |= {str(t) for t in scheme_toks.keys() if t}
+
+        # Composite: close/energize into a shunt fault (not pickup-only inrush)
+        if (
+            "fault_classified" in bag
+            and "protection_operated" in bag
+            and "dfr_non_fault_event" not in bag
+            and (
+                "sotf_element_asserted" in bag
+                or "breaker_close_observed" in bag
+                or "switching_event_correlated" in bag
+            )
+        ):
+            bag.add("switch_onto_fault_possible")
+            bag.add("switch_onto_fault_context")
 
         if consistency.has_critical_setting_inconsistency:
             bag.add("setting_inconsistency_unverified")
@@ -1262,6 +1372,26 @@ class HypothesisEngine:
                 "magnetizing_inrush_possible",
                 "transformer_diff_picked_up",
                 "harmonic_evidence",
+            ):
+                if tok in bag and tok not in supporting:
+                    extras.append(tok)
+        if hid == "SWITCH_ONTO_FAULT":
+            for tok in (
+                "switch_onto_fault_possible",
+                "switch_onto_fault_context",
+                "sotf_element_asserted",
+                "breaker_close_observed",
+                "switching_event_correlated",
+                "fault_classified",
+                "fault_classified_strong",
+                "protection_operated",
+                "protection_pickup_with_trip",
+                "protection_trip_asserted",
+                "current_increase_observed",
+                "overcurrent_element_operated",
+                "distance_element_operated",
+                "differential_operated",
+                "ground_involved",
             ):
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
@@ -1453,6 +1583,11 @@ class HypothesisEngine:
             # Motor start DRs are not feeder shunt faults
             if "motor_start_possible" in bag:
                 score -= 0.40
+            # Explicit SOTF / close-into-fault → prefer SWITCH_ONTO_FAULT as primary
+            if "sotf_element_asserted" in bag:
+                score -= 0.35
+            elif "switch_onto_fault_possible" in bag:
+                score -= 0.28
             return min(max(score, 0.0), 1.0)
 
         if hid == "CABLE_FAULT":
@@ -1547,6 +1682,36 @@ class HypothesisEngine:
             # Prefer dedicated MOTOR_START when motor context is present
             if "motor_start_possible" in bag:
                 score -= 0.25
+            # Real trip into a classified fault → Switch onto fault / zone hyps, not energization
+            if "fault_classified" in bag and "protection_operated" in bag:
+                score -= 0.50
+            return min(max(score, 0.0), 1.0)
+
+        if hid == "SWITCH_ONTO_FAULT":
+            score = 0.08
+            if "fault_classified" in bag:
+                score += 0.28
+            if "fault_classified_strong" in bag:
+                score += 0.08
+            if "protection_operated" in bag or "trip_observed" in bag:
+                score += 0.22
+            if "sotf_element_asserted" in bag:
+                score += 0.32
+            if "breaker_close_observed" in bag:
+                score += 0.18
+            if "switch_onto_fault_possible" in bag:
+                score += 0.12
+            if "switching_event_correlated" in bag and "protection_operated" in bag:
+                score += 0.08
+            if "current_increase_observed" in bag:
+                score += 0.06
+            # Pure energization / motor start (no trip) must not look like SOTF
+            if "dfr_non_fault_event" in bag or "electrical_no_fault" in bag:
+                score -= 0.55
+            if "magnetizing_inrush_possible" in bag and "protection_operated" not in bag:
+                score -= 0.40
+            if "motor_start_possible" in bag and "protection_operated" not in bag:
+                score -= 0.30
             return min(max(score, 0.0), 1.0)
 
         if hid == "MOTOR_START":
@@ -1619,6 +1784,7 @@ class HypothesisEngine:
                 "BUS_ZONE_FAULT",
                 "GENERATOR_INTERNAL_FAULT",
                 "BREAKER_FAILURE",
+                "SWITCH_ONTO_FAULT",
             ):
                 return 0.80
             if hid in FAULT_SIDE_HYPOTHESES:
@@ -1652,6 +1818,8 @@ class HypothesisEngine:
                     return 0.45
                 return 0.55
             if hid == "INTERNAL_FEEDER_FAULT":
+                if "sotf_element_asserted" in bag:
+                    return 0.40
                 if "bus_diff_operated" in bag or "generator_diff_operated" in bag or "line_diff_operated" in bag:
                     return 0.30
                 if "transformer_diff_operated" in bag:
@@ -1682,6 +1850,14 @@ class HypothesisEngine:
                 if "voltage_element_operated" in bag or "frequency_element_operated" in bag:
                     return 0.80
                 return 0.40
+            if hid == "SWITCH_ONTO_FAULT":
+                if "sotf_element_asserted" in bag:
+                    return 0.92
+                if "switch_onto_fault_possible" in bag:
+                    return 0.85
+                if "breaker_close_observed" in bag and "protection_operated" in bag:
+                    return 0.80
+                return 0.45
             if hid == "BREAKER_FAILURE":
                 return 0.85 if "bf_logic_satisfied" in bag else 0.25
             if hid == "CT_SATURATION":
@@ -2012,6 +2188,32 @@ class HypothesisEngine:
                 ],
             }
 
+        if hid == "SWITCH_ONTO_FAULT":
+            bits: list[str] = []
+            if "sotf_element_asserted" in bag:
+                bits.append("SOTF digital / element asserted")
+            if "breaker_close_observed" in bag:
+                bits.append("breaker close / 52a change observed")
+            if "fault_classified" in bag:
+                bits.append(f"COMTRADE fault classified ({fault_bit})")
+            if "protection_operated" in bag:
+                bits.append(_protection_assert_phrase(bag) or "protection trip asserted")
+            detail = (" — " + "; ".join(bits) + ".") if bits else "."
+            return {
+                "statement": f"{title} is {status}{detail}",
+                "explanation": (
+                    "Switch-onto-fault (SOTF): breaker close / energize into a shunt fault "
+                    "with protection trip. Distinct from magnetizing inrush / energization "
+                    "(pickup without trip) and from motor starting current."
+                ),
+                "causal_chain": supporting[:6],
+                "recommended_actions": [
+                    "Confirm close / energize sequence vs fault inception on SOE / 52a",
+                    "Review SOTF / instantaneous OC enable on close (if used)",
+                    "Correlate pre-existing fault or close-into-fault conditions",
+                ],
+            }
+
         if hid == "SWITCHING_TRANSIENT":
             inrush = "magnetizing_inrush_possible" in bag
             diff_pu = (
@@ -2214,6 +2416,7 @@ class HypothesisEngine:
             "CABLE_FAULT",
             "EXTERNAL_GRID_DISTURBANCE",
             "SWITCHING_TRANSIENT",
+            "SWITCH_ONTO_FAULT",
             "MOTOR_START",
         ):
             parts = []
