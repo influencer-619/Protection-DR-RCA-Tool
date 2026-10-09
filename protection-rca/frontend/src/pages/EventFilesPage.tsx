@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type DragEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import { api } from '@/services/api';
@@ -12,7 +12,7 @@ import {
   hasComtradePackage,
   looksLikeSettingsFile,
 } from '@/utils/uploadAccept';
-
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -46,6 +46,39 @@ export function EventFilesPage() {
   useEffect(() => {
     load();
   }, [load, analysisRevision]);
+
+  const showEndColumn = useMemo(() => {
+    return files.some((f) => {
+      const el = String(
+        f.file_metadata?.cascade_role || f.file_metadata?.end_label || 'LOCAL',
+      ).toUpperCase();
+      return el && el !== 'LOCAL';
+    });
+  }, [files]);
+
+  const endOptionsUseCascadeLabels = useMemo(
+    () =>
+      files.some((f) => {
+        const el = String(
+          f.file_metadata?.cascade_role || f.file_metadata?.end_label || '',
+        ).toUpperCase();
+        return el === 'INITIATOR' || el === 'BACKUP';
+      }),
+    [files],
+  );
+
+  const sortedFiles = useMemo(() => {
+    if (!showEndColumn) return files;
+    const rank = (f: EventFile) => {
+      const el = String(
+        f.file_metadata?.cascade_role || f.file_metadata?.end_label || '',
+      ).toUpperCase();
+      if (el === 'INITIATOR' || el === 'LOCAL') return 0;
+      if (el === 'BACKUP' || el.startsWith('REMOTE')) return 1;
+      return 2;
+    };
+    return [...files].sort((a, b) => rank(a) - rank(b));
+  }, [files, showEndColumn]);
 
   const upload = async (list: FileList | File[]) => {
     if (!id || !list.length) return;
@@ -117,14 +150,10 @@ export function EventFilesPage() {
 
   return (
     <div>
-      <div className="page-header" style={{ padding: 0 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Event files</h1>
-          <p className="subtitle">
-            Immutable uploads · SHA-256 integrity · settings JSON applied on analysis
-          </p>
-        </div>
-      </div>
+      <CombinedPageHeader
+        title="Event files"
+        subtitle="Immutable uploads · SHA-256 integrity · settings JSON applied on analysis"
+      />
 
       {error && (
         <div className="alert alert-error" role="alert">
@@ -235,9 +264,11 @@ export function EventFilesPage() {
               <tr>
                 <th>Filename</th>
                 <th>Source</th>
-                <th title="LOCAL or REMOTE end — applies to COMTRADE, settings, SOE, and other uploads">
-                  End
-                </th>
+                {showEndColumn && (
+                  <th title="Which COMTRADE / settings package this file belongs to">
+                    End
+                  </th>
+                )}
                 <th>Size</th>
                 <th>SHA-256</th>
                 <th>Uploaded</th>
@@ -247,30 +278,53 @@ export function EventFilesPage() {
             <tbody>
               {files.length === 0 && (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>
+                  <td
+                    colSpan={showEndColumn ? 7 : 6}
+                    style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}
+                  >
                     No files yet. Use the drop zone above to upload COMTRADE, settings, and SOE/CSV.
                   </td>
                 </tr>
               )}
-              {files.map((f) => (
+              {sortedFiles.map((f) => (
                 <tr key={f.id}>
                   <td className="mono">{f.original_filename}</td>
                   <td>{f.source_type}</td>
-                  <td>
-                    <select
-                      className="input"
-                      title="Which line end this file belongs to (LOCAL / REMOTE)"
-                      defaultValue={f.file_metadata?.end_label || 'LOCAL'}
-                      onChange={(e) => {
-                        if (!id) return;
-                        void api.setEndLabel(id, f.id, e.target.value).catch(() => {});
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <option value="LOCAL">LOCAL</option>
-                      <option value="REMOTE">REMOTE</option>
-                    </select>
-                  </td>
+                  {showEndColumn && (
+                    <td>
+                      <select
+                        className="input"
+                        title="Which end this file belongs to"
+                        defaultValue={String(
+                          f.file_metadata?.cascade_role ||
+                            f.file_metadata?.end_label ||
+                            'LOCAL',
+                        )}
+                        onChange={(e) => {
+                          if (!id) return;
+                          void api.setEndLabel(id, f.id, e.target.value).catch(() => {});
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {endOptionsUseCascadeLabels ||
+                        String(
+                          f.file_metadata?.cascade_role || f.file_metadata?.end_label || '',
+                        )
+                          .toUpperCase()
+                          .match(/INITIATOR|BACKUP/) ? (
+                          <>
+                            <option value="INITIATOR">INITIATOR</option>
+                            <option value="BACKUP">BACKUP</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="LOCAL">LOCAL</option>
+                            <option value="REMOTE">REMOTE</option>
+                          </>
+                        )}
+                      </select>
+                    </td>
+                  )}
                   <td className="num">{formatBytes(f.file_size)}</td>
                   <td className="mono" title={f.sha256} style={{ fontSize: '0.72rem' }}>
                     {f.sha256.length > 20 ? `${f.sha256.slice(0, 20)}…` : f.sha256}

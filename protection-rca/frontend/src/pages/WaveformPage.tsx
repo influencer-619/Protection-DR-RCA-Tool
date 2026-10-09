@@ -12,6 +12,12 @@ import {
   filterWaveformChannelsBySide,
   sideLabel,
 } from '@/utils/quantitySide';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
+import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import {
+  alignRemoteMarkers,
+  alignRemoteToLocal,
+} from '@/utils/dualEndWaveforms';
 
 interface Props {
   /** Full-window analysis mode (no app chrome). */
@@ -20,15 +26,21 @@ interface Props {
 
 export function WaveformPage({ popout = false }: Props) {
   const { id } = useParams<{ id: string }>();
+  useEventOrWorkspace(id);
   const { mode: quantitySide, setMode: setQuantitySide } = useQuantitySide(id);
   const [channels, setChannels] = useState<WaveformChannelData[]>([]);
   const [markers, setMarkers] = useState<WaveformMarker[]>([]);
+  const [channelsPeer, setChannelsPeer] = useState<WaveformChannelData[]>([]);
+  const [markersPeer, setMarkersPeer] = useState<WaveformMarker[]>([]);
+  const [syncUs, setSyncUs] = useState<number | null>(null);
+  const [dualStacked, setDualStacked] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [ends, setEnds] = useState<Array<{ comtrade_file_id: string; end_label?: string; station_name?: string }>>([]);
   const [selectedEnd, setSelectedEnd] = useState<string>('');
+  const [peerEnd, setPeerEnd] = useState<string>('');
 
   const sides = useMemo(
     () =>
@@ -47,21 +59,51 @@ export function WaveformPage({ popout = false }: Props) {
     () => filterWaveformChannelsBySide(channels, dualSide ? quantitySide : 'both'),
     [channels, quantitySide, dualSide],
   );
+  const peerViewRaw = useMemo(
+    () => filterWaveformChannelsBySide(channelsPeer, dualSide ? quantitySide : 'both'),
+    [channelsPeer, quantitySide, dualSide],
+  );
+  const peerView = useMemo(
+    () => alignRemoteToLocal(peerViewRaw, syncUs),
+    [peerViewRaw, syncUs],
+  );
+  const peerMarkersAligned = useMemo(
+    () => alignRemoteMarkers(markersPeer, syncUs),
+    [markersPeer, syncUs],
+  );
+  const showDual = dualStacked && peerView.length > 0;
+  const leftEndLabel =
+    ends.find((e) => e.comtrade_file_id === selectedEnd)?.end_label || 'Primary';
+  const rightEndLabel =
+    ends.find((e) => e.comtrade_file_id === peerEnd)?.end_label || 'Peer';
 
-  const load = (fileId?: string) => {
+  const load = (fileId?: string, peerId?: string) => {
     if (!id) return;
     setLoading(true);
     setError(null);
-    void api
-      .getWaveforms(id, fileId ? { comtradeFileId: fileId } : undefined)
-      .then((r) => {
+    void Promise.all([
+      api.getWaveforms(id, fileId ? { comtradeFileId: fileId } : undefined),
+      peerId && peerId !== fileId
+        ? api.getWaveforms(id, { comtradeFileId: peerId })
+        : Promise.resolve(null),
+    ])
+      .then(([r, peer]) => {
         setChannels(r.channels);
         setMarkers(r.markers);
         setNote(r.note ?? null);
+        if (peer) {
+          setChannelsPeer(peer.channels);
+          setMarkersPeer(peer.markers || []);
+        } else {
+          setChannelsPeer([]);
+          setMarkersPeer([]);
+        }
       })
       .catch((e: unknown) => {
         setChannels([]);
         setMarkers([]);
+        setChannelsPeer([]);
+        setMarkersPeer([]);
         setError(e instanceof Error ? e.message : 'Waveforms not available');
       })
       .finally(() => setLoading(false));
@@ -78,9 +120,23 @@ export function WaveformPage({ popout = false }: Props) {
           station_name?: string;
         }>;
         setEnds(list);
-        const first = list[0]?.comtrade_file_id ? String(list[0].comtrade_file_id) : '';
+        setSyncUs(
+          typeof r.computed_sync_offset_us === 'number' ? r.computed_sync_offset_us : null,
+        );
+        const lab = (e: { end_label?: string }) => String(e.end_label || '').toUpperCase();
+        const primary =
+          list.find((e) => lab(e) === 'INITIATOR' || lab(e) === 'LOCAL') || list[0];
+        const secondary =
+          list.find((e) => lab(e) === 'BACKUP' || lab(e).startsWith('REMOTE')) || list[1];
+        const first = primary?.comtrade_file_id ? String(primary.comtrade_file_id) : '';
+        const second =
+          secondary?.comtrade_file_id && secondary.comtrade_file_id !== first
+            ? String(secondary.comtrade_file_id)
+            : '';
         setSelectedEnd(first);
-        load(first || undefined);
+        setPeerEnd(second);
+        setDualStacked(Boolean(second && list.length > 1));
+        load(first || undefined, second || undefined);
       })
       .catch(() => {
         setEnds([]);
@@ -222,15 +278,23 @@ export function WaveformPage({ popout = false }: Props) {
             borderBottom: '1px solid var(--border)',
           }}
         >
-          <div>
-            <h1 style={{ fontSize: '1.1rem' }}>Waveform viewer</h1>
-            <p className="subtitle">
-              {channels.length} channels
-              {markers.length ? ` · ${markers.length} markers` : ''} · Zoom, pan, time cursor ·
-              Pop-out · Scroll page when browser-zoomed
-            </p>
+          <div style={{ flex: 1 }}>
+            <CombinedPageHeader
+              title="Waveform viewer"
+              subtitle={`${channels.length} channels${markers.length ? ` · ${markers.length} markers` : ''} · Zoom, pan, time cursor · Pop-out · Scroll page when browser-zoomed`}
+            />
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {peerView.length > 0 && (
+              <label style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={dualStacked}
+                  onChange={(e) => setDualStacked(e.target.checked)}
+                />
+                Both ends (SIGRA-style)
+              </label>
+            )}
             <QuantitySideToggle
               mode={quantitySide}
               onChange={setQuantitySide}
@@ -263,9 +327,25 @@ export function WaveformPage({ popout = false }: Props) {
             height: 'max(520px, calc(100dvh - 140px))',
             display: 'flex',
             flexDirection: 'column',
+            gap: 10,
+            padding: '0 14px 10px',
           }}
         >
-          <WaveformViewer channels={viewChannels} markers={markers} fill />
+          {showDual ? (
+            <>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                {leftEndLabel}
+              </div>
+              <WaveformViewer channels={viewChannels} markers={markers} height={320} />
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                {rightEndLabel}
+                {syncUs != null ? ' · time-aligned' : ''}
+              </div>
+              <WaveformViewer channels={peerView} markers={peerMarkersAligned} height={320} />
+            </>
+          ) : (
+            <WaveformViewer channels={viewChannels} markers={markers} fill />
+          )}
         </div>
         {markers.length > 0 && (
           <div
@@ -298,26 +378,37 @@ export function WaveformPage({ popout = false }: Props) {
     );
   }
 
+  const endSelectLabel = ends.length > 1 ? 'COMTRADE end' : 'End';
+
   return (
     <div>
       <div className="page-header" style={{ padding: 0, marginBottom: 12 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Waveform viewer</h1>
-          <p className="subtitle">
-            {channels.length} channels
-            {markers.length ? ` · ${markers.length} markers` : ''} · Zoom, pan, time cursor
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="Waveform viewer"
+            subtitle={`${channels.length} channels${markers.length ? ` · ${markers.length} markers` : ''} · Zoom, pan, time cursor`}
+          />
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {ends.length > 1 && (
+          {peerView.length > 0 && (
             <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 6 }}>
-              End
+              <input
+                type="checkbox"
+                checked={dualStacked}
+                onChange={(e) => setDualStacked(e.target.checked)}
+              />
+              Both ends (SIGRA-style)
+            </label>
+          )}
+          {ends.length > 1 && !dualStacked && (
+            <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 6 }}>
+              {endSelectLabel}
               <select
                 className="input"
                 value={selectedEnd}
                 onChange={(e) => {
                   setSelectedEnd(e.target.value);
-                  load(e.target.value);
+                  load(e.target.value, peerEnd || undefined);
                 }}
               >
                 {ends.map((en) => (
@@ -328,6 +419,11 @@ export function WaveformPage({ popout = false }: Props) {
                 ))}
               </select>
             </label>
+          )}
+          {syncUs != null && (
+            <span className="mono" style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              sync Δ {(syncUs / 1000).toFixed(2)} ms
+            </span>
           )}
           <QuantitySideToggle
             mode={quantitySide}
@@ -355,7 +451,25 @@ export function WaveformPage({ popout = false }: Props) {
         </div>
       )}
       {note && <div className="alert alert-info">{note}</div>}
-      <WaveformViewer channels={viewChannels} markers={markers} height={460} />
+      {showDual ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 4 }}>
+              {leftEndLabel}
+            </div>
+            <WaveformViewer channels={viewChannels} markers={markers} height={360} />
+          </div>
+          <div>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 4 }}>
+              {rightEndLabel}
+              {syncUs != null ? ' · time-aligned to initiator/local' : ''}
+            </div>
+            <WaveformViewer channels={peerView} markers={peerMarkersAligned} height={360} />
+          </div>
+        </div>
+      ) : (
+        <WaveformViewer channels={viewChannels} markers={markers} height={460} />
+      )}
       {markers.length > 0 && (
         <div className="panel" style={{ marginTop: 12 }}>
           <div className="panel-header">Event markers</div>

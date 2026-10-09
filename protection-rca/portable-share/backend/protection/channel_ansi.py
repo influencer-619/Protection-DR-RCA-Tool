@@ -43,7 +43,7 @@ _CHANNEL_ANSI_RULES: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b21G\d*\b|ZONE.?EARTH|GROUND.?DIST|Z\d+\s*G", re.I), "21G"),
     (re.compile(r"\b21P\d*\b|PHASE.?DIST", re.I), "21P"),
     (re.compile(
-        r"\bPDIS\d*\b|\b21\b|ZONE\s*[1234]|Z[1234]\b|"
+        r"\bPDIS\d*\b|\b21\b|ZONE\s*[1-5]|Z[1-5]\b|"
         r"DIST(?:ANCE)?\s*(START|TRIP|PICK|PU)|"
         r"DST\s*ST|DSTST",  # station DFR distance start
         re.I,

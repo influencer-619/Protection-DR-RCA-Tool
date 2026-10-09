@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/1"
 
     max_upload_size_mb: int = 200
+    # Waveform UX / memory caps (PERF-013) — downsample on ingest; channel select on load
+    waveform_max_points: int = 20000
+    waveform_max_channels: int = 128
     allowed_upload_extensions: str = (
         ".cfg,.dat,.cff,.hdr,.inf,.csv,.txt,.xml,.json,.pdf,.zip,"
         ".set,.rdb,.xrio,.rio,.eve,.cev,.log,.dz5,.dex,.dex5,.d5z,.pcmi,.pcmp,"

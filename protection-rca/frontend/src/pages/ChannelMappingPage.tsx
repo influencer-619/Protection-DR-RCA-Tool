@@ -4,6 +4,7 @@ import { api } from '@/services/api';
 import { Skeleton } from '@/components/Skeleton';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 import { unitLabel } from '@/utils/formatElectrical';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 import styles from './ChannelMappingPage.module.css';
 
 const ROLE_OPTIONS = [
@@ -128,12 +129,11 @@ export function ChannelMappingPage() {
   return (
     <div className="stack-md">
       <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Channel mapping</h1>
-          <p className="subtitle">
-            Roles are assigned automatically from channel names / units / phase. Use this page only
-            to correct mistakes — then Save and re-run analysis.
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="Channel mapping"
+            subtitle="Roles are assigned automatically from channel names / units / phase. Use this page only to correct mistakes — then Save and re-run analysis."
+          />
         </div>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
           {busy ? 'Saving…' : 'Save mapping'}

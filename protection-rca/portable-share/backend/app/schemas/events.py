@@ -114,6 +114,8 @@ class EventOut(BaseModel):
     breaker_tag: Optional[str] = None
     asset_name: Optional[str] = None
     fault_type: Optional[str] = None
+    event_class: Optional[str] = None
+    fault_display: Optional[str] = None
     severity_summary: Optional[str] = None
     protection_summary: Optional[str] = None
 

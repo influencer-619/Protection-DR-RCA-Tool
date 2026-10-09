@@ -61,9 +61,17 @@ async def upload_event_files(
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
     label = (end_label or "LOCAL").strip().upper() or "LOCAL"
-    if label not in ("LOCAL", "REMOTE") and not label.startswith("REMOTE"):
-        raise HTTPException(status_code=400, detail="end_label must be LOCAL or REMOTE")
-    file_meta = {"end_label": label}
+    allowed_labels = {"LOCAL", "REMOTE", "INITIATOR", "BACKUP"}
+    if label not in allowed_labels and not label.startswith("REMOTE"):
+        raise HTTPException(
+            status_code=400,
+            detail="end_label must be LOCAL, REMOTE, INITIATOR, or BACKUP",
+        )
+    file_meta: dict = {"end_label": label}
+    # Cascade / LBB multi-bay roles only when explicitly stamped INITIATOR/BACKUP
+    # (do not map LOCAL/REMOTE — that would treat every line multi-end as cascade)
+    if label in ("INITIATOR", "BACKUP"):
+        file_meta["cascade_role"] = label
     allowed = set(get_settings().allowed_extensions)
     stored: list[EventFileOut] = []
     skipped: list[str] = []

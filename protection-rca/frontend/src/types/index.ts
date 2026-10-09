@@ -164,12 +164,28 @@ export interface Asset {
   is_active: boolean;
 }
 
+export type PeerType = 'none' | 'line_remote' | 'cascade';
+export type AnalysisMode = 'NORMAL';
+
 export interface RemoteIed {
   id: string;
   name: string;
   relay_tag: string;
   ip_address?: string | null;
   substation_id?: string | null;
+  peer_type?: PeerType | string | null;
+  cascade_role?: 'INITIATOR' | 'BACKUP' | string | null;
+  local_cascade_role?: 'INITIATOR' | 'BACKUP' | string | null;
+}
+
+export interface PeerLink {
+  peer_type: PeerType | string;
+  remote_relay_id?: string | null;
+  cascade_role?: 'INITIATOR' | 'BACKUP' | string | null;
+  peer_end_label?: string | null;
+  local_end_label?: string | null;
+  default_analysis_mode?: AnalysisMode | string;
+  peer?: RemoteIed | null;
 }
 
 export interface Relay {
@@ -187,6 +203,9 @@ export interface Relay {
   is_active: boolean;
   created_at?: string;
   remote_ied?: RemoteIed | null;
+  peer_type?: PeerType | string | null;
+  cascade_role?: 'INITIATOR' | 'BACKUP' | string | null;
+  peer_link?: PeerLink | null;
 }
 
 export interface Iec61850Vendor {
@@ -366,6 +385,7 @@ export interface IedContext {
   substation: Substation;
   path_label: string;
   remote_ied?: RemoteIed | null;
+  peer_link?: PeerLink | null;
 }
 
 export interface Breaker {
@@ -403,6 +423,10 @@ export interface Event {
   bay_name?: string | null;
   relay_tag?: string | null;
   fault_type?: FaultType | null;
+  /** DFR event class (FAULT, ENERGIZATION, …) when available */
+  event_class?: string | null;
+  /** List display: typed fault or event class fallback */
+  fault_display?: string | null;
   severity_summary?: Severity | null;
   /** Operated protection elements, e.g. "87T, 21" */
   protection_summary?: string | null;
@@ -601,6 +625,9 @@ export interface FaultCharacteristics {
   line_impedance_estimate?: Record<string, unknown> | null;
   limitations: string[];
   explanation?: string | null;
+  elevation_method?: string | null;
+  prefault_rms?: Record<string, unknown> | null;
+  fault_window?: Record<string, unknown> | null;
 }
 
 export interface RcaHypothesis {
@@ -620,6 +647,30 @@ export interface RcaHypothesis {
   explanation?: string | null;
   missing_evidence?: string[] | null;
   extra?: Record<string, unknown> | null;
+}
+
+/** Optional ML / similarity supporting scores — never fabricated (ML-014). */
+export interface SupportingScoreStatus {
+  available: boolean;
+  status: string;
+  weight?: number | null;
+  message?: string | null;
+}
+
+export interface RcaResponse {
+  event_id: string;
+  hypotheses: RcaHypothesis[];
+  decision_state?: string | null;
+  supporting_scores?: {
+    ml?: SupportingScoreStatus;
+    similarity?: SupportingScoreStatus;
+  } | null;
+  /** Matrix / ladder context from last analysis (Summary + Report). */
+  enrichment?: Record<string, unknown> | null;
+  matrix?: Record<string, unknown> | null;
+  compound_class?: string | null;
+  matrix_scenario?: string | null;
+  matrix_traces?: string[] | null;
 }
 
 export interface EvidenceItem {
@@ -682,6 +733,7 @@ export interface AnalysisJob {
   error_message?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
+  created_at?: string | null;
   component_versions?: Record<string, string> | null;
 }
 

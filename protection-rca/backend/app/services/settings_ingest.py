@@ -222,6 +222,10 @@ _SEL_MAP: list[tuple[re.Pattern[str], str, str]] = [
     (re.compile(r"^50[SP]?P?\d*P$", re.I), "50", "pickup_current"),
     (re.compile(r"^E50", re.I), "50", "enabled"),
     (re.compile(r"^Z1MAG$|^Z1P$", re.I), "21", "zone1_reach"),
+    (re.compile(r"^Z2MAG$|^Z2P$", re.I), "21", "zone2_reach"),
+    (re.compile(r"^Z3MAG$|^Z3P$", re.I), "21", "zone3_reach"),
+    (re.compile(r"^Z4MAG$|^Z4P$", re.I), "21", "zone4_reach"),
+    (re.compile(r"^Z5MAG$|^Z5P$", re.I), "21", "zone5_reach"),
     (re.compile(r"^Z1ANG$", re.I), "21", "zone1_angle"),
     (re.compile(r"^EZ1$|^E21", re.I), "21", "enabled"),
     (re.compile(r"^67[SP]?P$", re.I), "67", "pickup_current"),
@@ -293,6 +297,10 @@ def map_common_protection_params(flat: dict[str, Any]) -> dict[str, Any]:
         "z1_r": ("z1_r", "r1", "positive_sequence_r_ohm_per_km"),
         "z1_x": ("z1_x", "x1", "positive_sequence_x_ohm_per_km"),
         "zone1_reach": ("zone1_reach", "z1mag", "z1_reach", "zone1_reach_ohm"),
+        "zone2_reach": ("zone2_reach", "z2mag", "z2_reach", "zone2_reach_ohm"),
+        "zone3_reach": ("zone3_reach", "z3mag", "z3_reach", "zone3_reach_ohm"),
+        "zone4_reach": ("zone4_reach", "z4mag", "z4_reach", "zone4_reach_ohm"),
+        "zone5_reach": ("zone5_reach", "z5mag", "z5_reach", "zone5_reach_ohm"),
     }
     mapped: dict[str, Any] = {}
     lower = {str(k).lower(): v for k, v in flat.items()}
@@ -456,7 +464,14 @@ def ingest_settings_bytes(
                 "50BF": {k: common[k] for k in ("bf_timer_s", "enabled") if k in common},
                 "21": {
                     k: common[k]
-                    for k in ("zone1_reach", "enabled")
+                    for k in (
+                        "zone1_reach",
+                        "zone2_reach",
+                        "zone3_reach",
+                        "zone4_reach",
+                        "zone5_reach",
+                        "enabled",
+                    )
                     if k in common
                 },
             },
@@ -473,12 +488,19 @@ def ingest_settings_bytes(
         if "z1_r" in line and "z1_x" in line:
             line["positive_sequence_r_ohm_per_km"] = line.pop("z1_r")
             line["positive_sequence_x_ohm_per_km"] = line.pop("z1_x")
-        if "zone1_reach" in common:
-            mapped["protection"].setdefault("21", {})["zone1_reach"] = common["zone1_reach"]
-            if "pickup_a" in mapped["protection"].get("51", {}):
-                mapped["protection"]["51"]["pickup_current"] = mapped["protection"]["51"].pop(
-                    "pickup_a"
-                )
+        for zk in (
+            "zone1_reach",
+            "zone2_reach",
+            "zone3_reach",
+            "zone4_reach",
+            "zone5_reach",
+        ):
+            if zk in common:
+                mapped["protection"].setdefault("21", {})[zk] = common[zk]
+        if "pickup_a" in mapped["protection"].get("51", {}):
+            mapped["protection"]["51"]["pickup_current"] = mapped["protection"]["51"].pop(
+                "pickup_a"
+            )
 
         if vendor == "SEL":
             sel_mapped = map_sel_mnemonics(raw)

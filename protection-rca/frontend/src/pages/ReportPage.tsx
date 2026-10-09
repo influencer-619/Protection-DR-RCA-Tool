@@ -5,6 +5,7 @@ import type { Report } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 import styles from './ReportPage.module.css';
 
 type ReviewRow = {
@@ -157,7 +158,6 @@ export function ReportPage() {
       }
       let html = reportHtml(r);
       const review = await fetchLatestReview(id);
-
       // Only regenerate when report is missing/broken — avoid overwriting with a
       // stale backend process. Scores + review are patched client-side below.
       if (forceRegen || !r || looksSparse(html)) {
@@ -285,15 +285,16 @@ export function ReportPage() {
     reportHtml(report) ||
     `<pre>${JSON.stringify(report?.sections ?? {}, null, 2)}</pre>`;
 
+  const reportTitle = report?.title || 'Analysis report';
+
   return (
     <div>
       <div className="page-header" style={{ padding: 0, marginBottom: 16 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>{report?.title}</h1>
-          <p className="subtitle">
-            {report?.report_type} · {report?.format ?? 'JSON'} · Generated{' '}
-            {report?.generated_at ?? '—'}
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title={reportTitle}
+            subtitle={`${report?.report_type ?? 'RCA'} · ${report?.format ?? 'JSON'} · Generated ${report?.generated_at ?? '—'}`}
+          />
         </div>
         <div className="badge-row">
           {report?.status && <StatusBadge status={report.status} />}

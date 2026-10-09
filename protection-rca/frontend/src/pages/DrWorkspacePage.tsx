@@ -45,7 +45,22 @@ import {
   resolveDistanceApplicable,
   resolveFaultType,
 } from '@/utils/schemeContext';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
+import {
+  alignRemoteMarkers,
+  alignRemoteToLocal,
+  buildCascadeDigitalStrip,
+  buildOverlayChannels,
+} from '@/utils/dualEndWaveforms';
 import styles from './DrWorkspacePage.module.css';
+
+type DualViewMode = 'side' | 'stacked' | 'overlay';
+
+function endOverlayTag(label: string | undefined, fallback: string): string {
+  if (!label?.trim()) return fallback;
+  const u = label.trim().toUpperCase();
+  return u.length <= 6 ? u : u.slice(0, 4);
+}
 
 export function DrWorkspacePage() {
   const { id } = useParams<{ id: string }>();
@@ -54,6 +69,7 @@ export function DrWorkspacePage() {
   const [channelsLocal, setChannelsLocal] = useState<WaveformChannelData[]>([]);
   const [channelsRemote, setChannelsRemote] = useState<WaveformChannelData[]>([]);
   const [markers, setMarkers] = useState<WaveformMarker[]>([]);
+  const [markersRemote, setMarkersRemote] = useState<WaveformMarker[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const session = id ? loadDrSession(id) : null;
@@ -65,6 +81,7 @@ export function DrWorkspacePage() {
   const [localId, setLocalId] = useState(session?.localId || '');
   const [remoteId, setRemoteId] = useState(session?.remoteId || '');
   const [syncUs, setSyncUs] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<DualViewMode>('side');
   const [profiles, setProfiles] = useState<DrDisplayProfile[]>(() => loadProfiles());
   const [sessionRestored] = useState(Boolean(session));
   const [protection, setProtection] = useState<ProtectionOperation[]>([]);
@@ -107,13 +124,16 @@ export function DrWorkspacePage() {
           : null,
       );
       const saved = loadDrSession(id);
+      const lab = (e: { end_label?: string }) => String(e.end_label || '').toUpperCase();
       const local =
         list.find((e) => e.comtrade_file_id === saved?.localId) ||
-        list.find((e) => String(e.end_label || '').toUpperCase() === 'LOCAL') ||
+        list.find((e) => lab(e) === 'INITIATOR') ||
+        list.find((e) => lab(e) === 'LOCAL') ||
         list[0];
       const remote =
         list.find((e) => e.comtrade_file_id === saved?.remoteId) ||
-        list.find((e) => String(e.end_label || '').toUpperCase().startsWith('REMOTE')) ||
+        list.find((e) => lab(e) === 'BACKUP') ||
+        list.find((e) => lab(e).startsWith('REMOTE')) ||
         list[1];
       const lid = local?.comtrade_file_id ? String(local.comtrade_file_id) : '';
       const rid = remote?.comtrade_file_id ? String(remote.comtrade_file_id) : '';
@@ -129,8 +149,10 @@ export function DrWorkspacePage() {
       if (rid && rid !== lid) {
         const wfR = await api.getWaveforms(id, { comtradeFileId: rid });
         setChannelsRemote(wfR.channels);
+        setMarkersRemote(wfR.markers || []);
       } else {
         setChannelsRemote([]);
+        setMarkersRemote([]);
       }
     }).finally(() => setLoading(false));
   }, [id, analysisRevision]);
@@ -164,10 +186,42 @@ export function DrWorkspacePage() {
     () => filterWaveformChannelsBySide(channelsLocal, dualSide ? quantitySide : 'both'),
     [channelsLocal, quantitySide, dualSide],
   );
-  const remotePlot = useMemo(
+  const remotePlotRaw = useMemo(
     () => filterWaveformChannelsBySide(channelsRemote, dualSide ? quantitySide : 'both'),
     [channelsRemote, quantitySide, dualSide],
   );
+  /** SIGRA: remote shifted onto local trigger timebase. */
+  const remotePlot = useMemo(
+    () => alignRemoteToLocal(remotePlotRaw, syncUs),
+    [remotePlotRaw, syncUs],
+  );
+  const remoteMarkersAligned = useMemo(
+    () => alignRemoteMarkers(markersRemote, syncUs),
+    [markersRemote, syncUs],
+  );
+  const localEndMeta = useMemo(
+    () => ends.find((e) => e.comtrade_file_id === localId),
+    [ends, localId],
+  );
+  const remoteEndMeta = useMemo(
+    () => ends.find((e) => e.comtrade_file_id === remoteId),
+    [ends, remoteId],
+  );
+  const leftOverlayTag = endOverlayTag(localEndMeta?.end_label, 'END1');
+  const rightOverlayTag = endOverlayTag(remoteEndMeta?.end_label, 'END2');
+  const overlayChannels = useMemo(() => {
+    if (!remotePlot.length) return [];
+    return buildOverlayChannels(plotChannels, remotePlot, leftOverlayTag, rightOverlayTag);
+  }, [plotChannels, remotePlot, leftOverlayTag, rightOverlayTag]);
+  const cascadeDigitals = useMemo(() => {
+    if (!remotePlot.length) return [];
+    return buildCascadeDigitalStrip(
+      plotChannels,
+      remotePlot,
+      leftOverlayTag,
+      rightOverlayTag,
+    );
+  }, [plotChannels, remotePlot, leftOverlayTag, rightOverlayTag]);
 
   const tMin = useMemo(() => {
     let m = Infinity;
@@ -341,10 +395,10 @@ export function DrWorkspacePage() {
     };
   }, [event]);
 
-  const plant = (event?.extra || {}) as Record<string, unknown>;
-  const labels = (plant.plant_labels || {}) as Record<string, string>;
+  const eventExtra = (event?.extra || {}) as Record<string, unknown>;
+  const labels = (eventExtra.plant_labels || {}) as Record<string, string>;
   const distanceMeta = (() => {
-    const ra = (plant.report_analysis || {}) as Record<string, unknown>;
+    const ra = (eventExtra.report_analysis || {}) as Record<string, unknown>;
     const fc = (ra.fault_classification || {}) as Record<string, unknown>;
     const d = (fc.distance || {}) as Record<string, unknown>;
     const applicable = distanceApplicableForRx;
@@ -357,12 +411,12 @@ export function DrWorkspacePage() {
     return { applicable, km };
   })();
   const lineLen = (() => {
-    const lp = (plant.line_params || {}) as Record<string, unknown>;
+    const lp = (eventExtra.line_params || {}) as Record<string, unknown>;
     return typeof lp.length_km === 'number' ? lp.length_km : null;
   })();
   const schemeHint = resolveBaySchemeHint({
     protection,
-    eventExtra: plant,
+    eventExtra,
   });
 
   const saveProfile = () => {
@@ -394,15 +448,22 @@ export function DrWorkspacePage() {
     );
   }
 
+  const leftPane = localEndMeta?.end_label || 'Local end';
+  const rightPane = remoteEndMeta?.end_label || 'Remote end';
+  const leftSelect = 'Primary end';
+  const rightSelect = 'Peer end';
+
+  const showEndsBar = ends.length > 1;
+  const missingPeerEnd = ends.length >= 2 && channelsRemote.length === 0;
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <div>
-          <h1 className={styles.title}>DR workspace</h1>
-          <p className="subtitle">
-            Waveforms, cursors, phasors, R–X, and harmonics
-            {sessionRestored ? ' · last view restored' : ''}
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="DR workspace"
+            subtitle={`Waveforms, cursors, phasors, R–X, and harmonics${sessionRestored ? ' · last view restored' : ''}`}
+          />
         </div>
         <div className={styles.tools}>
           <QuantitySideToggle
@@ -447,10 +508,17 @@ export function DrWorkspacePage() {
 
       <SettingsObservedStrip expected={expected} observed={observed} />
 
-      {ends.length > 1 && (
+      {missingPeerEnd && (
+        <div className="alert alert-warn" role="status">
+          Multiple COMTRADE ends are registered but peer waveforms are not loaded. Select a peer
+          end above or use <strong>Re-run analysis</strong>, then reopen DR.
+        </div>
+      )}
+
+      {showEndsBar && (
         <div className={styles.endsBar}>
           <label>
-            Local
+            {leftSelect}
             <select
               className="input"
               value={localId}
@@ -462,6 +530,7 @@ export function DrWorkspacePage() {
                 });
               }}
             >
+              {ends.length === 0 && <option value="">No ends yet</option>}
               {ends.map((en) => (
                 <option key={en.comtrade_file_id} value={en.comtrade_file_id}>
                   {en.end_label || 'END'} {en.station_name || ''}
@@ -470,7 +539,7 @@ export function DrWorkspacePage() {
             </select>
           </label>
           <label>
-            Remote
+            {rightSelect}
             <select
               className="input"
               value={remoteId}
@@ -478,6 +547,7 @@ export function DrWorkspacePage() {
                 setRemoteId(e.target.value);
                 void api.getWaveforms(id!, { comtradeFileId: e.target.value }).then((r) => {
                   setChannelsRemote(r.channels);
+                  setMarkersRemote(r.markers || []);
                 });
               }}
             >
@@ -490,9 +560,24 @@ export function DrWorkspacePage() {
             </select>
           </label>
           {syncUs != null && (
-            <span className="mono">
-              sync Δ {syncUs.toFixed(0)} µs ({(syncUs / 1000).toFixed(2)} ms)
+            <span className={`mono ${styles.syncBadge}`} title="Remote trigger − local trigger (SIGRA-style common timebase)">
+              sync Δ {syncUs.toFixed(0)} µs ({(syncUs / 1000).toFixed(2)} ms) · remote aligned
             </span>
+          )}
+          {channelsRemote.length > 0 && (
+            <label className={styles.viewMode}>
+              View
+              <select
+                className="input"
+                value={viewMode}
+                onChange={(e) => setViewMode(e.target.value as DualViewMode)}
+                title="SIGRA-style: side-by-side, stacked, or overlay same analogs from both ends"
+              >
+                <option value="side">Side-by-side (both ends)</option>
+                <option value="stacked">Stacked (both ends)</option>
+                <option value="overlay">Overlay compare (N1+N2)</option>
+              </select>
+            </label>
           )}
         </div>
       )}
@@ -504,13 +589,16 @@ export function DrWorkspacePage() {
         </div>
       )}
 
-      <div className={channelsRemote.length ? styles.split : undefined}>
+      {channelsRemote.length > 0 && viewMode === 'overlay' ? (
         <div>
-          <div className={styles.paneTitle}>Local end</div>
+          <div className={styles.paneTitle}>
+            Overlay · {leftPane} + {rightPane} (common timebase
+            {syncUs != null ? ` · Δ ${(syncUs / 1000).toFixed(2)} ms` : ''})
+          </div>
           <WaveformViewer
-            channels={plotChannels}
-            markers={markers}
-            height={channelsRemote.length ? 320 : 420}
+            channels={overlayChannels}
+            markers={[...markers, ...remoteMarkersAligned]}
+            height={440}
             cursorAUs={cursorA}
             cursorBUs={cursorB}
             onCursorsChange={(a, b) => {
@@ -519,14 +607,42 @@ export function DrWorkspacePage() {
             }}
             hideReadout
           />
+          {cascadeDigitals.length > 0 && (
+            <>
+              <div className={styles.paneTitle} style={{ marginTop: 8 }}>
+                Protection digitals (both ends, synced)
+              </div>
+              <WaveformViewer
+                channels={cascadeDigitals}
+                markers={[...markers, ...remoteMarkersAligned]}
+                height={220}
+                cursorAUs={cursorA}
+                cursorBUs={cursorB}
+                onCursorsChange={(a, b) => {
+                  setCursorA(a);
+                  setCursorB(b);
+                }}
+                hideReadout
+              />
+            </>
+          )}
         </div>
-        {channelsRemote.length > 0 && (
+      ) : (
+        <div
+          className={
+            channelsRemote.length
+              ? viewMode === 'stacked'
+                ? styles.stacked
+                : styles.split
+              : undefined
+          }
+        >
           <div>
-            <div className={styles.paneTitle}>Remote end</div>
+            <div className={styles.paneTitle}>{leftPane}</div>
             <WaveformViewer
-              channels={remotePlot}
-              markers={[]}
-              height={320}
+              channels={plotChannels}
+              markers={markers}
+              height={channelsRemote.length ? (viewMode === 'stacked' ? 360 : 320) : 420}
               cursorAUs={cursorA}
               cursorBUs={cursorB}
               onCursorsChange={(a, b) => {
@@ -536,16 +652,47 @@ export function DrWorkspacePage() {
               hideReadout
             />
           </div>
-        )}
-      </div>
+          {channelsRemote.length > 0 && (
+            <div>
+              <div className={styles.paneTitle}>
+                {rightPane}
+                {syncUs != null ? ' · time-aligned' : ''}
+              </div>
+              <WaveformViewer
+                channels={remotePlot}
+                markers={remoteMarkersAligned}
+                height={viewMode === 'stacked' ? 360 : 320}
+                cursorAUs={cursorA}
+                cursorBUs={cursorB}
+                onCursorsChange={(a, b) => {
+                  setCursorA(a);
+                  setCursorB(b);
+                }}
+                hideReadout
+              />
+            </div>
+          )}
+        </div>
+      )}
 
       <CursorReadout
-        channels={plotChannels}
+        channels={
+          viewMode === 'overlay' && overlayChannels.length ? overlayChannels : plotChannels
+        }
         cursorA={cursorA}
         cursorB={cursorB}
         tMin={tMin}
         quantitySide={dualSide ? quantitySide : 'secondary'}
       />
+      {channelsRemote.length > 0 && viewMode !== 'overlay' && (
+        <CursorReadout
+          channels={remotePlot}
+          cursorA={cursorA}
+          cursorB={cursorB}
+          tMin={tMin}
+          quantitySide={dualSide ? quantitySide : 'secondary'}
+        />
+      )}
 
       <div className={styles.panels}>
         <PhasorDiagram title="Phasors (fault window)" vectors={phasors} />

@@ -1,75 +1,43 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '@/services/api';
-import type { RcaHypothesis } from '@/types';
+import type { RcaHypothesis, SupportingScoreStatus } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
-import {
-  formatConfidencePct,
-  humanizeEvidenceNotes,
-  humanizeEvidenceToken,
-} from '@/utils/evidenceLabels';
-import { schemeLabel } from '@/utils/schemeContext';
+import { formatConfidencePct, humanizeEvidenceToken } from '@/utils/evidenceLabels';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 import styles from './RcaPage.module.css';
+
+function scoreUnavailable(s?: SupportingScoreStatus | null): boolean {
+  if (!s) return true;
+  return !s.available || String(s.status || '').toUpperCase() === 'NOT_AVAILABLE';
+}
 
 export function RcaPage() {
   const { id } = useParams<{ id: string }>();
   const { analysisRevision } = useEventOrWorkspace(id);
   const [hyps, setHyps] = useState<RcaHypothesis[]>([]);
-  const [tagChoices, setTagChoices] = useState<Array<{ token: string; label: string }>>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [schemeInfo, setSchemeInfo] = useState<string | null>(null);
-  const [enrichMsg, setEnrichMsg] = useState<string | null>(null);
-  const [enrichBusy, setEnrichBusy] = useState(false);
+  const [mlScore, setMlScore] = useState<SupportingScoreStatus | null>(null);
+  const [simScore, setSimScore] = useState<SupportingScoreStatus | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    void api.getRca(id).then(setHyps).catch(() => setHyps([]));
     void api
-      .getCauseEvidence(id)
-      .then((res) => {
-        setTagChoices(res.tag_choices || []);
-        setSelected(new Set((res.items || []).map((i) => i.token)));
-        const primary = (res.scheme as { primary?: { scheme_id?: string; label?: string } } | undefined)
-          ?.primary;
-        if (primary?.scheme_id) {
-          setSchemeInfo(primary.label || schemeLabel(primary.scheme_id));
-        } else {
-          setSchemeInfo(null);
-        }
+      .getRca(id)
+      .then((r) => {
+        setHyps(r.hypotheses);
+        setMlScore(r.supporting_scores?.ml ?? null);
+        setSimScore(r.supporting_scores?.similarity ?? null);
       })
       .catch(() => {
-        setTagChoices([]);
-        setSelected(new Set());
+        setHyps([]);
+        setMlScore(null);
+        setSimScore(null);
       });
   }, [id, analysisRevision]);
 
   const primary = hyps.find((h) => h.rank === 1) ?? hyps[0];
-  const alts = hyps.filter((h) => h.id !== primary?.id);
-
-  const toggleTag = (token: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(token)) next.delete(token);
-      else next.add(token);
-      return next;
-    });
-  };
-
-  const saveCauseEvidence = async () => {
-    if (!id) return;
-    setEnrichBusy(true);
-    setEnrichMsg(null);
-    try {
-      await api.putCauseEvidence(id, { tokens: [...selected] });
-      setEnrichMsg('Cause evidence saved. Re-run analysis on Overview to re-score RCA.');
-    } catch (e) {
-      setEnrichMsg(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setEnrichBusy(false);
-    }
-  };
 
   if (!hyps.length) {
     return (
@@ -79,7 +47,6 @@ export function RcaPage() {
         tips={[
           'Complete analysis first (Overview → Run analysis)',
           'RCA ranks hypotheses from fault type, operated protection (any scheme), and consistency — not distance-only',
-          'Add field cause evidence (lightning / vegetation / cable) here after analysis, then re-run',
           'Relay misoperation stays INCONCLUSIVE until active settings are verified',
         ]}
         actions={[
@@ -92,73 +59,27 @@ export function RcaPage() {
 
   return (
     <div>
-      <div className="page-header" style={{ padding: 0, marginBottom: 12 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Root cause analysis</h1>
-          <p className="subtitle">
-            Primary hypothesis, alternatives, evidence balance, uncertainty
-            {schemeInfo ? ` · Scheme: ${schemeInfo}` : ''}
-          </p>
-        </div>
+      <div style={{ marginBottom: 12 }}>
+        <CombinedPageHeader
+          title="Root cause analysis"
+          subtitle="Primary hypothesis, evidence balance, uncertainty"
+        />
       </div>
 
-      <div className="panel" style={{ marginBottom: 12 }}>
-        <div className="panel-header">Cause enrichment (field / asset)</div>
-        <div className="panel-body">
-          <p className="subtitle" style={{ marginTop: 0 }}>
-            Physical causes (lightning, vegetation, cable…) stay inconclusive until you attach
-            structured evidence — the engine will not invent them from waveforms alone.
+      {scoreUnavailable(mlScore) && scoreUnavailable(simScore) ? (
+        <p className="subtitle" style={{ marginTop: 0, marginBottom: 12 }}>
+          Scoring uses deterministic, consistency, and electrical evidence only (ML and
+          historical similarity not loaded — weight contribution zero).
+        </p>
+      ) : (
+        (scoreUnavailable(mlScore) || scoreUnavailable(simScore)) && (
+          <p className="subtitle" style={{ marginTop: 0, marginBottom: 12 }}>
+            {scoreUnavailable(mlScore) && 'ML anomaly scores not available (weight zero). '}
+            {scoreUnavailable(simScore) &&
+              'Historical similarity not available (weight zero).'}
           </p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
-            {(tagChoices.length
-              ? tagChoices
-              : [
-                  { token: 'lightning_evidence', label: 'Lightning evidence' },
-                  { token: 'field_report_vegetation', label: 'Vegetation (field)' },
-                  { token: 'cable_asset_confirmed', label: 'Cable asset' },
-                ]
-            ).map((t) => (
-              <label
-                key={t.token}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontSize: '0.82rem',
-                  border: '1px solid var(--border)',
-                  padding: '4px 8px',
-                  borderRadius: 3,
-                  cursor: 'pointer',
-                  background: selected.has(t.token) ? 'var(--accent-soft)' : 'transparent',
-                }}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(t.token)}
-                  onChange={() => toggleTag(t.token)}
-                />
-                {t.label}
-              </label>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={enrichBusy}
-            onClick={() => void saveCauseEvidence()}
-          >
-            {enrichBusy ? 'Saving…' : 'Save cause evidence'}
-          </button>
-          {enrichMsg && (
-            <div className="alert alert-info" style={{ marginTop: 8 }}>
-              {enrichMsg}{' '}
-              {id && (
-                <Link to={`/events/${id}/overview`}>Open Overview to re-run</Link>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+        )
+      )}
 
       {primary && (
         <div className="ux-strip">
@@ -256,7 +177,10 @@ export function RcaPage() {
 
             {primary.causal_chain && (
               <div className={styles.chain}>
-                <h4>Causal chain</h4>
+                <h4>Step-by-step evidence trail</h4>
+                <p className="subtitle" style={{ marginTop: 0, marginBottom: 8 }}>
+                  Waveforms → digitals (ANSI) → SOE / sequence → settings → conclusion
+                </p>
                 <ol>
                   {primary.causal_chain.map((c) => (
                     <li key={c}>{c}</li>
@@ -279,48 +203,6 @@ export function RcaPage() {
         </div>
       )}
 
-      {alts.length > 0 && (
-        <div className="panel" style={{ marginTop: 16 }}>
-          <div className="panel-header">Alternative hypotheses</div>
-          <div className="panel-body" style={{ padding: 0 }}>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Rank</th>
-                  <th>Hypothesis</th>
-                  <th>Status</th>
-                  <th>Score</th>
-                  <th>Why this rank</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alts.map((h) => (
-                  <tr key={h.id}>
-                    <td className="num">{h.rank}</td>
-                    <td>
-                      <div className={styles.altTitle}>{h.title}</div>
-                      {h.hypothesis_code && (
-                        <div className={styles.altCode} title={h.hypothesis_code}>
-                          {h.hypothesis_code.replace(/_/g, ' ').toLowerCase()}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      <StatusBadge status={h.status} />
-                    </td>
-                    <td className="num">{formatConfidencePct(h.confidence)}</td>
-                    <td className={styles.altNotes}>
-                      {h.missing_evidence?.length
-                        ? humanizeEvidenceNotes(h.missing_evidence.join('; '))
-                        : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

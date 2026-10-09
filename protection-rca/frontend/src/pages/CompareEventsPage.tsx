@@ -25,12 +25,12 @@ async function loadSide(id: string): Promise<Side> {
     const [event, faultRaw, rcaList, cons, protection] = await Promise.all([
       api.getEvent(id),
       api.getFaultClassification(id).catch(() => null),
-      api.getRca(id).catch(() => [] as RcaHypothesis[]),
+      api.getRca(id).catch(() => ({ event_id: id, hypotheses: [] as RcaHypothesis[] })),
       api.getConsistency(id).then((r) => r.overall_status).catch(() => 'NOT_AVAILABLE'),
       api.getProtection(id).catch(() => [] as ProtectionOperation[]),
     ]);
     const fault = Array.isArray(faultRaw) ? faultRaw[0] ?? null : faultRaw;
-    const list = Array.isArray(rcaList) ? rcaList : [];
+    const list = Array.isArray(rcaList) ? rcaList : rcaList.hypotheses ?? [];
     const primary = list.find((h) => h.rank === 1) ?? list[0] ?? null;
     return { event, fault, rca: primary, cons, protection: Array.isArray(protection) ? protection : [] };
   } catch (e) {

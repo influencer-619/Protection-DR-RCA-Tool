@@ -40,13 +40,23 @@ async def list_comtrade_ends(db: AsyncSession, event_id: str) -> list[dict[str, 
     for ct in rows:
         end_label = None
         hdr = ct.header_metadata if isinstance(ct.header_metadata, dict) else {}
-        end_label = hdr.get("end_label") or hdr.get("terminal") or hdr.get("end")
+        end_label = (
+            hdr.get("cascade_role")
+            or hdr.get("end_label")
+            or hdr.get("terminal")
+            or hdr.get("end")
+        )
         if not end_label and ct.event_file_id:
             ef = (
                 await db.execute(select(EventFile).where(EventFile.id == ct.event_file_id))
             ).scalar_one_or_none()
             meta = (ef.file_metadata if ef and isinstance(ef.file_metadata, dict) else {}) or {}
-            end_label = meta.get("end_label") or meta.get("terminal") or meta.get("end")
+            end_label = (
+                meta.get("cascade_role")
+                or meta.get("end_label")
+                or meta.get("terminal")
+                or meta.get("end")
+            )
         ends.append(
             {
                 "comtrade_file_id": ct.id,
@@ -100,13 +110,24 @@ async def set_file_end_label(
 
 
 def pair_local_remote(ends: list[dict[str, Any]]) -> tuple[Optional[dict], Optional[dict]]:
-    local = next((e for e in ends if str(e.get("end_label", "")).upper() in ("LOCAL", "L", "A")), None)
+    """Pair ends for DR dual view: LOCAL/REMOTE or INITIATOR/BACKUP (cascade)."""
+    def _lab(e: dict[str, Any]) -> str:
+        return str(e.get("end_label", "")).upper()
+
+    local = next(
+        (
+            e
+            for e in ends
+            if _lab(e) in ("LOCAL", "L", "A", "INITIATOR")
+        ),
+        None,
+    )
     remote = next(
         (
             e
             for e in ends
-            if str(e.get("end_label", "")).upper() in ("REMOTE", "R", "B", "REMOTE_1")
-            or str(e.get("end_label", "")).upper().startswith("REMOTE")
+            if _lab(e) in ("REMOTE", "R", "B", "REMOTE_1", "BACKUP")
+            or _lab(e).startswith("REMOTE")
         ),
         None,
     )

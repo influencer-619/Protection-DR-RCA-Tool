@@ -14,6 +14,7 @@ import type {
   Measurement,
   ProtectionOperation,
   RcaHypothesis,
+  RcaResponse,
   Report,
   ReviewAction,
   SettingSourceInfo,
@@ -207,6 +208,36 @@ export const api = {
     return data;
   },
 
+  async getIncidentForEvent(eventId: string): Promise<{
+    id: string;
+    incident_code: string;
+    mode: string;
+    status: string;
+    correlation_reason: string;
+    members: Array<{
+      event_id: string;
+      event_code?: string | null;
+      role: string;
+      link_reason: string;
+    }>;
+  } | null> {
+    const { data } = await apiClient.get(`/incidents/by-event/${eventId}`);
+    return data ?? null;
+  },
+
+  async attachLateToIncident(
+    incidentId: string,
+    body: { event_id: string; role?: string; detail?: string },
+  ) {
+    const { data } = await apiClient.post(`/incidents/${incidentId}/attach-late`, body);
+    return data;
+  },
+
+  async unlinkIncidentEvent(incidentId: string, body: { event_id: string; detail?: string }) {
+    const { data } = await apiClient.post(`/incidents/${incidentId}/unlink`, body);
+    return data;
+  },
+
   async createEvent(payload: Partial<Event> & Record<string, unknown>): Promise<Event> {
     const { data } = await apiClient.post<Event>('/events', payload);
     return data;
@@ -305,12 +336,17 @@ export const api = {
     id: string,
     body: {
       name?: string;
+      /** Relay tag shown in plant tree (e.g. RL9) */
       relay_tag?: string;
       manufacturer?: string | null;
       model?: string | null;
       firmware_version?: string | null;
       /** Peer IED id, or null to clear */
       remote_relay_id?: string | null;
+      /** none | line_remote | cascade */
+      peer_type?: 'none' | 'line_remote' | 'cascade' | string | null;
+      /** INITIATOR | BACKUP when peer_type=cascade */
+      cascade_role?: 'INITIATOR' | 'BACKUP' | string | null;
     },
   ): Promise<Relay> {
     const { data } = await apiClient.patch(`/ieds/${id}`, body);
@@ -580,11 +616,21 @@ export const api = {
     return data;
   },
 
-  async startAnalysis(eventId: string, force = false): Promise<AnalysisJob> {
+  async startAnalysis(
+    eventId: string,
+    force = false,
+    opts?: {
+      parameters?: Record<string, unknown>;
+    },
+  ): Promise<AnalysisJob> {
     try {
       const { data } = await apiClient.post<{ job: AnalysisJob }>(
         '/analyse',
-        { event_id: eventId, force },
+        {
+          event_id: eventId,
+          force,
+          parameters: opts?.parameters,
+        },
         { timeout: 60000 },
       );
       return data.job;
@@ -629,7 +675,7 @@ export const api = {
   async uploadEventFiles(
     eventId: string,
     files: File[],
-    opts?: { end_label?: 'LOCAL' | 'REMOTE' | string },
+    opts?: { end_label?: 'LOCAL' | 'REMOTE' | 'INITIATOR' | 'BACKUP' | string },
   ): Promise<EventFile[]> {
     const form = new FormData();
     files.forEach((f) => form.append('files', f));
@@ -776,12 +822,24 @@ export const api = {
     return data;
   },
 
-  async getRca(eventId: string): Promise<RcaHypothesis[]> {
-    const { data } = await apiClient.get<{ hypotheses?: RcaHypothesis[] } | RcaHypothesis[]>(
+  async getRca(eventId: string): Promise<RcaResponse> {
+    const { data } = await apiClient.get<RcaResponse | RcaHypothesis[]>(
       `/events/${eventId}/rca`,
     );
-    if (Array.isArray(data)) return data;
-    return data.hypotheses ?? [];
+    if (Array.isArray(data)) {
+      return { event_id: eventId, hypotheses: data, supporting_scores: null };
+    }
+    return {
+      event_id: data.event_id ?? eventId,
+      hypotheses: data.hypotheses ?? [],
+      decision_state: data.decision_state,
+      supporting_scores: data.supporting_scores ?? null,
+      enrichment: data.enrichment ?? null,
+      matrix: data.matrix ?? null,
+      compound_class: data.compound_class ?? null,
+      matrix_scenario: data.matrix_scenario ?? null,
+      matrix_traces: data.matrix_traces ?? null,
+    };
   },
 
   async getCauseEvidence(eventId: string): Promise<{

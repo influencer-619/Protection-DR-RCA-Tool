@@ -94,6 +94,60 @@ hypotheses:
   - id: MOTOR_START
     required_for_confirmed:
       - motor_start_possible
+  - id: MOTOR_LOCKED_ROTOR
+    required_for_confirmed:
+      - locked_rotor_indicated
+  - id: MOTOR_LOAD_JAM
+    required_for_confirmed:
+      - load_jam_indicated
+  - id: HIGH_IMPEDANCE_FAULT
+    required_for_confirmed:
+      - high_impedance_fault_indicated
+  - id: INTERMITTENT_EARTH_FAULT
+    required_for_confirmed:
+      - intermittent_earth_indicated
+  - id: TEMPORARY_FAULT_RECLOSE
+    required_for_confirmed:
+      - autoreclose_success
+  - id: PERSISTENT_FAULT_RECLOSE
+    required_for_confirmed:
+      - autoreclose_fail
+  - id: OVEREXCITATION
+    required_for_confirmed:
+      - overflux_operated
+  - id: THERMAL_OVERLOAD
+    required_for_confirmed:
+      - thermal_overload_indicated
+  - id: PHASE_LOSS
+    required_for_confirmed:
+      - phase_loss_indicated
+  - id: NEGATIVE_SEQUENCE
+    required_for_confirmed:
+      - negative_sequence_elevated
+  - id: LOSS_OF_EXCITATION
+    required_for_confirmed:
+      - loss_of_excitation_operated
+  - id: FREQUENCY_EVENT
+    required_for_confirmed:
+      - frequency_protection_operated
+  - id: OUT_OF_STEP
+    required_for_confirmed:
+      - out_of_step_operated
+  - id: ACCIDENTAL_ENERGIZATION
+    required_for_confirmed:
+      - accidental_energization_indicated
+  - id: CAPACITOR_BANK_FAULT
+    required_for_confirmed:
+      - capacitor_unbalance_operated
+  - id: OVERVOLTAGE
+    required_for_confirmed:
+      - overvoltage_operated
+  - id: TRIP_CIRCUIT_FAILURE
+    required_for_confirmed:
+      - trip_circuit_fail
+  - id: BREAKER_MECHANICAL_FAILURE
+    required_for_confirmed:
+      - breaker_stuck
   - id: EXTERNAL_GRID_DISTURBANCE
     required_for_confirmed:
       - external_event_correlated

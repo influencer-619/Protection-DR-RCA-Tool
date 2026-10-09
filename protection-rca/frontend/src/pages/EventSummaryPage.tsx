@@ -8,6 +8,7 @@ import type {
   FaultClassification,
   ProtectionOperation,
   RcaHypothesis,
+  RcaResponse,
   SettingSourceInfo,
   TimelineEntry,
 } from '@/types';
@@ -16,6 +17,8 @@ import { DataQualityBadge } from '@/components/DataQualityBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { VerdictStrip } from '@/components/VerdictStrip';
 import { SharePackButton } from '@/components/SharePackButton';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
+import { formatAnsi, formatAnsiCompact } from '@/utils/ansiDeviceNames';
 import { resolveDistanceApplicable, resolveFaultType } from '@/utils/schemeContext';
 import { isEvidenceBackedAssert } from '@/utils/protectionOperateEvidence';
 import {
@@ -106,6 +109,55 @@ function fmtDistance(km: number | null | undefined): string {
   return `${n >= 10 ? n.toFixed(2) : n.toFixed(3)} km`;
 }
 
+function humanizeToken(raw: string | null | undefined): string {
+  if (!raw) return '—';
+  return raw.replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function intertripFromRca(
+  timeline: TimelineEntry[],
+  rcaMeta: RcaResponse | null,
+): string {
+  const enrich = (rcaMeta?.enrichment || {}) as Record<string, unknown>;
+  const deep = (enrich.ladder_deep || {}) as { tokens?: string[] };
+  const bag = new Set<string>([
+    ...((enrich.tokens as string[]) || []),
+    ...(deep.tokens || []),
+    ...(rcaMeta?.matrix_traces || []),
+  ].map((t) => String(t)));
+  const hasRx =
+    [...bag].some((t) => /intertrip_receive/i.test(t)) ||
+    [...bag].some((t) => /INTERTRIP/i.test(t) && /RECEIV/i.test(t));
+  const hasSend =
+    [...bag].some((t) => /intertrip_send/i.test(t)) ||
+    [...bag].some((t) => /INTERTRIP/i.test(t) && /SEND/i.test(t));
+  if (hasRx && !hasSend) return 'Received (backup / upstream clearance)';
+  if (hasSend && !hasRx) return 'Sent (LBB / transfer trip)';
+  if (hasRx && hasSend) return 'Received + send asserted';
+
+  const it = timeline.filter((t) => (t.event_type || '').toLowerCase() === 'intertrip');
+  if (!it.length) return 'None asserted';
+  const blob = it
+    .map((t) =>
+      [
+        t.label,
+        t.source,
+        t.description,
+        typeof t.payload === 'string' ? t.payload : JSON.stringify(t.payload ?? {}),
+      ]
+        .filter(Boolean)
+        .join(' '),
+    )
+    .join(' ')
+    .toUpperCase();
+  const rx = /RECEIV|INTERTRIP_RX|\bTT_?RX\b|\bBF_?RX\b/.test(blob);
+  const send = /INTERTRIP_SEND|TT_?SEND|TRANSFER.?TRIP.?SEND|\bBF_?TX\b/.test(blob);
+  if (rx && !send) return 'Received (backup / upstream clearance)';
+  if (send && !rx) return 'Sent (LBB / transfer trip)';
+  if (rx && send) return 'Received + send asserted in SOE';
+  return 'Asserted';
+}
+
 function looksLikeFileBatch(desc: string | null | undefined): boolean {
   if (!desc) return true;
   if (/^upload batch/i.test(desc)) return true;
@@ -120,6 +172,7 @@ export function EventSummaryPage() {
   const { event, loading: eventLoading, analysisRevision } = useEventOrWorkspace(id);
   const [fault, setFault] = useState<FaultClassification | null>(null);
   const [rca, setRca] = useState<RcaHypothesis[]>([]);
+  const [rcaMeta, setRcaMeta] = useState<RcaResponse | null>(null);
   const [protection, setProtection] = useState<ProtectionOperation[]>([]);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [findings, setFindings] = useState<ConsistencyFinding[]>([]);
@@ -138,7 +191,16 @@ export function EventSummaryPage() {
           else setFault(f);
         })
         .catch(() => setFault(null)),
-      api.getRca(id).then(setRca).catch(() => setRca([])),
+      api
+        .getRca(id)
+        .then((r) => {
+          setRca(r.hypotheses);
+          setRcaMeta(r);
+        })
+        .catch(() => {
+          setRca([]);
+          setRcaMeta(null);
+        }),
       api.getProtection(id).then(setProtection).catch(() => setProtection([])),
       api.getTimeline(id).then(setTimeline).catch(() => setTimeline([])),
       api.getConsistency(id).then((r) => {
@@ -150,6 +212,11 @@ export function EventSummaryPage() {
   }, [id, analysisRevision]);
 
   const primary = rca.find((h) => h.rank === 1) ?? rca[0];
+  const causalChain = (primary?.causal_chain || []).map(String).filter(Boolean);
+  const ladderDeep = (rcaMeta?.enrichment?.ladder_deep || {}) as {
+    l2_causality?: { chain?: string[]; order_ok?: boolean | null; score?: number };
+  };
+  const l2 = ladderDeep.l2_causality;
   // Scheme status (79/86/25) is not a fault-protection pickup — show separately
   const SCHEME_ELEMENTS = new Set(['79', '86', '25']);
   // Trips / pickups only when COMTRADE digital / clear SER evidence backs the assert
@@ -176,14 +243,15 @@ export function EventSummaryPage() {
     return ot.includes('RECLOSE');
   });
   const inconsistent = findings.filter((f) => f.status === 'INCONSISTENT');
-  const plantExtra = (event?.extra as Record<string, string> | undefined) ?? {};
-  const plantLabels =
-    (event?.extra as { plant_labels?: Record<string, string> } | undefined)?.plant_labels ?? {};
-
-  const substation =
-    event?.substation_name ?? plantLabels.substation_name ?? plantExtra.substation_name ?? '—';
-  const bay = event?.bay_name ?? plantLabels.bay_name ?? plantExtra.bay_name ?? '—';
-  const relay = event?.relay_tag ?? plantLabels.relay_tag ?? plantExtra.relay_tag ?? '—';
+  const incidentStamp =
+    event?.extra && typeof event.extra === 'object'
+      ? (event.extra as { incident?: { incident_code?: string; mode?: string; role?: string; correlation_reason?: string } })
+          .incident
+      : undefined;
+  const substation = event?.substation_name ?? '—';
+  const bay = event?.bay_name ?? '—';
+  const relay = event?.relay_tag ?? '—';
+  const feederLabel = event?.feeder ?? null;
 
   const timing = useMemo(() => {
     type Row = { ms: number; src: string };
@@ -240,6 +308,10 @@ export function EventSummaryPage() {
   const supporting = (primary?.supporting_evidence_ids ?? [])
     .slice(0, 6)
     .map(humanizeEvidenceToken);
+  const intertripLabel = useMemo(
+    () => intertripFromRca(timeline, rcaMeta),
+    [timeline, rcaMeta],
+  );
 
   if (eventLoading || !loaded) {
     return <div className="empty-state">Building event summary…</div>;
@@ -269,23 +341,28 @@ export function EventSummaryPage() {
     eventExtra: (event?.extra || {}) as Record<string, unknown>,
   });
   const tripSummary = trips.length
-    ? trips.map((t) => `${t.element} trip`).join('; ')
+    ? trips.map((t) => formatAnsiCompact(t.element)).join(' · ') + ' trip'
     : pickups.length
-      ? `${[...new Set(pickups.map((p) => p.element))].join(', ')} — start only (no trip assert)`
+      ? `${[...new Set(pickups.map((p) => formatAnsiCompact(p.element)))].join(' · ')} — pickup only`
+      : 'None asserted';
+  const tripSummaryFull = trips.length
+    ? trips.map((t) => `${formatAnsi(t.element)} trip`).join('; ')
+    : pickups.length
+      ? `${[...new Set(pickups.map((p) => formatAnsi(p.element)))].join(', ')} — start only (no trip assert)`
       : 'None asserted';
 
   return (
     <div>
-      <div className={`${styles.toolbar} no-print`}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem', margin: 0 }}>One-page event summary</h1>
-          <p className="subtitle" style={{ margin: '4px 0 0' }}>
-            Printable disturbance snapshot for protection review
-          </p>
-        </div>
+      <div className="no-print" style={{ marginBottom: 12 }}>
+        <CombinedPageHeader
+          title="One-page event summary"
+          subtitle="Printable disturbance snapshot for protection review"
+        />
+      </div>
+      <div className={`${styles.toolbar} no-print`} style={{ justifyContent: 'flex-end' }}>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {id && <SharePackButton eventId={id} eventCode={event.event_id} />}
-          <Link className="btn btn-sm" to={`/events/${id}/dr`}>
+          <Link className="btn btn-sm btn-primary" to={`/events/${id}/dr`}>
             DR workspace
           </Link>
           <Link className="btn btn-sm" to={`/events/${id}/overview`}>
@@ -294,7 +371,7 @@ export function EventSummaryPage() {
           <Link className="btn btn-sm" to={`/events/${id}/report`}>
             Full report
           </Link>
-          <button type="button" className="btn btn-sm btn-primary" onClick={() => window.print()}>
+          <button type="button" className="btn btn-sm" onClick={() => window.print()}>
             Print / PDF
           </button>
         </div>
@@ -307,7 +384,13 @@ export function EventSummaryPage() {
           consistency={overallCons}
           inconsistentCount={inconsistent.length}
           rcaTitle={primary?.title}
-          eventStatus={event.status}
+          eventStatus={
+            String(event.status || '').toUpperCase() === 'FAILED' &&
+            (String(event.decision_state || '').toUpperCase().includes('ANALYSIS_COMPLETE') ||
+              Boolean(primary))
+              ? 'REVIEW'
+              : event.status
+          }
           decisionState={event.decision_state}
           nextLabel="Open DR @ fault"
           nextTo={`/events/${id}/dr`}
@@ -318,10 +401,12 @@ export function EventSummaryPage() {
         <header className={styles.cover}>
           <div className={styles.header}>
             <div>
-              <div className={styles.eyebrow}>Protection Expert System · Disturbance summary</div>
+              <div className={styles.eyebrow}>
+                Protection Expert System · Disturbance summary
+              </div>
               <h1 className={styles.title}>
                 <span className="mono">{event.event_id}</span>
-                {event.feeder ? ` · ${event.feeder}` : ''}
+                {feederLabel ? ` · ${feederLabel}` : ''}
               </h1>
               <div className={styles.meta}>
                 {substation} · {bay} · <span className="mono">{relay}</span>
@@ -364,13 +449,39 @@ export function EventSummaryPage() {
             </div>
             <div className={styles.kpi}>
               <span className={styles.kpiLbl}>Primary RCA</span>
-              <span className={styles.kpiVal}>{primary?.title ?? 'Pending'}</span>
+              <span className={styles.kpiVal}>
+                {primary?.title ?? 'Pending'}
+                {primary?.status ? (
+                  <span className={styles.kpiSub}> · {primary.status.replace(/_/g, ' ')}</span>
+                ) : null}
+              </span>
             </div>
             <div className={styles.kpi}>
               <span className={styles.kpiLbl}>Operated</span>
-              <span className={styles.kpiVal}>{tripSummary}</span>
+              <span className={styles.kpiVal} title={tripSummaryFull}>
+                {tripSummary}
+              </span>
             </div>
           </div>
+          {intertripLabel !== 'None asserted' && (
+            <div className={styles.matrixBanner} role="status">
+              <span>
+                <strong>Intertrip</strong> {intertripLabel}
+              </span>
+            </div>
+          )}
+
+          {incidentStamp?.incident_code && (
+            <div className={styles.cascadeBanner} role="status">
+              <strong>Parent incident {incidentStamp.incident_code}</strong>
+              <span>
+                Explicit correlation ({incidentStamp.correlation_reason || '—'})
+                {incidentStamp.mode ? ` · ${incidentStamp.mode}` : ''}
+                {incidentStamp.role ? ` · this event role ${incidentStamp.role}` : ''}
+                . Late DRs attach via incident API — never by time window alone.
+              </span>
+            </div>
+          )}
         </header>
 
         <div className={styles.body}>
@@ -422,26 +533,60 @@ export function EventSummaryPage() {
                   )}
                   <tr>
                     <th>Trips</th>
-                    <td>{tripSummary}</td>
+                    <td title={tripSummaryFull}>{tripSummary}</td>
                   </tr>
                   <tr>
                     <th>Pickups</th>
                     <td>
-                      {[...new Set(pickups.map((p) => p.element))]
+                      {[...new Set(pickups.map((p) => formatAnsiCompact(p.element)))]
                         .filter(Boolean)
-                        .join(', ') || 'None asserted'}
+                        .join(' · ') || 'None asserted'}
                     </td>
                   </tr>
                   <tr>
                     <th>Reclose</th>
                     <td>
-                      {recloseOps.length
-                        ? [...new Set(recloseOps.map((p) => p.element))]
-                            .filter(Boolean)
-                            .map((el) => (el === '79' ? '79 (AR issued)' : el))
-                            .join(', ')
-                        : 'None asserted'}
+                      {(() => {
+                        const ar79 = protection.find(
+                          (p) => String(p.element || '').toUpperCase() === '79',
+                        );
+                        const meta = (ar79?.details as { metadata?: Record<string, unknown> } | null)
+                          ?.metadata;
+                        const phys = (meta?.physics || {}) as {
+                          reclose?: {
+                            shots?: number;
+                            successful?: boolean | null;
+                            unsuccessful?: boolean | null;
+                            lockout?: boolean | null;
+                          };
+                        };
+                        const rc = phys.reclose || {};
+                        const timing = (ar79?.details as { timing?: Record<string, unknown> } | null)
+                          ?.timing;
+                        const shots = rc.shots ?? timing?.reclose_shots;
+                        const base = recloseOps.length
+                          ? [...new Set(recloseOps.map((p) => p.element))]
+                              .filter(Boolean)
+                              .map((el) =>
+                                String(el).toUpperCase() === '79'
+                                  ? `${formatAnsi('79')} issued`
+                                  : formatAnsi(String(el)),
+                              )
+                              .join(', ')
+                          : 'None asserted';
+                        if (shots == null && rc.successful == null && !rc.lockout) return base;
+                        const bits = [base !== 'None asserted' ? base : formatAnsi('79')];
+                        if (shots != null) bits.push(`${shots} shot(s)`);
+                        if (rc.lockout) bits.push('lockout');
+                        else if (rc.successful) bits.push('reclaim OK');
+                        else if (rc.unsuccessful) bits.push('unsuccessful');
+                        return bits.join(' · ');
+                      })()}
                     </td>
+                  </tr>
+                  <tr>
+                    <th>Intertrip</th>
+                    <td>{intertripLabel}</td>
                   </tr>
                 </tbody>
               </table>
@@ -498,6 +643,27 @@ export function EventSummaryPage() {
                   </span>
                 </div>
                 {primary.statement && <p className={styles.statement}>{primary.statement}</p>}
+                {primary.explanation && (
+                  <p className={styles.explanation}>{primary.explanation}</p>
+                )}
+                {causalChain.length > 0 && (
+                  <ol className={styles.causalChain}>
+                    {causalChain.slice(0, 8).map((step, i) => (
+                      <li key={`${i}-${step}`}>{step}</li>
+                    ))}
+                  </ol>
+                )}
+                {l2?.chain && l2.chain.length >= 2 && (
+                  <p className={styles.support}>
+                    <strong>Sequence check:</strong>{' '}
+                    {l2.chain.map(humanizeToken).join(' → ')}
+                    {l2.order_ok === true
+                      ? ' · order OK'
+                      : l2.order_ok === false
+                        ? ' · order check'
+                        : ''}
+                  </p>
+                )}
                 {supporting.length > 0 && (
                   <p className={styles.support}>
                     <strong>Supporting:</strong> {supporting.join('; ')}
@@ -577,7 +743,9 @@ export function EventSummaryPage() {
                 <ul className={styles.findings}>
                   {inconsistent.slice(0, 6).map((f) => (
                     <li key={f.id}>
-                      <span className="mono">{f.element || '—'}</span>
+                      <span className="mono" title={f.element ? formatAnsi(f.element) : undefined}>
+                        {f.element ? formatAnsiCompact(f.element) : '—'}
+                      </span>
                       {f.explanation || formatCheckName(f.check_type) || f.status}
                     </li>
                   ))}

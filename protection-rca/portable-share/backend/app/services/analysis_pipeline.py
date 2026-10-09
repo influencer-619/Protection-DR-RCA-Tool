@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, asdict
 from typing import Any, Optional
 
@@ -113,6 +114,191 @@ class EventAnalysisResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _measurands_from_electrical(elec: Any) -> dict[str, Any]:
+    """Flatten RMS / sequence / frequency for ANSI element physics."""
+    out: dict[str, Any] = {}
+    roles = {v: k for k, v in (getattr(elec, "channel_roles", None) or {}).items()}
+    rms = getattr(elec, "rms", None) or {}
+
+    def _rms_role(role: str) -> Optional[float]:
+        ch = roles.get(role)
+        if not ch:
+            return None
+        r = rms.get(ch)
+        if r is None or getattr(r, "status", None) != "OK":
+            return None
+        try:
+            return float(r.value)
+        except (TypeError, ValueError):
+            return None
+
+    for role, key in (("IA", "Ia"), ("IB", "Ib"), ("IC", "Ic"), ("VA", "Va"), ("VB", "Vb"), ("VC", "Vc")):
+        v = _rms_role(role)
+        if v is not None:
+            out[key] = v
+    ia, ib, ic = out.get("Ia"), out.get("Ib"), out.get("Ic")
+    vals = [v for v in (ia, ib, ic) if v is not None]
+    if vals:
+        out["I_max_a"] = max(vals)
+        out["I_fault_a"] = max(vals)
+    va, vb, vc = out.get("Va"), out.get("Vb"), out.get("Vc")
+    vvals = [v for v in (va, vb, vc) if v is not None]
+    if vvals:
+        out["V_min_v"] = min(vvals)
+        out["V_max_v"] = max(vvals)
+
+    seq_i = (getattr(elec, "sequences", None) or {}).get("current_sequences")
+    if seq_i is not None and getattr(seq_i, "status", None) == "OK" and isinstance(seq_i.value, dict):
+        z = seq_i.value.get("zero") or {}
+        n = seq_i.value.get("negative") or {}
+        if z.get("magnitude") is not None:
+            out["I0"] = float(z["magnitude"])
+            out["I0_a"] = float(z["magnitude"])
+        if n.get("magnitude") is not None:
+            out["I2"] = float(n["magnitude"])
+            out["I2_a"] = float(n["magnitude"])
+
+    freq_map = getattr(elec, "frequency", None) or {}
+    for _ch, fr in freq_map.items():
+        if fr is not None and getattr(fr, "status", None) == "OK":
+            try:
+                out["frequency_hz"] = float(fr.value)
+                break
+            except (TypeError, ValueError):
+                continue
+    if "frequency_hz" not in out and getattr(elec, "nominal_frequency_hz", None):
+        out["frequency_hz"] = float(elec.nominal_frequency_hz)
+    return out
+
+
+def _current_persists_from_timeline(timeline: list[TimelineEvent]) -> bool:
+    """Stuck-breaker evidence from the DR (IEEE C37.119-style BF investigation).
+
+    True when a trip/BF command is present and current does **not** interrupt
+    afterward (and 52a does not show an open). Successful clearance must never
+    set this — that is how HV upstream trips were mislabelled as BF.
+    """
+    trip_times: list[float] = []
+    interrupt_times: list[float] = []
+    open_after_trip = False
+    saw_fault_current = False
+    for ev in timeline:
+        et = str(getattr(ev, "event_type", "") or "")
+        try:
+            t = float(getattr(ev, "timestamp", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            t = 0.0
+        if et in ("protection_trip", "breaker_trip_command"):
+            trip_times.append(t)
+        elif et == "current_interruption":
+            interrupt_times.append(t)
+        elif et in ("current_increase", "fault_inception"):
+            saw_fault_current = True
+        elif et == "52a_change":
+            meta = ev.metadata if isinstance(getattr(ev, "metadata", None), dict) else {}
+            try:
+                frm = int(meta["from"])
+                to = int(meta["to"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            # Defer open check until we know trip time
+            if to < frm:
+                # Placeholder — re-check below against trip time
+                pass
+
+    if not trip_times:
+        return False
+    t0 = min(trip_times)
+    if any(ti >= t0 - 1e-6 for ti in interrupt_times):
+        return False
+
+    for ev in timeline:
+        if str(getattr(ev, "event_type", "") or "") != "52a_change":
+            continue
+        try:
+            t = float(getattr(ev, "timestamp", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if t < t0 - 1e-6:
+            continue
+        meta = ev.metadata if isinstance(getattr(ev, "metadata", None), dict) else {}
+        try:
+            frm = int(meta["from"])
+            to = int(meta["to"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if to < frm:
+            open_after_trip = True
+            break
+    if open_after_trip:
+        return False
+
+    # Trip + fault current, no interruption and no 52a open → current persists
+    return bool(saw_fault_current)
+
+
+def _timeline_first_trip_s(timeline: list[TimelineEvent]) -> Optional[float]:
+    """Earliest protection / breaker trip command time (seconds), if any."""
+    t0: Optional[float] = None
+    for ev in timeline:
+        et = str(getattr(ev, "event_type", "") or "")
+        if et not in ("protection_trip", "breaker_trip_command"):
+            continue
+        try:
+            t = float(getattr(ev, "timestamp", None))
+        except (TypeError, ValueError):
+            continue
+        if t0 is None or t < t0:
+            t0 = t
+    return t0
+
+
+def _timeline_indicates_breaker_close(timeline: list[TimelineEvent]) -> bool:
+    """True only for a *pre-trip* CLOSE — used for Switch-onto-fault (SOTF).
+
+    - 52a asserts when closed → rising edge (to > from) = close
+    - 52b asserts when open → falling edge (to < from) = close
+    - Explicit CLOSE channel names also count
+    - Autoreclose / ``reclose`` timeline edges after a trip are **not** SOTF —
+      they are AR reclaim (often into a persistent fault). Counting them caused
+      every feeder/line DR with 79 to become primary RCA "Switch onto fault".
+    """
+    t_trip = _timeline_first_trip_s(timeline)
+
+    def _after_trip(ev: TimelineEvent) -> bool:
+        if t_trip is None:
+            return False
+        try:
+            t = float(getattr(ev, "timestamp", None))
+        except (TypeError, ValueError):
+            return False
+        # Close more than 20 ms after first trip → AR / reclaim, not energize-into-fault
+        return t > t_trip + 0.02
+
+    for ev in timeline:
+        et = str(getattr(ev, "event_type", "") or "")
+        # Never treat AR reclaim as SOTF close
+        if et == "reclose":
+            continue
+        meta = ev.metadata if isinstance(getattr(ev, "metadata", None), dict) else {}
+        ch = str(meta.get("channel") or getattr(ev, "source", "") or "").upper()
+        if re.search(r"\bCLOSE\b|CB\s*CLOSE|52\s*CLOSE|CLOSING", ch):
+            if not _after_trip(ev):
+                return True
+            continue
+        if et not in ("52a_change", "52b_change"):
+            continue
+        try:
+            frm = int(meta["from"])
+            to = int(meta["to"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        is_close = (et == "52a_change" and to > frm) or (et == "52b_change" and to < frm)
+        if is_close and not _after_trip(ev):
+            return True
+    return False
 
 
 def _breaker_from_timeline(timeline: list[TimelineEvent]) -> dict[str, Any]:
@@ -292,7 +478,8 @@ class AnalysisPipeline:
             "trip_command": any(
                 e.event_type in ("protection_trip", "breaker_trip_command") for e in timeline
             ),
-            "current_persists": False,
+            # Derive from DR: trip without current_interruption / 52a open
+            "current_persists": _current_persists_from_timeline(timeline),
             "intertrip": any(e.event_type == "intertrip" for e in timeline),
             "channel_roles": dict(elec.channel_roles),
             "phasors": {
@@ -300,22 +487,73 @@ class AnalysisPipeline:
             },
             "detectors": dict(elec.detectors or {}),
         }
+        electrical_flags.update(_measurands_from_electrical(elec))
+        # Merge LBB / multi-bay cascade flags (initiator + backup packages in one event)
+        cflags = event_meta.get("cascade_flags") if isinstance(event_meta, dict) else None
+        if isinstance(cflags, dict):
+            if cflags.get("cascade_lbb_detected"):
+                electrical_flags["cascade_lbb_detected"] = True
+            # Only OR-in persist with explicit evidence grade — never from CFG names alone.
+            if cflags.get("current_persists") and cflags.get("persist_evidence") in (
+                "waveform",
+                "cascade_mode",
+            ):
+                electrical_flags["current_persists"] = True
+            if cflags.get("trip_command"):
+                electrical_flags["trip_command"] = True
+            if cflags.get("intertrip"):
+                electrical_flags["intertrip"] = True
+            if cflags.get("intertrip_receive_seen"):
+                electrical_flags["intertrip_receive_seen"] = True
+            if cflags.get("intertrip_send_seen"):
+                electrical_flags["intertrip_send_seen"] = True
+            if cflags.get("cascade_upstream_clearance"):
+                electrical_flags["cascade_upstream_clearance"] = True
+            digs = cflags.get("digital_channel_names")
+            if isinstance(digs, list) and digs:
+                electrical_flags["digital_channel_names"] = list(digs)
+            stoks = cflags.get("scheme_tokens")
+            if isinstance(stoks, list) and stoks:
+                electrical_flags["scheme_tokens"] = list(
+                    dict.fromkeys(
+                        list(electrical_flags.get("scheme_tokens") or []) + list(stoks)
+                    )
+                )
         # Optional differential / remote currents from event meta (multi-end)
         multi = event_meta.get("multi_end") or (
             event_meta.get("extra", {}) if isinstance(event_meta.get("extra"), dict) else {}
         ).get("multi_end")
         if isinstance(multi, dict):
-            for key in ("i_local", "i_remote", "i_w1", "i_w2", "diff_87", "direction_67", "bf_timing"):
+            for key in (
+                "i_local",
+                "i_remote",
+                "i_w1",
+                "i_w2",
+                "diff_87",
+                "direction_67",
+                "bf_timing",
+                "v_bus",
+                "v_line",
+                "v_local",
+                "v_remote",
+                "f_bus_hz",
+                "f_line_hz",
+            ):
                 if key in multi:
                     electrical_flags[key] = multi[key]
+            electrical_flags["multi_end"] = multi
+        dig_names = electrical_flags.get("digital_channel_names")
+        if not isinstance(dig_names, list) or not dig_names:
+            dig_names = [
+                getattr(ch, "name", None) or str(ch)
+                for ch in (getattr(record, "digital_channels", None) or [])
+            ]
+            electrical_flags["digital_channel_names"] = dig_names
         prot = self.protection.assess(
             timeline=timeline,
             setting_candidates=setting_candidates,
             electrical=electrical_flags,
-            digital_channel_names=[
-                getattr(ch, "name", None) or str(ch)
-                for ch in (getattr(record, "digital_channels", None) or [])
-            ],
+            digital_channel_names=list(dig_names),
             digital_map=digital_map,
         )
         limitations.extend(prot.limitations)
@@ -381,7 +619,15 @@ class AnalysisPipeline:
             electrical_flags["event_class"] = str(ec)
             if ecs:
                 electrical_flags["event_class_status"] = str(ecs)
-            if str(ec) != "FAULT":
+            # Only explicit non-fault DFR classes suppress shunt framing.
+            # UNKNOWN must not set no_fault (aligns with HypothesisEngine).
+            _non_fault_ec = str(ec) in (
+                "ENERGIZATION",
+                "MOTOR_START",
+                "SWITCHING",
+                "DISTURBANCE",
+            )
+            if _non_fault_ec:
                 electrical_flags["no_fault"] = True
                 electrical_flags["fault_indicated"] = False
                 if str(ec) == "ENERGIZATION":
@@ -451,16 +697,44 @@ class AnalysisPipeline:
             electrical_flags["intertrip"] = True
         if "reclose" in tl_types:
             electrical_flags["switching_correlated"] = True
-        # Breaker status change → close/open context for switch-onto-fault RCA
-        if "52a_change" in tl_types or "52b_change" in tl_types:
+        # True breaker CLOSE only (not any 52a/52b change). Trip opens must not
+        # inflate Switch-onto-fault RCA on normal fault clearances.
+        if _timeline_indicates_breaker_close(timeline):
             electrical_flags["breaker_close"] = True
             electrical_flags["switching_correlated"] = True
         electrical_flags["timeline_event_types"] = sorted({str(t) for t in tl_types if t})
+        # Full timeline objects for L1 digital detail + L2 causality ladder
+        electrical_flags["timeline_events"] = [
+            e.to_dict() if hasattr(e, "to_dict") else e for e in timeline
+        ]
 
         electrical_flags["digital_channel_names"] = [
             getattr(ch, "name", None) or str(ch)
             for ch in (getattr(record, "digital_channels", None) or [])
         ]
+
+        # Intertrip SEND vs RECEIVE from local digitals + timeline (SOE/SER).
+        # Must not rely solely on pre-scan cascade_flags — HV backup DRs often
+        # assert INTERTRIP_RECEIVED while station SOE also lists LV SEND.
+        try:
+            from app.services.cascade_lbb import classify_intertrip_direction
+
+            it_dir = classify_intertrip_direction(
+                digital_names=list(electrical_flags.get("digital_channel_names") or []),
+                timeline_events=list(timeline),
+            )
+            if it_dir.get("intertrip_receive_seen"):
+                electrical_flags["intertrip_receive_seen"] = True
+                electrical_flags["intertrip"] = True
+            if it_dir.get("intertrip_send_seen"):
+                electrical_flags["intertrip_send_seen"] = True
+                electrical_flags["intertrip"] = True
+            if it_dir.get("cascade_upstream_clearance"):
+                electrical_flags["cascade_upstream_clearance"] = True
+                electrical_flags["intertrip_receive_seen"] = True
+                electrical_flags["intertrip"] = True
+        except Exception:  # noqa: BLE001
+            pass
 
         extra = event_meta.get("extra") if isinstance(event_meta.get("extra"), dict) else {}
         cause_ev = event_meta.get("cause_evidence")
@@ -479,6 +753,28 @@ class AnalysisPipeline:
             event_time=event_time if hasattr(event_time, "isoformat") else None,
         )
         limitations.extend(enrich_lims)
+
+        # Breaker / clearance from DR sequence → matrix L2/L3 tokens
+        if isinstance(breaker, dict):
+            electrical_flags["breaker_assessment"] = breaker.get("assessment")
+            if breaker.get("assessment") == BreakerAssessment.NORMAL.value:
+                electrical_flags["successful_clearing"] = True
+                electrical_flags["breaker_open_confirmed"] = True
+        tl_set = {str(t) for t in (electrical_flags.get("timeline_event_types") or [])}
+        if "current_interruption" in tl_set:
+            electrical_flags["successful_clearing"] = True
+            if not electrical_flags.get("current_persists"):
+                electrical_flags["breaker_open_confirmed"] = True
+        if (
+            ("52a_change" in tl_set or "52b_change" in tl_set)
+            and not electrical_flags.get("breaker_close")
+            and (
+                "protection_trip" in tl_set
+                or "breaker_trip_command" in tl_set
+                or electrical_flags.get("trip_command")
+            )
+        ):
+            electrical_flags["breaker_open_confirmed"] = True
 
         # RCA — score hypotheses from whatever evidence is available
         stages.append(JobStage.RCA.value)

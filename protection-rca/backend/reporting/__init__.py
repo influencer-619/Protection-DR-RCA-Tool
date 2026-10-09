@@ -66,6 +66,23 @@ _HUMANIZE_LABELS = {
 }
 
 
+def _ansi_label_filter(value: Any) -> str:
+    """Jinja filter: ``50BF`` → ``50BF (Breaker failure)`` for report tables."""
+    if value is None:
+        return "—"
+    text = str(value).strip()
+    if not text or text in ("—", "-", "GENERAL", "UNKNOWN"):
+        return text or "—"
+    if text.upper() == "GENERAL":
+        return "General"
+    try:
+        from protection.ansi_names import format_ansi
+
+        return format_ansi(text)
+    except Exception:  # noqa: BLE001
+        return text
+
+
 def _humanize_label_filter(value: Any) -> str:
     """Jinja filter: compact labels for narrow KPI cells (no raw ENUM_STYLE overflow)."""
     if value is None:
@@ -132,6 +149,7 @@ class ReportGenerator:
         )
         self.env.filters["as_pct"] = _as_pct_filter
         self.env.filters["humanize_label"] = _humanize_label_filter
+        self.env.filters["ansi_label"] = _ansi_label_filter
 
     def build_statements(self, analysis: dict[str, Any]) -> list[ReportStatement]:
         stmts: list[ReportStatement] = []
@@ -239,7 +257,7 @@ class ReportGenerator:
             )
 
         for a in analysis.get("protection_assessment") or []:
-            el = a.get("element")
+            el = _ansi_label_filter(a.get("element"))
             if a.get("consistency") == "CONSISTENT" and a.get("actual_operation") == "OPERATED":
                 stmts.append(
                     ReportStatement(

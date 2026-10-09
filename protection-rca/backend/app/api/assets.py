@@ -57,10 +57,21 @@ router = APIRouter(prefix="/api", tags=["plant"])
 
 
 async def _relay_out(db: DbSession, row: Relay) -> RelayOut:
+    from app.schemas.assets import PeerLinkOut
+
     out = RelayOut.model_validate(row)
-    peer = await remote_peer.resolve_remote_relay(db, row)
-    if peer is not None:
-        out.remote_ied = RemoteIedOut.model_validate(remote_peer.remote_summary(row, peer))
+    try:
+        peer = await remote_peer.resolve_remote_relay(db, row)
+        link = remote_peer.peer_link_summary(row, peer)
+        out.peer_type = link["peer_type"]
+        out.cascade_role = link.get("cascade_role")
+        out.peer_link = PeerLinkOut.model_validate(link)
+        if peer is not None:
+            summary = remote_peer.remote_summary(row, peer)
+            out.remote_ied = RemoteIedOut.model_validate(summary) if summary else None
+    except Exception:  # noqa: BLE001 — never block rename/update on peer enrichment
+        out.peer_type = remote_peer.get_peer_type(row)
+        out.cascade_role = remote_peer.get_cascade_role(row)
     return out
 
 
@@ -476,7 +487,7 @@ async def list_ieds(
     if feeder_id:
         q = q.where(Relay.feeder_id == feeder_id)
     rows = (await db.execute(q.order_by(Relay.relay_tag))).scalars().all()
-    return [RelayOut.model_validate(r) for r in rows]
+    return [await _relay_out(db, r) for r in rows]
 
 
 @router.get("/ieds/{ied_id}", response_model=IedContextOut)
@@ -516,6 +527,7 @@ async def get_ied_context(
         substation=SubstationOut.model_validate(sub),
         path_label=" / ".join(parts),
         remote_ied=ied_out.remote_ied,
+        peer_link=ied_out.peer_link,
     )
 
 
@@ -544,21 +556,38 @@ async def update_ied(
         if not name:
             raise HTTPException(status_code=400, detail="Name is required")
         row.name = name
-    if data.get("relay_tag"):
-        row.relay_tag = str(data["relay_tag"]).strip()
+    if "relay_tag" in data:
+        tag = str(data.get("relay_tag") or "").strip()
+        if not tag:
+            raise HTTPException(status_code=400, detail="relay_tag is required when provided")
+        row.relay_tag = tag
     if "manufacturer" in data:
         row.manufacturer = data["manufacturer"]
     if "model" in data:
         row.model = data["model"]
     if "firmware_version" in data:
         row.firmware_version = data["firmware_version"]
-    if "remote_relay_id" in body.model_fields_set:
-        raw = body.remote_relay_id
+    peer_fields = {"remote_relay_id", "peer_type", "cascade_role"}
+    if peer_fields & body.model_fields_set:
+        raw = body.remote_relay_id if "remote_relay_id" in body.model_fields_set else remote_peer.get_remote_relay_id(row)
         peer_id = str(raw).strip() if raw else None
         if peer_id == "":
             peer_id = None
+        pt = body.peer_type if "peer_type" in body.model_fields_set else remote_peer.get_peer_type(row)
+        if not peer_id:
+            pt = remote_peer.PEER_TYPE_NONE
+        elif not pt or pt == remote_peer.PEER_TYPE_NONE:
+            # Legacy: only remote_relay_id → line_remote
+            pt = remote_peer.PEER_TYPE_LINE
+        role = body.cascade_role if "cascade_role" in body.model_fields_set else remote_peer.get_cascade_role(row)
         try:
-            await remote_peer.set_remote_peer(db, row, peer_id)
+            await remote_peer.set_peer_link(
+                db,
+                row,
+                peer_type=pt,
+                remote_relay_id=peer_id,
+                cascade_role=role,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     await db.flush()

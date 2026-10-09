@@ -26,6 +26,9 @@ const EVIDENCE_LABELS: Record<string, string> = {
   external_event_correlated: 'External grid event correlated',
   comm_channel_evidence: 'Pilot / carrier / COMM channel evidence',
   intertrip_signal_observed: 'Intertrip / transfer-trip observed',
+  cascade_lbb_detected: 'LBB / multi-bay cascade (initiator BF → upstream clearance)',
+  cascade_upstream_clearance: 'Upstream / backup bay cleared via intertrip',
+  bf_logic_satisfied: 'Breaker-failure (50BF / LBB) logic satisfied',
   scheme_zone_mismatch: 'Hypothesis does not match operated protection zone',
   cause_specific_evidence_absent: 'Cause-specific field evidence not yet provided',
   scheme_library_matched: 'Protection scheme profile matched',
@@ -49,7 +52,6 @@ const EVIDENCE_LABELS: Record<string, string> = {
   generator_diff_picked_up: 'Generator differential pickup asserted',
   line_diff_operated: 'Line differential trip asserted',
   line_diff_picked_up: 'Line differential pickup asserted',
-  bf_logic_satisfied: 'Breaker-failure logic satisfied',
   differential_operated: 'Differential element trip asserted',
   magnetizing_inrush_possible: 'Magnetizing inrush / charging signature (H2)',
   motor_start_possible: 'Motor start / starting-current signature',
@@ -73,7 +75,8 @@ const EVIDENCE_LABELS: Record<string, string> = {
   switch_onto_fault_possible: 'Switch-onto-fault pattern possible',
   switch_onto_fault_context: 'Close / energize into fault context',
   sotf_element_asserted: 'SOTF digital / element asserted',
-  breaker_close_observed: 'Breaker close / 52a change observed',
+  breaker_close_observed: 'Pre-trip breaker close observed',
+  autoreclose_issued: 'Autoreclose issued (not SOTF close)',
 };
 
 const EVENT_CLASS_LABELS: Record<string, string> = {

@@ -9,8 +9,6 @@ interface Props {
   connection: () => Iec61850ConnectionInput;
   disabled: boolean;
   onNewEvents: () => void;
-  /** Peer IED name when Remote IED is configured on this workspace. */
-  remoteIedLabel?: string | null;
 }
 
 const POLL_MS = 20000;
@@ -25,13 +23,7 @@ function intervalLabel(min: number): string {
   return min < 60 ? `${min} min` : `${min / 60} h`;
 }
 
-export function Iec61850AutoFetchCard({
-  iedId,
-  connection,
-  disabled,
-  onNewEvents,
-  remoteIedLabel,
-}: Props) {
+export function Iec61850AutoFetchCard({ iedId, connection, disabled, onNewEvents }: Props) {
   const [state, setState] = useState<Iec61850AutoFetch | null>(null);
   const [busy, setBusy] = useState<null | 'save' | 'run'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,9 +67,9 @@ export function Iec61850AutoFetchCard({
           include_events: state.include_events,
           auto_analyse: state.auto_analyse,
           import_existing: state.import_existing,
-          also_fetch_remote: state.also_fetch_remote ?? false,
           ...(conn.host ? conn : {}),
           ...patch,
+          also_fetch_remote: false,
         }),
       );
     } catch (e) {
@@ -140,8 +132,8 @@ export function Iec61850AutoFetchCard({
       </div>
 
       <p className={styles.sub}>
-        When on, the server checks this IED on schedule and, for every new disturbance record,
-        creates an event with the record
+        When on, the server checks <strong>this IED</strong> on schedule and, for every new
+        disturbance record, creates an event with the record
         {state.include_settings ? ', settings' : ''}
         {state.include_events ? ', events' : ''}
         {state.auto_analyse ? ' and starts analysis' : ''}. Works without this page open.
@@ -173,7 +165,7 @@ export function Iec61850AutoFetchCard({
             disabled={locked}
             onChange={(e) => void save({ auto_analyse: e.target.checked })}
           />{' '}
-          Start analysis automatically
+          Start analysis automatically (normal / this IED)
         </label>
         <label title="Applies when auto-fetch is switched on">
           <input
@@ -183,22 +175,6 @@ export function Iec61850AutoFetchCard({
             onChange={(e) => void save({ import_existing: e.target.checked })}
           />{' '}
           Also import records already on the IED
-        </label>
-        <label
-          title={
-            remoteIedLabel
-              ? `Pull disturbance records from ${remoteIedLabel} into the same event as REMOTE`
-              : 'Set a Remote IED on this workspace first'
-          }
-        >
-          <input
-            type="checkbox"
-            checked={Boolean(state.also_fetch_remote)}
-            disabled={locked || !remoteIedLabel}
-            onChange={(e) => void save({ also_fetch_remote: e.target.checked })}
-          />{' '}
-          Also fetch remote IED
-          {remoteIedLabel ? ` (${remoteIedLabel})` : ''}
         </label>
       </div>
 

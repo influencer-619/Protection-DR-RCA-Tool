@@ -8,7 +8,8 @@ Protection Disturbance Record (DR) / COMTRADE analysis / Root Cause Analysis
 ## Status
 
 See [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md) for an honest
-map of what works vs what is still partial.
+map of what works vs what is still partial. Gap roadmap:
+[`docs/GAP_ANALYSIS_AND_ROADMAP.md`](docs/GAP_ANALYSIS_AND_ROADMAP.md).
 
 Generate COMTRADE golden fixtures (once):
 
@@ -19,16 +20,17 @@ python scripts/generate_comtrade_fixtures.py
 ## Stack
 
 - Frontend: React + TypeScript + Vite (dark engineering console)
-- Backend: FastAPI + SQLAlchemy
-- DB: PostgreSQL (Compose) / SQLite (local scripts)
-- Workers: Celery + Redis (Compose); sync pipeline in local development
-- Storage: MinIO/S3 pattern (Compose)
+- Backend: FastAPI + SQLAlchemy (async)
+- DB: PostgreSQL + `asyncpg` (Compose) / SQLite + `aiosqlite` (local / portable EXE)
+- Workers: Celery + Redis (Compose); deferred `asyncio` jobs locally (sync path when `RUN_ANALYSIS_SYNC=true`)
+- Storage: MinIO/S3 pattern (Compose); local filesystem for portable
 
 ## Quick start (local)
 
-1. `scripts/start-all.bat` or `ProtectionRCA.exe`
-2. UI: http://127.0.0.1:5173 (dev) or http://127.0.0.1:8001 (portable with `frontend/dist`)
-3. Create admin via `BOOTSTRAP_ADMIN_*` env if needed
+1. `cd backend && pip install -r requirements.txt` (includes `aiosqlite` for SQLite URLs)
+2. `scripts/start-all.bat` or `ProtectionRCA.exe`
+3. UI: http://127.0.0.1:5173 (dev) or http://127.0.0.1:8001 (portable with `frontend/dist`)
+4. Create admin via `BOOTSTRAP_ADMIN_*` env if needed
 
 ## Share with another PC / LAN access
 
@@ -51,12 +53,17 @@ Do not send only the `.exe` — the whole `portable-share` folder is required.
 docker compose up --build
 ```
 
-## Workflow
+## Plant-first workflow
 
-Create Event → Upload package → Detect → Validate COMTRADE → Analyse →
-Consistency → RCA → Evidence → Report → Engineer review
+1. **Plant** (`/plant`) — stations / bays / IEDs  
+2. Open an IED → upload DR packages (COMTRADE + side files)  
+3. **Analyse** on the event (progress via analysis-status; sticky ANALYZING is auto-healed)  
+4. **Combined analysis** for dual-end cases:
+   - Cascade / LBB — `/analysis/cascade`
+   - Local / Remote line — `/analysis/local-remote`
+5. Review Summary → Protection → RCA → Waveforms → Report → Engineer review  
 
-Guided UI: **/events/new**
+Legacy `/events/new` and `/upload` redirect to `/plant`.
 
 ## Tests
 
@@ -67,4 +74,4 @@ python -m pytest tests/ -q
 
 ## Documentation
 
-`docs/` — architecture, API, COMTRADE, consistency, RCA, security, user guide.
+`docs/` — architecture, API, COMTRADE, consistency, RCA, security, audit, gap roadmap.

@@ -39,10 +39,48 @@ from app.schemas.analysis import (
 from app.schemas.comtrade import ComtradeFileOut
 from app.schemas.consistency import ConsistencyFindingOut, ConsistencyListResponse
 from app.schemas.evidence import EvidenceListResponse, EvidenceOut
-from app.schemas.rca import RcaHypothesisOut, RcaResponse
+from app.schemas.rca import RcaHypothesisOut, RcaResponse, SupportingScoreOut
 from app.services import analysis_service, event_service
 
 router = APIRouter(prefix="/api", tags=["analysis"])
+
+
+def _rca_supporting_scores(event) -> dict[str, SupportingScoreOut] | None:
+    """Surface ML/similarity availability from persisted report_analysis (ML-014)."""
+    extra = event.extra if isinstance(getattr(event, "extra", None), dict) else {}
+    ra = extra.get("report_analysis") if isinstance(extra.get("report_analysis"), dict) else {}
+    rca = ra.get("rca_hypotheses") if isinstance(ra.get("rca_hypotheses"), dict) else {}
+    raw = rca.get("supporting_scores")
+    if not isinstance(raw, dict):
+        raw = ra.get("supporting_scores") if isinstance(ra.get("supporting_scores"), dict) else None
+    if not isinstance(raw, dict):
+        # Derive from similar_events / anomalies blobs when older analyses lack the block
+        sim = ra.get("similar_events") if isinstance(ra.get("similar_events"), dict) else {}
+        anom = ra.get("anomalies") if isinstance(ra.get("anomalies"), dict) else {}
+        sim_ok = str(sim.get("status") or "").upper() == "OK"
+        ml_ok = str(anom.get("status") or "").upper() == "OK"
+        raw = {
+            "ml": {
+                "available": ml_ok,
+                "status": "OK" if ml_ok else "NOT_AVAILABLE",
+                "message": None if ml_ok else (anom.get("message") or "ML RESULT: NOT AVAILABLE"),
+            },
+            "similarity": {
+                "available": sim_ok,
+                "status": "OK" if sim_ok else "NOT_AVAILABLE",
+                "message": None
+                if sim_ok
+                else (sim.get("message") or "SIMILARITY RESULT: NOT AVAILABLE"),
+            },
+        }
+    out: dict[str, SupportingScoreOut] = {}
+    for key in ("ml", "similarity"):
+        block = raw.get(key)
+        if isinstance(block, dict):
+            out[key] = SupportingScoreOut.model_validate(block)
+        else:
+            out[key] = SupportingScoreOut()
+    return out
 
 _SETTING_PLACEHOLDERS = {
     "",
@@ -91,13 +129,20 @@ async def analyse(
     event = await event_service.get_event(db, body.event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
+
+    params = dict(body.parameters or {})
+    # Combined RCA product removed — always analyse as a single event
+    params.pop("analysis_mode", None)
+    params.pop("peer_event_id", None)
+    params.pop("combined_ready", None)
+
     # Queue job and return immediately — long COMTRADE engineering must not
     # hold the HTTP request open (browser shows "Network Error" on drop/timeout).
     job = await analysis_service.enqueue_analysis(
         db,
         event,
         requested_by=user.id,
-        parameters=body.parameters,
+        parameters=params or None,
         force=body.force,
         request_id=getattr(request.state, "request_id", None),
         defer=True,
@@ -105,6 +150,8 @@ async def analyse(
     # Commit before background so the new session can see the job row.
     await db.commit()
     if job.status == "PENDING":
+        # Dual schedule: create_task is primary (EXE-reliable); BackgroundTasks backup.
+        analysis_service.schedule_deferred_job(job.id)
         background_tasks.add_task(analysis_service.run_job_by_id, job.id)
     return AnalyseResponse(
         job=AnalysisJobOut.model_validate(job),
@@ -132,6 +179,21 @@ async def analysis_status_for_event(
     job = await analysis_service.latest_job_for_event(db, event.id)
     if job is None:
         raise HTTPException(status_code=404, detail="No analysis job for event")
+
+    # Soft re-kick: still PENDING after a few seconds → background task likely dropped.
+    age = analysis_service._job_age_seconds(job)
+    if (
+        str(job.status or "").upper() == "PENDING"
+        and float(job.progress or 0) <= 0.01
+        and not job.started_at
+        and 6.0 <= age < 25.0
+    ):
+        analysis_service.rekick_pending_job(job.id)
+
+    job = await analysis_service.heal_stuck_analysis(db, event, job)
+    if job is None:
+        raise HTTPException(status_code=404, detail="No analysis job for event")
+    await db.commit()
     return AnalysisJobOut.model_validate(job)
 
 
@@ -195,10 +257,15 @@ async def get_waveforms(
     event = await event_service.get_event(db, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
+    from app.core.config import get_settings
     from app.services.waveform_service import load_waveform_payload
 
+    settings = get_settings()
     payload = await load_waveform_payload(
-        db, event.id, comtrade_file_id=comtrade_file_id
+        db,
+        event.id,
+        comtrade_file_id=comtrade_file_id,
+        max_channels=settings.waveform_max_channels,
     )
     out = []
     for c in payload.get("channels") or []:
@@ -349,6 +416,7 @@ async def get_consistency(
     checksum = extra.get("setting_checksum") or extra.get("checksum")
     if not checksum:
         checksum = await _settings_file_checksum(db, event.id, extra.get("setting_file"))
+    relay_tag = extra.get("relay_tag") or plant.get("relay_tag")
     setting_info = {
         "source": src or "NOT AVAILABLE",
         "version": ver or "NOT AVAILABLE",
@@ -356,7 +424,7 @@ async def get_consistency(
         "active_group_status": extra.get("active_group_status") or "NOT VERIFIED",
         "verification_state": extra.get("active_group_status") or "NOT VERIFIED",
         "approval_status": extra.get("setting_approval") or "NOT VERIFIED",
-        "relay_tag": extra.get("relay_tag") or plant.get("relay_tag"),
+        "relay_tag": relay_tag,
         "effective_from": extra.get("setting_effective_from") or extra.get("effective_from"),
         "checksum": checksum,
     }
@@ -509,6 +577,22 @@ async def get_fault_characteristics(
     out_phases = (fault.involved_phases if fault else None) if shunt_fault else None
     out_ground = (fault.ground_involved if fault else None) if shunt_fault else None
 
+    elev_method = feat.get("elevation_method")
+    prefault = feat.get("prefault_rms") if isinstance(feat.get("prefault_rms"), dict) else None
+    fw = feat.get("fault_window") if isinstance(feat.get("fault_window"), dict) else None
+    # Also pull from report snapshot / event.extra when features omitted
+    if fw is None or prefault is None or not elev_method:
+        evt_extra = event.extra if isinstance(event.extra, dict) else {}
+        report = evt_extra.get("report_analysis") if isinstance(evt_extra.get("report_analysis"), dict) else {}
+        elec = report.get("electrical_analysis") if isinstance(report.get("electrical_analysis"), dict) else {}
+        det = elec.get("detectors") if isinstance(elec.get("detectors"), dict) else {}
+        if fw is None and isinstance(det.get("fault_window"), dict):
+            fw = det.get("fault_window")
+        if prefault is None and isinstance(det.get("prefault_rms"), dict):
+            prefault = det.get("prefault_rms")
+        if not elev_method and prefault:
+            elev_method = "prefault_ratio"
+
     return FaultCharacteristicsOut(
         event_id=event.id,
         fault_type=str(fault.fault_type if fault else "UNKNOWN"),
@@ -531,6 +615,9 @@ async def get_fault_characteristics(
         line_impedance_estimate=out_z or None,
         limitations=limitations,
         explanation=fault.explanation if fault else None,
+        elevation_method=str(elev_method) if elev_method else None,
+        prefault_rms=prefault,
+        fault_window=fw,
     )
 
 
@@ -546,10 +633,30 @@ async def get_rca(event_id: str, db: DbSession, user: CurrentUser) -> RcaRespons
             .order_by(RcaHypothesis.rank)
         )
     ).scalars().all()
+    extra = event.extra if isinstance(event.extra, dict) else {}
+    ra = extra.get("report_analysis") if isinstance(extra.get("report_analysis"), dict) else {}
+    enrich = ra.get("enrichment") if isinstance(ra.get("enrichment"), dict) else {}
+    matrix = ra.get("matrix") if isinstance(ra.get("matrix"), dict) else {}
+    casc = extra.get("cascade") if isinstance(extra.get("cascade"), dict) else {}
+    traces = list(enrich.get("matrix_traces") or casc.get("matrix_traces") or [])[:16]
     return RcaResponse(
         event_id=event.id,
         hypotheses=[RcaHypothesisOut.model_validate(r) for r in rows],
         decision_state=event.decision_state,
+        supporting_scores=_rca_supporting_scores(event),
+        enrichment=enrich or None,
+        matrix=matrix or None,
+        compound_class=(
+            enrich.get("compound_class")
+            or matrix.get("compound_class")
+            or casc.get("compound_class")
+        ),
+        matrix_scenario=(
+            enrich.get("matrix_scenario")
+            or matrix.get("matched_scenario_id")
+            or casc.get("matrix_scenario")
+        ),
+        matrix_traces=traces or None,
     )
 
 

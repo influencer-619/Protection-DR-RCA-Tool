@@ -16,6 +16,14 @@ from app.services.audit_service import write_audit
 
 EVENT_NUMBER_PREFIX = "EVT"
 _EVENT_NUMBER_RE = re.compile(rf"^{EVENT_NUMBER_PREFIX}-(\d{{4}})-(\d+)$")
+# Combined Cascade / Local-Remote: EVT-COMB-CASC-YYYY-NNNNN / EVT-COMB-LINE-YYYY-NNNNN
+_COMBINED_KIND = {
+    "CASCADE_LBB": "CASC",
+    "LINE_MULTI_END": "LINE",
+}
+_COMBINED_NUMBER_RE = re.compile(
+    rf"^{EVENT_NUMBER_PREFIX}-COMB-(CASC|LINE)-(\d{{4}})-(\d+)$"
+)
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
 )
@@ -23,6 +31,23 @@ _UUID_RE = re.compile(
 
 def format_event_number(year: int, seq: int) -> str:
     return f"{EVENT_NUMBER_PREFIX}-{year}-{seq:05d}"
+
+
+def format_combined_event_number(kind: str, year: int, seq: int) -> str:
+    """kind is CASC or LINE."""
+    return f"{EVENT_NUMBER_PREFIX}-COMB-{kind}-{year}-{seq:05d}"
+
+
+def combined_kind_from_mode(mode: str | None) -> str:
+    """Map analysis mode → event-number kind (CASC / LINE)."""
+    m = (mode or "").strip().upper()
+    if m in _COMBINED_KIND:
+        return _COMBINED_KIND[m]
+    if "CASCADE" in m or "LBB" in m:
+        return "CASC"
+    if "LINE" in m or "MULTI_END" in m:
+        return "LINE"
+    return "CASC"
 
 
 async def _highest_used(db: AsyncSession, year: int) -> int:
@@ -35,14 +60,29 @@ async def _highest_used(db: AsyncSession, year: int) -> int:
     )
 
 
-async def next_event_number(db: AsyncSession, year: Optional[int] = None) -> str:
-    """Allocate the next EVT-<year>-<seq> number.
+async def _highest_combined_used(db: AsyncSession, kind: str, year: int) -> int:
+    prefix = f"{EVENT_NUMBER_PREFIX}-COMB-{kind}-{year}-"
+    rows = (
+        await db.execute(select(Event.event_id).where(Event.event_id.like(f"{prefix}%")))
+    ).scalars()
+    return max(
+        (
+            int(m.group(3))
+            for r in rows
+            if (m := _COMBINED_NUMBER_RE.match(r or "")) and m.group(1) == kind
+        ),
+        default=0,
+    )
 
-    The counter row is bumped with a single UPDATE so the database serialises
-    concurrent allocations (row lock on PostgreSQL, write lock on SQLite).
-    """
-    year = year or datetime.now().year
-    series = f"{EVENT_NUMBER_PREFIX}-{year}"
+
+async def _allocate_series_number(
+    db: AsyncSession,
+    *,
+    series: str,
+    format_fn,
+    highest_fn,
+) -> str:
+    """Bump EventCounter for ``series`` and return a unique formatted id."""
     for _ in range(2):
         res = await db.execute(
             update(EventCounter)
@@ -52,19 +92,51 @@ async def next_event_number(db: AsyncSession, year: Optional[int] = None) -> str
         )
         seq = res.scalar_one_or_none()
         if seq is not None:
-            candidate = format_event_number(year, seq)
+            candidate = format_fn(seq)
             clash = await db.execute(select(Event.id).where(Event.event_id == candidate))
             if clash.first() is None:
                 return candidate
-            # Someone typed this number manually: jump past everything in use.
-            top = await _highest_used(db, year)
+            top = await highest_fn()
             await db.execute(
                 update(EventCounter).where(EventCounter.series == series).values(value=top + 1)
             )
-            return format_event_number(year, top + 1)
-        db.add(EventCounter(series=series, value=await _highest_used(db, year)))
+            return format_fn(top + 1)
+        db.add(EventCounter(series=series, value=await highest_fn()))
         await db.flush()
-    raise RuntimeError("Could not allocate an event number")
+    raise RuntimeError(f"Could not allocate an event number for series {series}")
+
+
+async def next_event_number(db: AsyncSession, year: Optional[int] = None) -> str:
+    """Allocate the next EVT-<year>-<seq> number.
+
+    The counter row is bumped with a single UPDATE so the database serialises
+    concurrent allocations (row lock on PostgreSQL, write lock on SQLite).
+    """
+    year = year or datetime.now().year
+    series = f"{EVENT_NUMBER_PREFIX}-{year}"
+    return await _allocate_series_number(
+        db,
+        series=series,
+        format_fn=lambda seq: format_event_number(year, seq),
+        highest_fn=lambda: _highest_used(db, year),
+    )
+
+
+async def next_combined_event_number(
+    db: AsyncSession,
+    mode: str,
+    year: Optional[int] = None,
+) -> str:
+    """Allocate EVT-COMB-CASC-YYYY-NNNNN or EVT-COMB-LINE-YYYY-NNNNN."""
+    year = year or datetime.now().year
+    kind = combined_kind_from_mode(mode)
+    series = f"{EVENT_NUMBER_PREFIX}-COMB-{kind}-{year}"
+    return await _allocate_series_number(
+        db,
+        series=series,
+        format_fn=lambda seq: format_combined_event_number(kind, year, seq),
+        highest_fn=lambda: _highest_combined_used(db, kind, year),
+    )
 
 
 async def renumber_legacy_events(db: AsyncSession) -> int:
@@ -83,6 +155,50 @@ async def renumber_legacy_events(db: AsyncSession) -> int:
     if legacy:
         await db.flush()
     return len(legacy)
+
+
+def _is_combined_event(ev: Event) -> bool:
+    extra = ev.extra if isinstance(ev.extra, dict) else {}
+    if extra.get("combined_ready") is True:
+        return True
+    ca = extra.get("combined_analysis")
+    if isinstance(ca, dict) and (
+        ca.get("primary_event_id") or ca.get("peer_event_id") or ca.get("mode")
+    ):
+        return True
+    feeder = str(ev.feeder or "").upper()
+    return feeder.startswith("COMBINED")
+
+
+async def renumber_combined_events(db: AsyncSession) -> int:
+    """Give combined Cascade/Line events a COMB-prefixed number if they still look single-IED."""
+    rows = (
+        await db.execute(select(Event).order_by(Event.created_at.asc(), Event.id.asc()))
+    ).scalars().all()
+    changed = 0
+    for ev in rows:
+        if not _is_combined_event(ev):
+            continue
+        code = str(ev.event_id or "")
+        if _COMBINED_NUMBER_RE.match(code):
+            continue
+        extra = dict(ev.extra or {})
+        ca = extra.get("combined_analysis") if isinstance(extra.get("combined_analysis"), dict) else {}
+        mode = str(
+            (ca or {}).get("mode")
+            or extra.get("analysis_mode")
+            or ("CASCADE_LBB" if "CASCADE" in str(ev.feeder or "").upper() else "LINE_MULTI_END")
+        )
+        created = ev.created_at or datetime.now()
+        old = ev.event_id
+        ev.event_id = await next_combined_event_number(db, mode, created.year)
+        extra.setdefault("previous_event_id", old)
+        extra["combined_event_number"] = True
+        ev.extra = extra
+        changed += 1
+    if changed:
+        await db.flush()
+    return changed
 
 
 async def create_event(
@@ -130,11 +246,14 @@ async def create_event(
         }
 
     if labels:
+        # Prefer explicit extra / plant_labels (e.g. combined LV+HV tags) over
+        # single-IED defaults from the plant tree.
         extra.setdefault("plant_labels", {})
-        extra["plant_labels"].update({k: v for k, v in labels.items() if v})
         for k, v in labels.items():
-            if v:
-                extra[k] = v
+            if not v:
+                continue
+            extra["plant_labels"].setdefault(k, v)
+            extra.setdefault(k, v)
     if payload.get("event_id"):
         payload["event_id"] = str(payload["event_id"]).strip()
     if not payload.get("event_id"):

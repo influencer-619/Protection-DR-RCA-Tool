@@ -44,7 +44,23 @@ class RcaHypothesisOut(BaseModel):
         return obj
 
 
+class SupportingScoreOut(BaseModel):
+    """Optional ML / similarity contribution — never fabricated (ML-014)."""
+
+    available: bool = False
+    status: str = "NOT_AVAILABLE"
+    weight: Optional[float] = None
+    message: Optional[str] = None
+
+
 class RcaResponse(BaseModel):
     event_id: str
     hypotheses: list[RcaHypothesisOut]
     decision_state: Optional[str] = None
+    supporting_scores: Optional[dict[str, SupportingScoreOut]] = None
+    # Matrix / ladder context for Summary + Report (from last analysis)
+    enrichment: Optional[dict[str, Any]] = None
+    matrix: Optional[dict[str, Any]] = None
+    compound_class: Optional[str] = None
+    matrix_scenario: Optional[str] = None
+    matrix_traces: Optional[list[str]] = None

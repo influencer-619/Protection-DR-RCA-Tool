@@ -554,7 +554,7 @@ On an IED row click **Open**. The breadcrumb shows **IED workspace**.
 - **Plant path**: Substation › Voltage › Bay › Feeder
 - **IED name** as the title
 - Chips: relay **Tag**, **kV** (from the voltage level), **IP** (once an IEC 61850 connection has been saved), **Remote** (opposite-end IED when configured)
-- **Remote IED (opposite end)** dropdown — pick the peer relay for 87L / multi-end work. The link is **bidirectional** (A↔B). Clear with **None — single-end only**. Optional; leave unset for single-ended analysis.
+- **Peer relationship** (optional plant reference) — link another IED as line-remote or cascade initiator/backup for topology context. Analysis is always **per event / per IED**.
 - Stats: **Events** (total for this relay) · **In review** · **Last event** (how long ago the newest event occurred)
 
 ### Acquire panel — two modes
@@ -566,14 +566,7 @@ A segmented switch at the top of the panel selects how records come in:
 | **Fetch from IED** | The relay is reachable over the network (IEC 61850 / MMS). See [§10](#10-fetching-records-from-the-relay-iec-61850) and [§11](#11-automatic-fetch-auto-fetch) |
 | **Manual upload** | You have files exported from the relay tool, e-mail, USB, etc. See [§14](#14-uploading-files-manually) |
 
-**Manual upload** shows **two** drop zones:
-
-| Zone | Stamp | Use for |
-|------|-------|---------|
-| **LOCAL** | `end_label = LOCAL` | COMTRADE / settings / SOE from **this** IED |
-| **REMOTE** (optional) | `end_label = REMOTE` | Files from the opposite end (label shows the Remote IED name when set) |
-
-Both zones feed **one event**. Dropped files appear as chips (× to remove); **Clear N files** empties both lists. Analysis auto-pairs LOCAL + REMOTE COMTRADE when both are present (`multi_end`).
+**Manual upload** is a **single** drop zone for **this IED’s** files only (folder drop / Add folder supported). Upload or fetch a DR, then **Analyse** for single-IED RCA. Multi-IED “Combined RCA” create UI has been removed; use the Incidents API or plant peer links if you need correlation metadata.
 
 | Package | Button label | What happens |
 |---------|--------------|--------------|
@@ -740,9 +733,8 @@ Cannot enable without an IP. Settings save immediately on the IED.
 | **Events** | On | Download / read SOE / protection status **with every new DR** (then matched per [§10.7](#107-matching-soe--events-to-the-right-dr)) |
 | **Start analysis automatically** | On | Queue analysis when COMTRADE + settings are present |
 | **Also import records already on the IED** | Off | Editable only while auto-fetch is **off**. First cycle also imports the backlog (still max 10 per cycle) |
-| **Also fetch remote IED** | Off | Requires a **Remote IED** on this workspace. When on, after each local DR is imported (stamped **LOCAL**), the server also pulls a matching new record from the peer into the **same event** (stamped **REMOTE**). Peer offline / no new remote DR → local cycle still succeeds |
 
-Files acquired by auto-fetch (and manual Fetch) are stamped **LOCAL** for the polled IED. **Also fetch remote IED** stays **off by default** so enabling auto-fetch never silently polls another substation.
+Files acquired by auto-fetch (and manual Fetch) are stamped **LOCAL** for the polled IED. Analysis runs on that IED’s event only.
 
 **SCL is not fetched by auto-fetch** (use manual Fetch if needed).
 
@@ -1312,6 +1304,8 @@ Assessed when multi-end / winding / bus currents or BF timing evidence exist in 
 
 **87 operate/restraint:** when both-side currents exist, Id = |I1−I2|, Ir = (|I1|+|I2|)/2; trip expected if Id > Ip + k·Ir. The Protection tab can show an **Id/Ir** characteristic plot. Soft **CT saturation** cues use phase currents only (not residual IN alone).
 
+**LBB evidence on a single event:** digitals/SOE showing 50BF/LBB plus intertrip send/receive can set `cascade_lbb_detected`. The RCA matrix may rank **Breaker failure** as primary when evidence supports it (Excel LBB steps). There is no separate Combined RCA create workflow.
+
 ### Scheme library (RCA context)
 
 Deterministic scheme detection from operated/enabled elements and digital roles, for example:
@@ -1321,7 +1315,7 @@ Deterministic scheme detection from operated/enabled elements and digital roles,
 - POTT / communication-aided schemes (when channel evidence exists)  
 - Feeder overcurrent / earth-fault  
 - Transformer / bus / generator unit schemes  
-- Breaker-failure cascade  
+- Breaker-failure cascade (LBB multi-bay single incident)  
 
 Scheme context influences RCA ranking; it does **not** invent trips or measurements.
 

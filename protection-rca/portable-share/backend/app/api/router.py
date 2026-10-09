@@ -13,6 +13,7 @@ from app.api import (
     events,
     files,
     iec61850,
+    incidents,
     models_api,
     reports,
     review,
@@ -33,6 +34,7 @@ api_router.include_router(reports.router)
 api_router.include_router(review.router)
 api_router.include_router(assets.router)
 api_router.include_router(iec61850.router)
+api_router.include_router(incidents.router)
 api_router.include_router(rules.router)
 api_router.include_router(models_api.router)
 api_router.include_router(audit.router)

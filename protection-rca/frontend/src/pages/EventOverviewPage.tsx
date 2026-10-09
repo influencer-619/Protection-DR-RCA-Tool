@@ -21,6 +21,7 @@ import {
   resolveDistanceApplicable,
   resolveFaultType,
 } from '@/utils/schemeContext';
+import { formatAnsiCompact } from '@/utils/ansiDeviceNames';
 import { isEvidenceBackedAssert } from '@/utils/protectionOperateEvidence';
 import {
   eventClassFromFault,
@@ -63,7 +64,7 @@ function timelineLabel(eventType: string | undefined): string {
   return formatCheckName(eventType);
 }
 
-const OPTIONAL_INPUTS = new Set(['SOE', 'Event report']);
+const OPTIONAL_INPUTS = new Set(['SOE', 'Event report', 'Ends']);
 
 type InputChip = {
   summary: string;
@@ -217,7 +218,7 @@ export function EventOverviewPage() {
         else setFault(f);
       })
       .catch(() => setFault(null));
-    void api.getRca(id).then(setRca).catch(() => setRca([]));
+    void api.getRca(id).then((r) => setRca(r.hypotheses)).catch(() => setRca([]));
     void api.getProtection(id).then(setProtection).catch(() => setProtection([]));
     void api.getTimeline(id).then(setTimeline).catch(() => setTimeline([]));
     void api.getConsistency(id).then((r) => {
@@ -300,31 +301,26 @@ export function EventOverviewPage() {
         ];
 
   const plantExtra = (event?.extra as Record<string, string> | undefined) ?? {};
-  const plantLabels =
-    (event?.extra as { plant_labels?: Record<string, string> } | undefined)?.plant_labels ?? {};
   const fileProcessing = (
     event?.extra as { file_processing?: Record<string, unknown> } | undefined
   )?.file_processing;
-  const substation =
-    event?.substation_name ??
-    plantLabels.substation_name ??
-    plantExtra.substation_name ??
-    station ??
-    'UNKNOWN';
-  const bay = event?.bay_name ?? plantLabels.bay_name ?? plantExtra.bay_name ?? 'NOT VERIFIED';
-  const relay =
-    event?.relay_tag ?? plantLabels.relay_tag ?? plantExtra.relay_tag ?? device ?? 'NOT VERIFIED';
+  const substation = event?.substation_name ?? station ?? 'UNKNOWN';
+  const bay = event?.bay_name ?? 'NOT VERIFIED';
+  const relay = event?.relay_tag ?? device ?? 'NOT VERIFIED';
+  const feederLabel = event?.feeder ?? null;
 
   return (
     <div>
-      {settingSource && <SettingSourceBanner source={settingSource} />}
+      {settingSource && (
+        <SettingSourceBanner source={settingSource} />
+      )}
 
       {event && id && (
         <OneLineBay
-          substation={event.substation_name || (plantExtra.substation_name as string)}
-          bay={event.bay_name || (plantExtra.bay_name as string)}
-          relay={event.relay_tag || (plantExtra.relay_tag as string)}
-          feeder={event.feeder}
+          substation={substation}
+          bay={bay}
+          relay={relay}
+          feeder={feederLabel}
           faultType={resolveFaultType({
             fault,
             eventFaultType: event.fault_type,
@@ -378,6 +374,9 @@ export function EventOverviewPage() {
                 ['Event report', fileProcessing.event_report],
                 ['Line params', fileProcessing.line_params],
                 ['CT/VT', fileProcessing.ct_vt],
+                ...(fileProcessing.ends
+                  ? ([['Ends', fileProcessing.ends]] as Array<[string, unknown]>)
+                  : []),
               ] as Array<[string, unknown]>
             ).map(([label, val]) => {
               const chip = formatInputChip(label, val);
@@ -438,7 +437,7 @@ export function EventOverviewPage() {
               <span className={styles.rowKey}>Operated</span>
               <span className={styles.rowVal}>
                 {trips.length
-                  ? trips.map((t) => `${t.element} trip`).join(', ')
+                  ? trips.map((t) => formatAnsiCompact(t.element)).join(' · ') + ' trip'
                   : formatOperatedElements(protection) || 'None asserted'}
               </span>
             </div>
@@ -582,9 +581,7 @@ export function EventOverviewPage() {
                       ? event.nominal_voltage_kv
                       : (() => {
                           const vl =
-                            plantLabels.voltage_level_name ||
-                            (plantExtra.voltage_level_name as string | undefined) ||
-                            '';
+                            (plantExtra.voltage_level_name as string | undefined) || '';
                           const m = vl.match(/([0-9]{1,3}(?:\.[0-9]+)?)\s*k\s*v/i);
                           return m ? m[1] : 'UNKNOWN';
                         })()}{' '}

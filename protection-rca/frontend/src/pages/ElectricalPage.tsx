@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
-import type { FaultClassification, Measurement, ProtectionOperation } from '@/types';
+import type {
+  FaultCharacteristics,
+  FaultClassification,
+  Measurement,
+  ProtectionOperation,
+} from '@/types';
 import { formatNumber, unitLabel } from '@/utils/formatElectrical';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { PhasorDiagram, type PhasorVector } from '@/components/PhasorDiagram';
@@ -135,6 +141,7 @@ export function ElectricalPage() {
   const [meas, setMeas] = useState<Measurement[]>([]);
   const [fault, setFault] = useState<FaultClassification | null>(null);
   const [protection, setProtection] = useState<ProtectionOperation[]>([]);
+  const [faultChars, setFaultChars] = useState<FaultCharacteristics | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -147,11 +154,13 @@ export function ElectricalPage() {
         .then((f) => (Array.isArray(f) ? f[0] ?? null : f))
         .catch(() => null),
       api.getProtection(id).catch(() => [] as ProtectionOperation[]),
+      api.getFaultCharacteristics(id).catch(() => null),
     ])
-      .then(([m, f, p]) => {
+      .then(([m, f, p, fc]) => {
         setMeas(m);
         setFault(f);
         setProtection(Array.isArray(p) ? p : []);
+        setFaultChars(fc);
       })
       .finally(() => setLoading(false));
   }, [id, analysisRevision]);
@@ -380,12 +389,11 @@ export function ElectricalPage() {
   return (
     <div className="stack-md">
       <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Electrical quantities</h1>
-          <p className="subtitle">
-            Phasors · R–X · harmonics · RMS · sequence · {filtered.length} measurements
-            {dualSide ? ` · ${sideLabel(quantitySide)}` : ''}
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="Electrical quantities"
+            subtitle={`Phasors · R–X · harmonics · RMS · sequence · ${filtered.length} measurements${dualSide ? ` · ${sideLabel(quantitySide)}` : ''}`}
+          />
         </div>
         <QuantitySideToggle
           mode={quantitySide}
@@ -398,6 +406,19 @@ export function ElectricalPage() {
         <div className="alert alert-info">
           Primary channel measurements (kA/kV / `*_PRI`). Sequence and Z from analysis stay on the
           Secondary view — switch there for I0/I2 and impedance.
+        </div>
+      )}
+
+      {faultChars?.elevation_method && (
+        <div className="alert alert-info">
+          Fault-window currents vs{' '}
+          {faultChars.elevation_method === 'prefault_ratio'
+            ? 'prefault (early-cycle) RMS baseline'
+            : 'peak-relative elevation (≥70% of max phase)'}
+          {faultChars.fault_window?.timestamp_s != null
+            ? ` · window @ ${Number(faultChars.fault_window.timestamp_s).toFixed(3)} s`
+            : ''}
+          . See Fault characteristics for phase elevation flags.
         </div>
       )}
 

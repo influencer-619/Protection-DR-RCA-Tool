@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -204,6 +205,103 @@ def _humanize_event_type(value: Any) -> str:
     return key.replace("_", " ").strip().title()
 
 
+# Engineer key sequence — operate-critical steps only (Summary / Report §5)
+_KEY_SEQUENCE_TYPES = frozenset(
+    {
+        "fault_inception",
+        "protection_pickup",
+        "protection_trip",
+        "breaker_trip_command",
+        "52a_change",
+        "52b_change",
+        "current_interruption",
+        "reclose",
+        "lockout",
+        "intertrip",
+    }
+)
+
+
+def _key_sequence_rows(timeline_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """First occurrence of each operate-critical step (chronological)."""
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for row in sorted(
+        timeline_rows,
+        key=lambda r: (
+            float(r["timestamp"]) if r.get("timestamp") is not None else 1e18,
+            str(r.get("event_type") or ""),
+        ),
+    ):
+        et = str(row.get("event_type") or "").strip().lower().replace(" ", "_")
+        if et not in _KEY_SEQUENCE_TYPES or et in seen:
+            continue
+        seen.add(et)
+        out.append(row)
+    return out
+
+
+def _enrichment_token_bag(enrich: dict[str, Any] | None) -> set[str]:
+    bag: set[str] = set()
+    if not isinstance(enrich, dict):
+        return bag
+    for t in enrich.get("tokens") or []:
+        bag.add(str(t))
+    deep = enrich.get("ladder_deep") if isinstance(enrich.get("ladder_deep"), dict) else {}
+    for t in deep.get("tokens") or []:
+        bag.add(str(t))
+    for t in enrich.get("matrix_traces") or []:
+        # traces are free text — also scan for receive/send cues
+        u = str(t).upper()
+        if "INTERTRIP" in u and "RECEIV" in u:
+            bag.add("intertrip_receive_observed")
+        if "INTERTRIP" in u and "SEND" in u:
+            bag.add("intertrip_send_observed")
+    return bag
+
+
+def _intertrip_summary(
+    timeline_rows: list[dict[str, Any]],
+    enrich: dict[str, Any] | None,
+) -> str:
+    bag = _enrichment_token_bag(enrich)
+    rx = "intertrip_receive_observed" in bag
+    send = "intertrip_send_observed" in bag
+    if not rx and not send:
+        blob_parts: list[str] = []
+        for row in timeline_rows:
+            if str(row.get("event_type") or "").lower() != "intertrip":
+                continue
+            blob_parts.append(
+                " ".join(
+                    str(x)
+                    for x in (
+                        row.get("label"),
+                        row.get("source"),
+                        row.get("value"),
+                        row.get("event_type"),
+                    )
+                    if x
+                )
+            )
+        blob = " ".join(blob_parts).upper()
+        if not blob and "intertrip_signal_observed" not in bag:
+            return "None asserted"
+        rx = bool(re.search(r"RECEIV|INTERTRIP_RX|\bTT_?RX\b|\bBF_?RX\b", blob))
+        send = bool(
+            re.search(r"INTERTRIP_SEND|TT_?SEND|TRANSFER.?TRIP.?SEND|\bBF_?TX\b", blob)
+        )
+        if not rx and not send and (blob or "intertrip_signal_observed" in bag):
+            return "Asserted"
+    if rx and not send:
+        return "Received (backup / upstream clearance)"
+    if send and not rx:
+        return "Sent (LBB / transfer trip)"
+    if rx and send:
+        return "Received + send asserted"
+    return "Asserted"
+
+
 def _humanize_token(value: Any) -> str:
     key = str(value or "").strip()
     if not key or key in ("—", "-", "N/A", "NA"):
@@ -219,30 +317,30 @@ def _humanize_token(value: Any) -> str:
         "protection_pickup_with_trip": "Protection pickup with trip",
         "settings_behavior_consistent": "Settings vs behaviour consistent",
         "ground_involved": "Ground / earth involved",
-        "distance_element_operated": "Distance element (21) operated",
+        "distance_element_operated": "Distance element 21 (Distance protection) operated",
         "distance_estimate_available": "Location estimate available",
         "loop_impedance_available": "Loop impedance available",
         "scheme_distance": "Distance scheme context",
-        "differential_operated": "Differential element trip asserted",
-        "transformer_diff_operated": "Transformer differential trip asserted",
-        "transformer_diff_picked_up": "Transformer differential pickup asserted",
-        "bus_diff_operated": "Bus differential trip asserted",
-        "bus_diff_picked_up": "Bus differential pickup asserted",
-        "generator_diff_operated": "Generator differential trip asserted",
-        "generator_diff_picked_up": "Generator differential pickup asserted",
-        "line_diff_operated": "Line differential trip asserted",
-        "line_diff_picked_up": "Line differential pickup asserted",
+        "differential_operated": "Differential element 87 (Differential) trip asserted",
+        "transformer_diff_operated": "Transformer differential 87T trip asserted",
+        "transformer_diff_picked_up": "Transformer differential 87T pickup asserted",
+        "bus_diff_operated": "Bus differential 87B trip asserted",
+        "bus_diff_picked_up": "Bus differential 87B pickup asserted",
+        "generator_diff_operated": "Generator differential 87G trip asserted",
+        "generator_diff_picked_up": "Generator differential 87G pickup asserted",
+        "line_diff_operated": "Line differential 87L trip asserted",
+        "line_diff_picked_up": "Line differential 87L pickup asserted",
         "magnetizing_inrush_possible": "Magnetizing inrush / charging (H2)",
         "motor_start_possible": "Motor start / starting-current signature",
         "motor_protection_present": "Motor-protection digitals present",
-        "motor_element_operated": "Motor element (46/48/49) trip asserted",
-        "motor_element_picked_up": "Motor element (46/48/49) pickup asserted (no trip)",
-        "overcurrent_element_operated": "Overcurrent (50/51) trip asserted",
-        "overcurrent_element_picked_up": "Overcurrent (50/51) pickup asserted (no trip)",
-        "earth_fault_element_operated": "Earth-fault (50N/51N/67N) trip asserted",
-        "earth_fault_element_picked_up": "Earth-fault (50N/51N/67N) pickup asserted (no trip)",
-        "directional_element_operated": "Directional (67) trip asserted",
-        "directional_element_picked_up": "Directional (67) pickup asserted (no trip)",
+        "motor_element_operated": "Motor element 46/48/49 trip asserted",
+        "motor_element_picked_up": "Motor element 46/48/49 pickup asserted (no trip)",
+        "overcurrent_element_operated": "50/51 (Instantaneous / time overcurrent) trip asserted",
+        "overcurrent_element_picked_up": "50/51 (Instantaneous / time overcurrent) pickup asserted (no trip)",
+        "earth_fault_element_operated": "50N/51N/67N (Earth-fault / directional earth) trip asserted",
+        "earth_fault_element_picked_up": "50N/51N/67N (Earth-fault / directional earth) pickup asserted (no trip)",
+        "directional_element_operated": "67 (Directional overcurrent) trip asserted",
+        "directional_element_picked_up": "67 (Directional overcurrent) pickup asserted (no trip)",
         "scheme_motor": "Motor protection scheme",
         "through_fault_excluded": "Through-fault excluded",
         "cable_asset_confirmed": "Cable asset confirmed",
@@ -428,10 +526,20 @@ def _rebuild_analysis_from_db(
                 and "LINE Z1" not in p.upper()
             ]
             expl = "; ".join(parts)
+        evc = (
+            feat.get("event_classification")
+            if isinstance(feat.get("event_classification"), dict)
+            else {}
+        )
+        event_class = feat.get("event_class") or evc.get("event_class")
         fault_dict = {
             "fault_type": primary_fault.fault_type,
             "status": primary_fault.status,
             "confidence": primary_fault.confidence_level or _conf_label(primary_fault.confidence),
+            "event_class": event_class,
+            "event_class_status": feat.get("event_class_status") or evc.get("status"),
+            "involved_phases": primary_fault.involved_phases,
+            "ground_involved": primary_fault.ground_involved,
             "evidence": {**feat, "distance_applicable": distance_applicable},
             "distance": {
                 "value_km": primary_fault.distance_km if distance_applicable else None,
@@ -589,6 +697,9 @@ def _rebuild_analysis_from_db(
             missing = missing or raw.get("missing_evidence")
         supporting = h.supporting_evidence_ids or []
         missing_list = list(missing or [])
+        chain = list(h.causal_chain or [])
+        if not chain and isinstance(raw, dict):
+            chain = list(raw.get("causal_chain") or [])
         row = {
             "hypothesis_id": h.hypothesis_code or h.title,
             "title": h.title,
@@ -598,6 +709,7 @@ def _rebuild_analysis_from_db(
             "confidence": h.confidence_level or _conf_label(h.confidence),
             "statement": h.statement,
             "explanation": h.explanation,
+            "causal_chain": chain,
             "missing_evidence": missing_list,
             "missing_evidence_labels": [_humanize_token(x) for x in missing_list],
             "supporting_evidence": supporting,
@@ -732,6 +844,20 @@ def _rebuild_analysis_from_db(
     limitations.append(
         "Report generated from structured analysis data only."
     )
+    # ML/similarity honesty lives on supporting_scores / RCA page — not report banners
+    _ml_sim_noise = (
+        "ml anomaly scores unavailable",
+        "historical similarity unavailable",
+        "ml weight contribution",
+        "similarity weight contribution",
+        "ml result: not available",
+        "similarity result: not available",
+    )
+    limitations = [
+        lim
+        for lim in limitations
+        if not any(n in str(lim).lower() for n in _ml_sim_noise)
+    ]
     # Drop legacy Z1 / FAULT DISTANCE noise when distance is out of scope
     if primary_fault is not None:
         feat = primary_fault.features if isinstance(primary_fault.features, dict) else {}
@@ -757,6 +883,13 @@ def _rebuild_analysis_from_db(
     substation = plant_labels.get("substation_name") or extra.get("substation_name")
     bay = plant_labels.get("bay_name") or extra.get("bay_name")
     relay_tag = plant_labels.get("relay_tag") or extra.get("relay_tag")
+    cascade = extra.get("cascade") if isinstance(extra.get("cascade"), dict) else {}
+    multi_end = extra.get("multi_end") if isinstance(extra.get("multi_end"), dict) else {}
+    is_cascade = bool(cascade.get("detected")) or "LBB" in str(
+        cascade.get("mode") or ""
+    ).upper()
+    is_line = bool(multi_end.get("detected"))
+    feeder_label = event.feeder
     ct0 = comtrades[0] if comtrades else None
     # DR time = relay disturbance only (event_datetime or COMTRADE start). Never use created_at.
     event_when = _fmt_report_dt(event.event_datetime) or (
@@ -771,6 +904,38 @@ def _rebuild_analysis_from_db(
         else:
             desc = "Disturbance record analysis"
 
+    report_kind = "Protection disturbance analysis report"
+
+    ra_snap = extra.get("report_analysis") if isinstance(extra.get("report_analysis"), dict) else {}
+    enrich = ra_snap.get("enrichment") if isinstance(ra_snap.get("enrichment"), dict) else {}
+    matrix_block = ra_snap.get("matrix") if isinstance(ra_snap.get("matrix"), dict) else {}
+    if not matrix_block and isinstance(cascade.get("rca"), dict):
+        matrix_block = {
+            "compound_class": cascade.get("compound_class"),
+            "matched_scenario_id": cascade.get("matrix_scenario"),
+            "traces": cascade.get("matrix_traces") or [],
+        }
+    compound_class = (
+        enrich.get("compound_class")
+        or matrix_block.get("compound_class")
+        or cascade.get("compound_class")
+    )
+    matrix_scenario = (
+        enrich.get("matrix_scenario")
+        or matrix_block.get("matched_scenario_id")
+        or cascade.get("matrix_scenario")
+    )
+    matrix_traces = list(
+        enrich.get("matrix_traces")
+        or matrix_block.get("traces")
+        or cascade.get("matrix_traces")
+        or []
+    )[:16]
+    key_seq = _key_sequence_rows(timeline_rows)
+    intertrip_label = _intertrip_summary(timeline_rows, enrich)
+    ladder_deep = enrich.get("ladder_deep") if isinstance(enrich.get("ladder_deep"), dict) else {}
+    l2 = ladder_deep.get("l2_causality") if isinstance(ladder_deep.get("l2_causality"), dict) else {}
+
     return {
         "event": {
             "id": event.id,
@@ -781,7 +946,7 @@ def _rebuild_analysis_from_db(
             "description": desc,
             "event_datetime": event_when,
             "created_at": created_when,
-            "feeder": event.feeder,
+            "feeder": feeder_label,
             "nominal_voltage_kv": event.nominal_voltage_kv,
             "nominal_frequency_hz": event.nominal_frequency_hz,
             "asset": asset_line,
@@ -792,6 +957,13 @@ def _rebuild_analysis_from_db(
             "recording_device": ct0.recording_device if ct0 else None,
             "station_name": ct0.station_name if ct0 else None,
         },
+        "cascade": {**cascade, "detected": bool(is_cascade)}
+        if is_cascade or cascade
+        else None,
+        "multi_end": {**multi_end, "detected": bool(is_line)}
+        if is_line or multi_end
+        else None,
+        "report_kind": report_kind,
         "files": file_inventory,
         "timing": timing,
         "operated_elements": operated_elements,
@@ -804,6 +976,14 @@ def _rebuild_analysis_from_db(
             "rms": rms_summary,
         },
         "timeline": timeline_rows,
+        "key_sequence": key_seq,
+        "enrichment": enrich or None,
+        "matrix": matrix_block or None,
+        "compound_class": compound_class,
+        "matrix_scenario": matrix_scenario,
+        "matrix_traces": matrix_traces or None,
+        "intertrip_summary": intertrip_label,
+        "l2_causality": l2 or None,
         "protection_assessment": protection,
         "consistency_findings": [
             {
@@ -834,6 +1014,10 @@ def _rebuild_analysis_from_db(
         "rca_hypotheses": {
             "hypotheses": hyp_rows,
             "primary": primary_hyp,
+            "enrichment": enrich or {},
+            "matrix": matrix_block or {},
+            "compound_class": compound_class,
+            "matrix_scenario": matrix_scenario,
         },
         "evidence": evidence_rows,
         "similar_events": {
@@ -844,7 +1028,7 @@ def _rebuild_analysis_from_db(
         "limitations": limitations,
         "setting_reference": setting_ref,
         "engineer_review": _format_engineer_review(latest_review),
-        "generated_label": "Protection disturbance analysis report",
+        "generated_label": report_kind,
     }
 
 
@@ -961,17 +1145,24 @@ def _render_html(analysis: dict[str, Any], title: str) -> str:
                 ),
                 "</ul><h2>Consistency</h2><ul>",
             ]
+            from protection.ansi_names import format_ansi
+
             for c in findings:
                 lines.append(
-                    f"<li>{c.get('element')} {c.get('check_type')}: {c.get('status')} "
+                    f"<li>{format_ansi(c.get('element'))} {c.get('check_type')}: {c.get('status')} "
                     f"[{c.get('severity')}]</li>"
                 )
             lines.append("</ul><h2>RCA</h2><ul>")
-            for h in hyps:
-                score = h.get("score")
+            primary_h = next(
+                (h for h in hyps if isinstance(h, dict) and h.get("is_primary")),
+                hyps[0] if hyps else None,
+            )
+            if isinstance(primary_h, dict):
+                score = primary_h.get("score")
                 lines.append(
-                    f"<li>[{h.get('status')}] {h.get('hypothesis_id') or h.get('title')}: "
-                    f"score {score}; {h.get('statement') or ''}</li>"
+                    f"<li><b>Primary</b> [{primary_h.get('status')}] "
+                    f"{primary_h.get('hypothesis_id') or primary_h.get('title')}: "
+                    f"score {score}; {primary_h.get('statement') or ''}</li>"
                 )
             er = analysis.get("engineer_review") or "PENDING"
             lines.append("</ul>")
@@ -1541,9 +1732,12 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
         f"Fault: <b>{_pdf_esc(_fault_type_display(fault if isinstance(fault, dict) else {}))}</b> "
         f"({_pdf_esc(_pdf_dash(fault.get('status')))}, {_pdf_esc(_pdf_dash(fault.get('confidence'), 'INCONCLUSIVE'))})",
     ]
+    from protection.ansi_names import format_ansi_list
+
     ops = analysis.get("operated_elements") or []
     if ops:
-        meta_bits.append(f"Operated: <b>{_pdf_esc(', '.join(str(x) for x in ops))}</b>")
+        ops_named = format_ansi_list([str(x) for x in ops]) or ", ".join(str(x) for x in ops)
+        meta_bits.append(f"Operated: <b>{_pdf_esc(ops_named)}</b>")
     if timing.get("pickup_to_trip_ms") is not None:
         meta_bits.append(f"Pickup→trip: <b>{_pdf_esc(timing['pickup_to_trip_ms'])} ms</b>")
     if timing.get("trip_to_clear_ms") is not None:
@@ -1551,6 +1745,8 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
     dist = fault.get("distance_display")
     if dist and "NOT_APPLICABLE" not in str(dist).upper() and "NOT APPLICABLE" not in str(dist).upper():
         meta_bits.append(f"Location: <b>{_pdf_esc(dist)}</b>")
+    if analysis.get("intertrip_summary") and analysis["intertrip_summary"] != "None asserted":
+        meta_bits.append(f"Intertrip: <b>{_pdf_esc(analysis['intertrip_summary'])}</b>")
     summary_lines.append(" · ".join(meta_bits))
     story.append(callout(summary_lines, html=True))
     story.append(Spacer(1, 4))
@@ -1650,8 +1846,17 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
         seq_meta.append(f"Breaker: <b>{_pdf_esc(breaker['assessment'])}</b>")
     if seq_meta:
         story.append(Paragraph(" · ".join(seq_meta), meta))
+    seq_src = analysis.get("key_sequence") or analysis.get("timeline") or []
+    if analysis.get("key_sequence"):
+        story.append(
+            P(
+                f"Key operate sequence ({len(analysis['key_sequence'])} of "
+                f"{len(analysis.get('timeline') or [])} timeline events).",
+                meta,
+            )
+        )
     tl_rows = []
-    for e in analysis.get("timeline") or []:
+    for e in seq_src:
         if not isinstance(e, dict):
             continue
         ts = e.get("timestamp")
@@ -1759,6 +1964,8 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
             meta,
         )
     )
+    from protection.ansi_names import format_ansi
+
     prot_rows = []
     for a in analysis.get("protection_assessment") or []:
         if not isinstance(a, dict):
@@ -1767,7 +1974,7 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
             continue
         prot_rows.append(
             [
-                a.get("element"),
+                format_ansi(a.get("element")),
                 a.get("enabled_display") or a.get("enabled"),
                 a.get("pickup_display") or a.get("pickup"),
                 a.get("trip_display") or a.get("trip"),
@@ -1792,7 +1999,7 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
             continue
         cons_rows.append(
             [
-                f.get("element"),
+                format_ansi(f.get("element")),
                 f.get("check_label") or f.get("check_type"),
                 f.get("status"),
                 f.get("severity"),
@@ -1817,6 +2024,14 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
         ]
         if primary.get("statement"):
             rca_lines.append(str(primary["statement"]))
+        if primary.get("explanation"):
+            rca_lines.append(str(primary["explanation"]))
+        chain = primary.get("causal_chain") or []
+        if chain:
+            rca_lines.append(
+                "<b>Causal chain:</b> "
+                + _pdf_esc(" → ".join(str(x) for x in chain[:8]))
+            )
         support = primary.get("supporting_evidence_labels") or primary.get("supporting_evidence") or []
         missing = primary.get("missing_evidence_labels") or primary.get("missing_evidence") or []
         if support:
@@ -1828,31 +2043,6 @@ def _analysis_to_pdf(analysis: dict[str, Any], title: str) -> bytes:
         story.append(callout(rca_lines, html=True))
     else:
         story.append(P("INCONCLUSIVE — no primary hypothesis ranked.", meta))
-
-    alts = [h for h in (rca.get("hypotheses") or []) if isinstance(h, dict)]
-    if len(alts) > 1:
-        story.append(Paragraph("Alternative hypotheses", h3))
-        alt_rows = []
-        for i, h in enumerate(alts):
-            if i == 0:
-                continue
-            miss = h.get("missing_evidence_labels") or h.get("missing_evidence") or []
-            alt_rows.append(
-                [
-                    i + 1,
-                    h.get("title") or h.get("hypothesis_id"),
-                    h.get("status"),
-                    h.get("score"),
-                    "; ".join(str(x) for x in miss) if miss else "—",
-                ]
-            )
-        story.append(
-            data_table(
-                ["Rank", "Hypothesis", "Status", "Score", "Missing / notes"],
-                alt_rows,
-                [0.07, 0.34, 0.18, 0.10, 0.31],
-            )
-        )
 
     # ——— 11. Actions ———
     section(story, "11. Recommended Verification")
@@ -2174,6 +2364,8 @@ async def _load_analysis_payload(db: AsyncSession, event: Event) -> dict[str, An
             "decision",
             "setting_reference",
             "rca_hypotheses",
+            "enrichment",
+            "matrix",
         ):
             snap_val = snapshot.get(key)
             cur = analysis.get(key)
@@ -2197,6 +2389,11 @@ async def _load_analysis_payload(db: AsyncSession, event: Event) -> dict[str, An
                     analysis[key] = {**cur, "primary": snap_val["primary"]}
                 # Ensure scores display as percentages even when snapshot is used
                 _pct_scores_in_rca(analysis.get("rca_hypotheses"))
+            elif key in ("enrichment", "matrix") and isinstance(snap_val, dict):
+                if not cur:
+                    analysis[key] = snap_val
+                elif isinstance(cur, dict):
+                    analysis[key] = {**snap_val, **cur}
             elif key == "setting_reference" and isinstance(snap_val, dict):
                 if any(v not in (None, "", []) for v in snap_val.values()):
                     # Prefer snapshot when it has real values; keep DB rebuild if snapshot empty
@@ -2215,6 +2412,38 @@ async def _load_analysis_payload(db: AsyncSession, event: Event) -> dict[str, An
             cur_list = analysis.get(key) or []
             if isinstance(snap_list, list) and len(snap_list) > len(cur_list):
                 analysis[key] = snap_list
+
+        # Refresh derived summary fields from merged enrichment / timeline
+        enrich = analysis.get("enrichment") if isinstance(analysis.get("enrichment"), dict) else {}
+        matrix_block = analysis.get("matrix") if isinstance(analysis.get("matrix"), dict) else {}
+        casc = analysis.get("cascade") if isinstance(analysis.get("cascade"), dict) else {}
+        if not analysis.get("compound_class"):
+            analysis["compound_class"] = (
+                enrich.get("compound_class")
+                or matrix_block.get("compound_class")
+                or casc.get("compound_class")
+            )
+        if not analysis.get("matrix_scenario"):
+            analysis["matrix_scenario"] = (
+                enrich.get("matrix_scenario")
+                or matrix_block.get("matched_scenario_id")
+                or casc.get("matrix_scenario")
+            )
+        if not analysis.get("matrix_traces"):
+            analysis["matrix_traces"] = list(
+                enrich.get("matrix_traces")
+                or matrix_block.get("traces")
+                or casc.get("matrix_traces")
+                or []
+            )[:16] or None
+        tl = analysis.get("timeline") if isinstance(analysis.get("timeline"), list) else []
+        # Rebuild key sequence when timeline rows are dicts with event_type
+        if tl and isinstance(tl[0], dict) and "event_type" in tl[0]:
+            analysis["key_sequence"] = _key_sequence_rows(tl)
+            analysis["intertrip_summary"] = _intertrip_summary(tl, enrich)
+        deep = enrich.get("ladder_deep") if isinstance(enrich.get("ladder_deep"), dict) else {}
+        if isinstance(deep.get("l2_causality"), dict):
+            analysis["l2_causality"] = deep["l2_causality"]
 
     _pct_scores_in_rca(analysis.get("rca_hypotheses"))
     return analysis
@@ -2235,11 +2464,23 @@ async def generate_report(
     sections = _build_sections(event, analysis)
     hyp_count = len((analysis.get("rca_hypotheses") or {}).get("hypotheses") or [])
     find_count = len(analysis.get("consistency_findings") or [])
+    primary = (analysis.get("rca_hypotheses") or {}).get("primary") or {}
+    fault = analysis.get("fault_classification") or {}
+    prim_title = primary.get("title") or primary.get("hypothesis_id") or "INCONCLUSIVE"
+    prim_status = primary.get("status") or ""
+    ft = fault.get("fault_type") or "UNKNOWN"
+    ec = fault.get("event_class") or "UNKNOWN"
+    summary_bits = [
+        f"{prim_title}" + (f" ({prim_status})" if prim_status else ""),
+        f"event class {ec}",
+        f"fault {ft}",
+    ]
+    if analysis.get("intertrip_summary") and analysis["intertrip_summary"] != "None asserted":
+        summary_bits.append(f"intertrip {analysis['intertrip_summary']}")
     summary = (
-        f"RCA report for event {event.event_id}: "
-        f"{hyp_count} hypotheses, {find_count} consistency findings, "
-        f"{len(analysis.get('timeline') or [])} timeline events, "
-        f"{len(analysis.get('protection_assessment') or [])} protection assessments."
+        f"{event.event_id}: " + " · ".join(summary_bits)
+        + f" · {hyp_count} hypotheses, {find_count} consistency findings, "
+        f"{len(analysis.get('key_sequence') or analysis.get('timeline') or [])} key sequence steps."
     )
     report_title = title or f"RCA Report — {event.event_id}"
     fmt_u = (fmt or "JSON").upper()

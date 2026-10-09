@@ -149,6 +149,65 @@ def _put_json(storage: StorageService, payload: Any, *, prefix: str, suffix: str
     return storage.put_bytes(raw, sha256=sha, prefix=prefix, suffix=suffix)
 
 
+def _file_end_label(ef: EventFile) -> str:
+    meta = ef.file_metadata if isinstance(ef.file_metadata, dict) else {}
+    return str(meta.get("cascade_role") or meta.get("end_label") or "").strip().upper()
+
+
+def _group_files_by_end(files: list[EventFile]) -> list[tuple[str, list[EventFile]]]:
+    """Group uploaded files by INITIATOR/BACKUP or LOCAL/REMOTE for dual-end ingest.
+
+    Combined Cascade / Local-Remote packages must be ingested separately — mixing two
+    CFG/DAT pairs in one parse often fails or keeps only one end.
+    """
+    buckets: dict[str, list[EventFile]] = {}
+    unlabeled: list[EventFile] = []
+    for ef in files:
+        lab = _file_end_label(ef)
+        if lab:
+            buckets.setdefault(lab, []).append(ef)
+        else:
+            unlabeled.append(ef)
+
+    order = ("INITIATOR", "LOCAL", "BACKUP", "REMOTE")
+    groups: list[tuple[str, list[EventFile]]] = []
+    seen: set[str] = set()
+    for key in order:
+        if key in buckets:
+            groups.append((key, buckets[key]))
+            seen.add(key)
+    for key, fl in buckets.items():
+        if key not in seen:
+            groups.append((key, fl))
+
+    if not groups:
+        # No end labels: split by distinct CFG stems when multiple records exist
+        cfgs = [
+            ef
+            for ef in files
+            if (ef.original_filename or "").lower().endswith((".cfg", ".cff"))
+        ]
+        if len(cfgs) <= 1:
+            return [("LOCAL", list(files))]
+        by_stem: dict[str, list[EventFile]] = {}
+        for ef in files:
+            stem = Path(ef.original_filename or "").stem.lower()
+            by_stem.setdefault(stem or "unknown", []).append(ef)
+        # Prefer grouping COMTRADE pairs: cfg stem matches dat stem
+        stems = sorted(by_stem.keys())
+        for i, stem in enumerate(stems):
+            label = "LOCAL" if i == 0 else (f"REMOTE_{i}" if i > 1 else "REMOTE")
+            groups.append((label, by_stem[stem]))
+        return groups
+
+    if unlabeled and groups:
+        # Attach unlabeled settings/SOE to the first (initiator/local) group
+        groups[0] = (groups[0][0], list(groups[0][1]) + unlabeled)
+    elif unlabeled:
+        groups.append(("LOCAL", unlabeled))
+    return groups
+
+
 def _materialize_event_files(storage: StorageService, files: list[EventFile]) -> list[Path]:
     """Write COMTRADE-relevant event files to a temp dir for ingest.
 
@@ -162,6 +221,7 @@ def _materialize_event_files(storage: StorageService, files: list[EventFile]) ->
     tmp = Path(tempfile.mkdtemp(prefix="wf_"))
     paths: list[Path] = []
     have_cfg_dat = False
+    used_names: set[str] = set()
     for ef in files:
         name = ef.original_filename or f"{ef.sha256}.bin"
         ext = Path(name).suffix.lower()
@@ -170,7 +230,12 @@ def _materialize_event_files(storage: StorageService, files: list[EventFile]) ->
         if (ef.source_type or "").upper() == "PACKAGE":
             continue
         raw = storage.get_bytes(ef.storage_key)
-        dest = tmp / Path(name).name
+        base = Path(name).name
+        # Avoid collisions when both ends share the same CFG filename
+        if base.lower() in used_names:
+            base = f"{_file_end_label(ef) or 'END'}_{base}"
+        used_names.add(base.lower())
+        dest = tmp / base
         dest.write_bytes(raw)
         paths.append(dest)
         if ext in (".cfg", ".dat", ".cff"):
@@ -204,60 +269,33 @@ def _materialize_event_files(storage: StorageService, files: list[EventFile]) ->
     return paths
 
 
-async def ingest_and_persist_comtrade(
+async def _persist_one_comtrade_end(
     db: AsyncSession,
     event: Event,
     *,
-    storage: Optional[StorageService] = None,
-) -> dict[str, Any]:
-    """Parse uploaded event files, persist ComtradeFile/Channel, cache samples."""
-    storage = storage or StorageService()
-    files = (
-        await db.execute(select(EventFile).where(EventFile.event_id == event.id))
-    ).scalars().all()
-    if not files:
-        return {"success": False, "error": "No uploaded files", "status": "NOT_AVAILABLE"}
-
-    paths = _materialize_event_files(storage, list(files))
-    from comtrade.service import ComtradeService
-
-    svc = ComtradeService()
-    ingest = svc.ingest(paths, validate_after_parse=True)
-    if not ingest.success or ingest.record is None:
-        event.data_quality = "INVALID" if ingest.detection and not ingest.detection.is_comtrade else "POOR"
-        return {
-            "success": False,
-            "error": ingest.error or "parse failed",
-            "detection": ingest.detection.to_dict() if ingest.detection else None,
-            "validation": ingest.validation.to_dict() if ingest.validation else None,
-        }
-
-    record = ingest.record
-    det = ingest.detection
-    val = ingest.validation
-
-    # Remove prior comtrade rows for re-analyse
-    existing = (
-        await db.execute(select(ComtradeFile).where(ComtradeFile.event_id == event.id))
-    ).scalars().all()
-    for row in existing:
-        await db.delete(row)
-    await db.flush()
-
+    storage: StorageService,
+    end_label: str,
+    end_files: list[EventFile],
+    record: Any,
+    det: Any,
+    val: Any,
+) -> ComtradeFile:
+    """Persist one parsed COMTRADE end (channels + sample cache)."""
     cfg_key = dat_key = None
-    for ef in files:
+    link_file_id = end_files[0].id if end_files else None
+    for ef in end_files:
         name = (ef.original_filename or "").lower()
         if name.endswith(".cfg"):
             cfg_key = ef.storage_key
+            link_file_id = ef.id
         elif name.endswith(".dat"):
             dat_key = ef.storage_key
         elif name.endswith(".cff"):
             cfg_key = ef.storage_key
+            link_file_id = ef.id
 
     rev = getattr(det, "revision", None)
     revision_year = int(rev) if rev and str(rev).isdigit() else None
-
-    # Prefer CFG start/trigger times from the parsed record
     start_ts = getattr(record, "start_time", None)
     trigger_ts = getattr(record, "trigger_time", None)
 
@@ -280,7 +318,7 @@ async def ingest_and_persist_comtrade(
 
     ct = ComtradeFile(
         event_id=event.id,
-        event_file_id=files[0].id,
+        event_file_id=link_file_id,
         station_name=record.station,
         recording_device=record.device,
         revision_year=revision_year,
@@ -308,16 +346,17 @@ async def ingest_and_persist_comtrade(
             "record_id": record.record_id,
             "start_time": start_ts.isoformat() if start_ts else None,
             "trigger_time": trigger_ts.isoformat() if trigger_ts else None,
+            "end_label": end_label,
+            "cascade_role": end_label if end_label in ("INITIATOR", "BACKUP") else None,
         },
     )
     db.add(ct)
     await db.flush()
 
-    # Persist sample cache (JSON float lists — engineering values)
     timestamps = list(record.timestamps or [])
     scaled = record.scaled_values or {}
     raw = record.raw_values or {}
-    max_points = 20000  # cap for API responsiveness
+    max_points = max(100, int(get_settings().waveform_max_points or 20000))
 
     def _trim(arr: list[Any]) -> list[Any]:
         if len(arr) <= max_points:
@@ -332,8 +371,9 @@ async def ingest_and_persist_comtrade(
             series = raw.get(name) or scaled.get(name) or []
         return list(series)
 
+    end_prefix = f"waveforms/{event.id}/{end_label}"
     ts_trim = _trim(timestamps)
-    ts_key = _put_json(storage, ts_trim, prefix=f"waveforms/{event.id}", suffix=".ts.json")
+    ts_key = _put_json(storage, ts_trim, prefix=end_prefix, suffix=".ts.json")
 
     for idx, ch in enumerate(record.analog_channels or []):
         name = ch.name if hasattr(ch, "name") else (ch.get("name") if isinstance(ch, dict) else f"A{idx}")
@@ -346,7 +386,7 @@ async def ingest_and_persist_comtrade(
         sample_key = _put_json(
             storage,
             samples_trim,
-            prefix=f"waveforms/{event.id}",
+            prefix=end_prefix,
             suffix=f".{_safe_channel_token(name)}.json",
         )
         ps = getattr(ch, "ps", None) if not isinstance(ch, dict) else ch.get("ps")
@@ -374,6 +414,7 @@ async def ingest_and_persist_comtrade(
                     "ps": str(ps).upper() if ps else None,
                     "primary": primary,
                     "secondary": secondary,
+                    "end_label": end_label,
                 },
             )
         )
@@ -385,7 +426,7 @@ async def ingest_and_persist_comtrade(
         sample_key = _put_json(
             storage,
             samples_trim,
-            prefix=f"waveforms/{event.id}",
+            prefix=end_prefix,
             suffix=f".{_safe_channel_token(name)}.json",
         )
         db.add(
@@ -398,28 +439,128 @@ async def ingest_and_persist_comtrade(
                     "sample_storage_key": sample_key,
                     "timestamp_storage_key": ts_key,
                     "sample_count": len(samples_trim),
+                    "end_label": end_label,
                 },
             )
         )
 
-    if val and getattr(val, "data_quality", None):
-        event.data_quality = val.data_quality
-    elif det:
-        event.data_quality = "ACCEPTABLE" if det.status == "SUPPORTED" else "WARNING"
-    # Mirror event DQ onto COMTRADE row for the UI badge
     if event.data_quality and not ct.data_quality:
         ct.data_quality = event.data_quality
+    await db.flush()
+    return ct
+
+
+async def ingest_and_persist_comtrade(
+    db: AsyncSession,
+    event: Event,
+    *,
+    storage: Optional[StorageService] = None,
+) -> dict[str, Any]:
+    """Parse uploaded event files, persist ComtradeFile/Channel, cache samples.
+
+    Combined Cascade / Local-Remote events: each end is ingested separately so both
+    INITIATOR and BACKUP (or LOCAL/REMOTE) COMTRADE records are available for DR.
+    """
+    storage = storage or StorageService()
+    files = (
+        await db.execute(select(EventFile).where(EventFile.event_id == event.id))
+    ).scalars().all()
+    if not files:
+        return {"success": False, "error": "No uploaded files", "status": "NOT_AVAILABLE"}
+
+    from comtrade.service import ComtradeService
+
+    svc = ComtradeService()
+    groups = _group_files_by_end(list(files))
+
+    # Remove prior comtrade rows for re-analyse
+    existing = (
+        await db.execute(select(ComtradeFile).where(ComtradeFile.event_id == event.id))
+    ).scalars().all()
+    for row in existing:
+        await db.delete(row)
+    await db.flush()
+
+    persisted: list[dict[str, Any]] = []
+    last_error: Optional[str] = None
+    last_detection = None
+    last_validation = None
+    primary_record = None
+    primary_ct: Optional[ComtradeFile] = None
+
+    for end_label, end_files in groups:
+        paths = _materialize_event_files(storage, end_files)
+        if not paths:
+            continue
+        ingest = svc.ingest(paths, validate_after_parse=True)
+        if not ingest.success or ingest.record is None:
+            last_error = ingest.error or f"parse failed ({end_label})"
+            last_detection = ingest.detection
+            last_validation = ingest.validation
+            logger.warning(
+                "COMTRADE ingest failed for event %s end %s: %s",
+                event.id,
+                end_label,
+                last_error,
+            )
+            continue
+        ct = await _persist_one_comtrade_end(
+            db,
+            event,
+            storage=storage,
+            end_label=end_label,
+            end_files=end_files,
+            record=ingest.record,
+            det=ingest.detection,
+            val=ingest.validation,
+        )
+        persisted.append(
+            {
+                "end_label": end_label,
+                "comtrade_file_id": ct.id,
+                "analog": ct.analog_channel_count,
+                "digital": ct.digital_channel_count,
+                "samples": ct.total_samples,
+            }
+        )
+        # Prefer INITIATOR/LOCAL as primary record for engineering pipeline
+        if primary_ct is None or end_label in ("INITIATOR", "LOCAL"):
+            primary_ct = ct
+            primary_record = ingest.record
+            last_detection = ingest.detection
+            last_validation = ingest.validation
+            if ingest.validation and getattr(ingest.validation, "data_quality", None):
+                event.data_quality = ingest.validation.data_quality
+            elif ingest.detection:
+                event.data_quality = (
+                    "ACCEPTABLE" if ingest.detection.status == "SUPPORTED" else "WARNING"
+                )
+
+    if not persisted:
+        event.data_quality = (
+            "INVALID"
+            if last_detection and not getattr(last_detection, "is_comtrade", True)
+            else "POOR"
+        )
+        return {
+            "success": False,
+            "error": last_error or "parse failed",
+            "detection": last_detection.to_dict() if last_detection else None,
+            "validation": last_validation.to_dict() if last_validation else None,
+        }
 
     await db.flush()
     return {
         "success": True,
-        "comtrade_file_id": ct.id,
-        "analog": ct.analog_channel_count,
-        "digital": ct.digital_channel_count,
-        "samples": ct.total_samples,
-        "validation": val.to_dict() if val else None,
-        "detection": det.to_dict() if det else None,
-        "record": record,
+        "comtrade_file_id": primary_ct.id if primary_ct else persisted[0]["comtrade_file_id"],
+        "analog": primary_ct.analog_channel_count if primary_ct else persisted[0]["analog"],
+        "digital": primary_ct.digital_channel_count if primary_ct else persisted[0]["digital"],
+        "samples": primary_ct.total_samples if primary_ct else persisted[0]["samples"],
+        "ends": persisted,
+        "ends_count": len(persisted),
+        "validation": last_validation.to_dict() if last_validation else None,
+        "detection": last_detection.to_dict() if last_detection else None,
+        "record": primary_record,
     }
 
 
@@ -474,10 +615,12 @@ async def load_waveform_payload(
     event_id: str,
     *,
     storage: Optional[StorageService] = None,
-    max_channels: int = 128,
+    max_channels: Optional[int] = None,
     comtrade_file_id: Optional[str] = None,
 ) -> dict[str, Any]:
     storage = storage or StorageService()
+    if max_channels is None:
+        max_channels = max(8, int(get_settings().waveform_max_channels or 128))
     if comtrade_file_id:
         ct = (
             await db.execute(
@@ -488,14 +631,23 @@ async def load_waveform_payload(
             )
         ).scalar_one_or_none()
     else:
-        ct = (
+        # Prefer INITIATOR / LOCAL when multiple ends exist (cascade / multi-end)
+        rows = (
             await db.execute(
                 select(ComtradeFile)
                 .where(ComtradeFile.event_id == event_id)
-                .order_by(ComtradeFile.created_at.desc())
-                .limit(1)
+                .order_by(ComtradeFile.created_at.asc())
             )
-        ).scalar_one_or_none()
+        ).scalars().all()
+        ct = None
+        for row in rows:
+            hdr = row.header_metadata if isinstance(row.header_metadata, dict) else {}
+            lab = str(hdr.get("end_label") or hdr.get("cascade_role") or "").upper()
+            if lab in ("INITIATOR", "LOCAL"):
+                ct = row
+                break
+        if ct is None and rows:
+            ct = rows[0]
 
     if ct is None:
         # Attempt on-demand ingest

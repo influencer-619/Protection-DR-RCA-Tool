@@ -11,6 +11,7 @@ import {
 import { useEvent } from '@/hooks/useEvent';
 import { useAnalysisStatus } from '@/hooks/useAnalysisStatus';
 import type { AnalysisJob, Event } from '@/types';
+import { isAnalysisBusy as jobIsBusy } from '@/utils/eventStatusDisplay';
 
 export interface EventWorkspaceValue {
   eventId: string | undefined;
@@ -59,7 +60,7 @@ export function EventWorkspaceProvider({
     }
   }, [job?.status, reload]);
 
-  const analysisBusy = job?.status === 'PENDING' || job?.status === 'RUNNING';
+  const analysisBusy = jobIsBusy(job, event);
 
   const value = useMemo(
     () => ({

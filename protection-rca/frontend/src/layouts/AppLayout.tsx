@@ -4,7 +4,15 @@ import { useAuth } from '@/hooks/useAuth';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import styles from './AppLayout.module.css';
 
-type IconName = 'plant' | 'dashboard' | 'events' | 'users' | 'audit' | 'help';
+type IconName =
+  | 'plant'
+  | 'dashboard'
+  | 'events'
+  | 'users'
+  | 'audit'
+  | 'help'
+  | 'cascade'
+  | 'line';
 
 const ICON_PATHS: Record<IconName, ReactNode> = {
   plant: (
@@ -23,6 +31,20 @@ const ICON_PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   events: <path d="M3 12h4l2-6 4 12 2-6h6" />,
+  cascade: (
+    <>
+      <path d="M4 6h8M12 6v12M12 18h8" />
+      <circle cx="4" cy="6" r="1.5" />
+      <circle cx="20" cy="18" r="1.5" />
+    </>
+  ),
+  line: (
+    <>
+      <path d="M4 12h16" />
+      <circle cx="5" cy="12" r="2" />
+      <circle cx="19" cy="12" r="2" />
+    </>
+  ),
   users: (
     <>
       <circle cx="9" cy="8" r="3.5" />
@@ -64,7 +86,7 @@ function Icon({ name }: { name: IconName }) {
 
 type NavItem = { to: string; label: string; icon: IconName; end?: boolean };
 
-/** Sidebar: plant-first analysis (upload only under IED). */
+/** Sidebar: plant + events + admin. */
 const NAV: Array<{ label?: string; items: NavItem[] }> = [
   { items: [{ to: '/plant', label: 'Plant', icon: 'plant' }] },
   {

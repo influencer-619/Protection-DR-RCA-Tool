@@ -23,9 +23,7 @@ from app.services.iec61850.ingest import (
     remember_success,
     save_config,
     saved_config,
-    store_payloads_on_event,
 )
-from app.services import remote_peer
 
 logger = logging.getLogger(__name__)
 
@@ -178,16 +176,7 @@ async def _run_cycle(relay_id: str) -> dict[str, Any]:
                         if failures[k] >= MAX_RECORD_FAILURES:
                             skip.add(k)
                             failures.pop(k)
-                if created and cfg.get("also_fetch_remote"):
-                    remote_note = await _fetch_remote_into_events(
-                        db,
-                        local_relay=relay,
-                        created=created,
-                        include_settings=bool(cfg.get("include_settings")),
-                        include_events=bool(cfg.get("include_events")),
-                    )
-                    if remote_note:
-                        status["remote_fetch"] = remote_note
+                # Peer / cascade join is no longer done in auto-fetch — use Combined RCA UI
             else:
                 await db.refresh(relay)
                 remember_success(relay, conn, listing["nameplate"])
@@ -220,100 +209,8 @@ async def _run_cycle(relay_id: str) -> dict[str, Any]:
         return {**status, "events": created}
 
 
-async def _fetch_remote_into_events(
-    db,
-    *,
-    local_relay: Relay,
-    created: list[dict[str, Any]],
-    include_settings: bool,
-    include_events: bool,
-) -> dict[str, Any]:
-    """Opt-in: pull peer IED records into the same events as REMOTE. Never fails the local cycle."""
-    settings = get_settings()
-    peer = await remote_peer.resolve_remote_relay(db, local_relay)
-    if peer is None:
-        return {"status": "SKIPPED", "message": "No remote IED configured"}
-    peer_conn = _connection(peer)
-    if peer_conn is None:
-        return {"status": "SKIPPED", "message": f"Remote IED {peer.relay_tag} has no IP"}
-    try:
-        listing = await asyncio.to_thread(acq.browse, peer_conn)
-        complete = [r for r in listing["records"] if r["complete"]]
-        peer_fetched = set((saved_config(peer).get("fetched") or {}).keys())
-        peer_cfg = get_auto_config(peer)
-        peer_skip = set(peer_cfg.get("skip_keys") or [])
-        candidates = [
-            r for r in complete if r["key"] not in peer_fetched and r["key"] not in peer_skip
-        ]
-        candidates.sort(key=lambda r: r["last_modified_ms"])
-        # Pair oldest-first with each local event (same order as local create_events)
-        keys = [r["key"] for r in candidates[: len(created)]]
-        if not keys:
-            return {
-                "status": "OK",
-                "message": "No new remote records to pair",
-                "remote_ied": peer.relay_tag,
-                "files_added": 0,
-            }
-        result = await asyncio.to_thread(
-            acq.acquire,
-            peer_conn,
-            record_keys=keys,
-            include_settings=include_settings,
-            include_events=include_events,
-            include_scl=False,
-            ied_label=peer.relay_tag or peer.name,
-            allowed_exts=set(settings.allowed_extensions),
-            max_bytes=settings.max_upload_bytes,
-        )
-        await db.refresh(peer)
-        remember_success(peer, peer_conn, result.nameplate)
-        from app.services import event_service
-
-        files_added = 0
-        peer_fetched_index = dict(saved_config(peer).get("fetched") or {})
-        for ev_info, key in zip(created, keys):
-            payloads = list(result.records.get(key) or [])
-            if not payloads:
-                continue
-            event = await event_service.get_event(db, ev_info["id"])
-            if event is None:
-                continue
-            names = await store_payloads_on_event(
-                db,
-                event,
-                peer,
-                peer_conn,
-                payloads,
-                end_label="REMOTE",
-                trigger="AUTO_REMOTE",
-            )
-            files_added += len(names)
-            peer_fetched_index[key] = event.id
-            # Mark package_ready if remote brought COMTRADE
-            if any((p.source_type or "").upper() == "COMTRADE" for p in payloads):
-                ev_info["package_ready"] = True
-                ev_info.setdefault("files", []).extend(names)
-        if len(peer_fetched_index) > 500:
-            peer_fetched_index = dict(list(peer_fetched_index.items())[-500:])
-        save_config(peer, fetched=peer_fetched_index)
-        await db.flush()
-        return {
-            "status": "OK",
-            "remote_ied": peer.relay_tag or peer.name,
-            "records": len(keys),
-            "files_added": files_added,
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Also-fetch remote IED failed for local %s: %s",
-            local_relay.id,
-            exc,
-        )
-        return {"status": "ERROR", "message": str(exc)[:400]}
-
-
 async def _start_analysis(db, created: list[dict[str, Any]]) -> None:
+    """Normal single-IED analysis only. Combined Cascade / Local–Remote is via Combined RCA UI."""
     from app.services import analysis_service, event_service
 
     for c in created:
@@ -321,7 +218,12 @@ async def _start_analysis(db, created: list[dict[str, Any]]) -> None:
             event = await event_service.get_event(db, c["id"])
             if event is None:
                 continue
-            job = await analysis_service.enqueue_analysis(db, event, defer=True)
+            job = await analysis_service.enqueue_analysis(
+                db,
+                event,
+                parameters={"analysis_mode": "NORMAL", "source": "AUTO_FETCH"},
+                defer=True,
+            )
             await db.commit()
             if job.status == "PENDING":
                 t = asyncio.create_task(analysis_service.run_job_by_id(job.id))

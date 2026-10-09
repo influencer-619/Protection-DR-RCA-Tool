@@ -1,5 +1,6 @@
 import type { FaultClassification, ProtectionOperation } from '@/types';
 import { isEvidenceBackedAssert } from '@/utils/protectionOperateEvidence';
+import { formatAnsi, formatAnsiCompact } from '@/utils/ansiDeviceNames';
 
 /** True when distance / Z1·km location is in scope. */
 export function isDistanceApplicable(opts: {
@@ -104,10 +105,12 @@ export function formatOperatedElements(ops: ProtectionOperation[]): string {
   if (!asserted.length) return 'None asserted / not mapped';
   return asserted
     .map((p) => {
-      const code = p.function_code ? ` (${p.function_code})` : '';
-      return `${p.element}${code} ${p.operation_type}`.trim();
+      const el = formatAnsiCompact(p.element);
+      const nameHint = formatAnsi(p.element);
+      const ot = String(p.operation_type || '').trim();
+      return ot ? `${el} ${ot}` : el || nameHint;
     })
-    .join('; ');
+    .join(' · ');
 }
 
 /**

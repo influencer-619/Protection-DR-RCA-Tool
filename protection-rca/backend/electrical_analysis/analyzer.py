@@ -632,6 +632,40 @@ def analyze_electrical(
             algorithm_version=algorithm_version,
         )
 
+    # Prefault (early-cycle) vs fault-window RMS for phase elevation
+    prefault: dict[str, float] = {}
+    for role in ("IA", "IB", "IC", "VA", "VB", "VC"):
+        ch_name = role_to_name.get(role)
+        if not ch_name:
+            continue
+        series = _get_series(record, ch_name)
+        if len(series) < window:
+            continue
+        pre_slice = series[:window]
+        pre_rms = compute_rms(
+            pre_slice,
+            sample_rate_hz=fs,
+            channel=ch_name,
+            unit="",
+            nominal_frequency_hz=f0,
+            algorithm_version=algorithm_version,
+        )
+        if pre_rms.status == "OK":
+            try:
+                prefault[role] = float(pre_rms.value)
+            except (TypeError, ValueError):
+                pass
+    result.detectors = {
+        **(result.detectors or {}),
+        "fault_window": {
+            "end_index": fault_end,
+            "window_samples": window,
+            "timestamp_s": ts_fault,
+            "method": "max_phase_current_energy_1cycle",
+        },
+        "prefault_rms": prefault,
+    }
+
     # Soft detectors (CT sat / inrush) — attached for protection + UI
     try:
         from electrical_analysis.detectors import (

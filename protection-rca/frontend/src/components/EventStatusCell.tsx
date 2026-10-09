@@ -1,5 +1,6 @@
 import { StatusBadge } from '@/components/StatusBadge';
 import type { Event } from '@/types';
+import { effectiveEventStatus, eventHasUsableResults } from '@/utils/eventStatusDisplay';
 
 interface Props {
   event: Event;
@@ -13,14 +14,11 @@ interface Props {
 export function EventStatusCell({ event, jobError }: Props) {
   const status = (event.status || '').toUpperCase();
   const decision = (event.decision_state || '').toUpperCase();
-  const hasResults =
-    !!event.fault_type ||
-    decision.includes('ANALYSIS_COMPLETE') ||
-    decision.includes('REVIEW');
+  const hasResults = eventHasUsableResults(event);
 
   if (status === 'FAILED' && hasResults) {
     const tip = [
-      'Latest analysis job failed — prior results still shown.',
+      'Prior analysis results are shown (latest re-run failed).',
       jobError || 'Re-run analysis to refresh.',
       decision ? `Decision: ${decision.replace(/_/g, ' ')}` : '',
     ]
@@ -28,14 +26,8 @@ export function EventStatusCell({ event, jobError }: Props) {
       .join('\n');
     return (
       <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
-        <StatusBadge status="FAILED" title={tip} />
-        {decision && (
-          <StatusBadge
-            status={decision}
-            label={decision.includes('WARN') ? 'WARNINGS' : 'HAS RESULTS'}
-            title={tip}
-          />
-        )}
+        <StatusBadge status={effectiveEventStatus(event)} title={tip} />
+        {decision && <StatusBadge status={decision} title={tip} />}
       </span>
     );
   }

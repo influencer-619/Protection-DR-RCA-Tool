@@ -6,6 +6,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 import { formatElectrical } from '@/utils/formatElectrical';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 
 function fmtMs(t_us: number | null | undefined): string {
   if (t_us == null) return '—';
@@ -71,11 +72,11 @@ export function FaultCharacteristicsPage() {
   return (
     <div className="stack-md">
       <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Fault characteristics</h1>
-          <p className="subtitle">
-            Scheme-agnostic summary — type, timing, magnitudes, sequences (no invented values)
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="Fault characteristics"
+            subtitle="Scheme-agnostic summary — type, timing, magnitudes, sequences (no invented values)"
+          />
         </div>
         <Link className="btn btn-sm" to={`/events/${id}/fault-location`}>
           Location (optional)
@@ -158,35 +159,65 @@ export function FaultCharacteristicsPage() {
       </div>
 
       <div className="panel">
-        <div className="panel-header">Fault-window currents (RMS / sequence)</div>
+        <div className="panel-header">
+          Fault-window currents (RMS / sequence)
+          {data.elevation_method ? (
+            <span className="subtitle" style={{ marginLeft: 8, fontWeight: 400 }}>
+              · elevation: {data.elevation_method === 'prefault_ratio' ? 'vs prefault' : 'peak-relative'}
+            </span>
+          ) : null}
+        </div>
         <div className="panel-body" style={{ padding: 0 }}>
+          {data.fault_window && (
+            <p className="subtitle" style={{ padding: '8px 12px', margin: 0 }}>
+              Window: max phase-current energy
+              {data.fault_window.timestamp_s != null
+                ? ` @ ${Number(data.fault_window.timestamp_s).toFixed(3)} s`
+                : ''}
+              {data.fault_window.window_samples != null
+                ? ` · ${String(data.fault_window.window_samples)} samples`
+                : ''}
+            </p>
+          )}
           <table className="data-table">
             <thead>
               <tr>
                 <th>Quantity</th>
                 <th>Value</th>
+                <th>Prefault</th>
                 <th>Elevated</th>
               </tr>
             </thead>
             <tbody>
-              {(['Ia', 'Ib', 'Ic'] as const).map((k) => (
-                <tr key={k}>
-                  <td className="mono">{k}</td>
-                  <td className="mono">
-                    {formatElectrical(c[k] as number | null | undefined, iUnit, {
-                      roleHint: 'I',
-                      digits: 2,
-                    })}
-                  </td>
-                  <td className="mono">
-                    {c[`${k}_elevated` as keyof typeof c] == null
-                      ? '—'
-                      : c[`${k}_elevated` as keyof typeof c]
-                        ? 'YES'
-                        : 'NO'}
-                  </td>
-                </tr>
-              ))}
+              {(['Ia', 'Ib', 'Ic'] as const).map((k) => {
+                const role = k.toUpperCase();
+                const pre =
+                  data.prefault_rms &&
+                  (data.prefault_rms[role] ?? data.prefault_rms[k]);
+                return (
+                  <tr key={k}>
+                    <td className="mono">{k}</td>
+                    <td className="mono">
+                      {formatElectrical(c[k] as number | null | undefined, iUnit, {
+                        roleHint: 'I',
+                        digits: 2,
+                      })}
+                    </td>
+                    <td className="mono">
+                      {pre == null
+                        ? '—'
+                        : formatElectrical(Number(pre), iUnit, { roleHint: 'I', digits: 2 })}
+                    </td>
+                    <td className="mono">
+                      {c[`${k}_elevated` as keyof typeof c] == null
+                        ? '—'
+                        : c[`${k}_elevated` as keyof typeof c]
+                          ? 'YES'
+                          : 'NO'}
+                    </td>
+                  </tr>
+                );
+              })}
               <tr>
                 <td className="mono">I0</td>
                 <td className="mono">
@@ -195,7 +226,8 @@ export function FaultCharacteristicsPage() {
                     digits: 2,
                   })}
                 </td>
-                <td>—</td>
+                <td className="mono">—</td>
+                <td className="mono">—</td>
               </tr>
               <tr>
                 <td className="mono">I2</td>
@@ -205,7 +237,8 @@ export function FaultCharacteristicsPage() {
                     digits: 2,
                   })}
                 </td>
-                <td>—</td>
+                <td className="mono">—</td>
+                <td className="mono">—</td>
               </tr>
             </tbody>
           </table>

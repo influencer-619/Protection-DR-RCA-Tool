@@ -319,7 +319,12 @@ def test_rca_inrush_statement_mentions_87_only_when_diff_picked_up():
         },
     )
     assert rca.primary is not None
-    assert "87 pickup without trip" in (rca.primary.statement or "").lower()
+    stmt = (rca.primary.statement or "").lower()
+    # ANSI expand may render ``87 (differential) pickup…`` — require whole token + phrase
+    assert "pickup without trip" in stmt
+    assert "87" in stmt
+    assert "51 (time overcurrent)n" not in stmt
+    assert "50 (instantaneous overcurrent)n" not in stmt
 
 
 def test_rca_prefers_energization_over_internal_fault_on_inrush_pickup():

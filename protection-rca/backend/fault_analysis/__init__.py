@@ -76,13 +76,29 @@ def _features_from_electrical(elec: ElectricalAnalysisResult) -> dict[str, Any]:
     if peak <= 0:
         return {"available": False}
 
-    # Relative participation: phase is elevated if ≥ 70% of peak phase current.
-    # Avoids needing pre-fault baseline when only fault-window RMS is available.
+    # Prefer prefault baseline when available (fault-window vs early-cycle RMS).
+    # Else relative participation: elevated if ≥ 70% of peak phase current.
+    det = {}
+    if isinstance(getattr(elec, "detectors", None), dict):
+        det = elec.detectors or {}
+    pre = det.get("prefault_rms") if isinstance(det.get("prefault_rms"), dict) else {}
+    use_prefault = bool(
+        pre.get("IA") is not None and pre.get("IB") is not None and pre.get("IC") is not None
+    )
     thr = 0.7 * peak
 
-    def elevated(x: Optional[float]) -> Optional[bool]:
+    def elevated(x: Optional[float], role: str) -> Optional[bool]:
         if x is None:
             return None
+        if use_prefault:
+            try:
+                base = float(pre.get(role) or 0.0)
+            except (TypeError, ValueError):
+                base = 0.0
+            # Faulted phase: clearly above load; healthy phases stay near prefault
+            if base > 1e-6:
+                return bool(x >= max(1.5 * base, 0.25 * peak))
+            return bool(x >= thr)
         return bool(x >= thr)
 
     ground = False
@@ -94,13 +110,15 @@ def _features_from_electrical(elec: ElectricalAnalysisResult) -> dict[str, Any]:
         "Ia": ia,
         "Ib": ib,
         "Ic": ic,
-        "Ia_elevated": elevated(ia),
-        "Ib_elevated": elevated(ib),
-        "Ic_elevated": elevated(ic),
+        "Ia_elevated": elevated(ia, "IA"),
+        "Ib_elevated": elevated(ib, "IB"),
+        "Ic_elevated": elevated(ic, "IC"),
         "I0": i0,
         "I2": i2,
         "ground": ground,
         "threshold": thr,
+        "elevation_method": "prefault_ratio" if use_prefault else "peak_relative",
+        "prefault_rms": dict(pre) if use_prefault else None,
         "current_unit": current_unit,
     }
 
@@ -276,34 +294,136 @@ def distance_scheme_applicable(
 
 
 def _asserted_digital_names(timeline: Optional[list[Any]] = None) -> list[str]:
+    """Collect asserted DR digital / SOE / event-report labels for phase typing."""
     names: list[str] = []
     for ev in timeline or []:
         src = getattr(ev, "source", None)
         if src is None and isinstance(ev, dict):
             src = ev.get("source")
         src = str(src or "")
+        md = getattr(ev, "metadata", None)
+        if md is None and isinstance(ev, dict):
+            md = ev.get("metadata")
+        if not isinstance(md, dict):
+            md = {}
         if src.startswith("digital:"):
             names.append(src.split(":", 1)[1])
-        et = getattr(ev, "event_type", None) or (ev.get("event_type") if isinstance(ev, dict) else "")
-        if str(et) in ("protection_trip", "protection_pickup", "breaker_trip_command"):
-            # keep
+        elif src.startswith("SOE:"):
+            names.append(src.split(":", 1)[1])
+            for k in ("signal", "point_tag", "label"):
+                if md.get(k):
+                    names.append(str(md[k]))
+        elif src.startswith("RELAY_EVENT_REPORT:"):
+            if md.get("label"):
+                names.append(str(md["label"]))
+            elif md.get("signal"):
+                names.append(str(md["signal"]))
+        et = getattr(ev, "event_type", None) or (
+            ev.get("event_type") if isinstance(ev, dict) else ""
+        )
+        if str(et) in (
+            "protection_trip",
+            "protection_pickup",
+            "breaker_trip_command",
+            "fault_inception",
+        ):
+            # labels already captured above when source-prefixed
             pass
     return names
 
 
-def _phase_hint_from_names(names: list[str]) -> Optional[str]:
-    """Return A/B/C when digitals show a single-phase trip/start (Indian RYB: R/Y/B)."""
+def _phases_from_names(names: list[str]) -> set[str]:
+    """Parse A/B/C involvement from digital / SOE / event-report channel text.
+
+    Indian RYB: ``R PH``→A, ``Y PH``→B, ``B PH`` (blue)→C.
+    Western ABC: ``Ph A`` / ``Trip A`` / ``50A`` / ``A-G`` / ``IA>``.
+    Note: bare ``B PH`` is Blue (→C), not Western phase B — use ``PH B`` / ``TRIP B``.
+    """
     import re
 
     phases: set[str] = set()
     for raw in names:
-        n = (raw or "").upper()
-        if re.search(r"\b(?:R|A)\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD)\b", n):
+        n = (raw or "").upper().replace("_", " ")
+        if not n.strip():
+            continue
+
+        # Explicit multi-phase fault tokens
+        if re.search(r"\b(?:ABCG|ABC|3[\s\-]?PH(?:ASE)?|THREE[\s\-]?PHASE)\b", n):
+            phases.update({"A", "B", "C"})
+            continue
+        if re.search(r"\bABG\b|\bA[\-/]B\b|\bAB\s*(?:FAULT|TRIP)", n):
+            phases.update({"A", "B"})
+        if re.search(r"\bBCG\b|\bB[\-/]C\b|\bBC\s*(?:FAULT|TRIP)", n):
+            phases.update({"B", "C"})
+        if re.search(r"\bCAG\b|\bC[\-/]A\b|\bCA\s*(?:FAULT|TRIP)", n):
+            phases.update({"C", "A"})
+
+        # Indian RYB + shared "x PH TRIP" (A PH / R PH → A; B PH → Blue/C; C PH → C)
+        if re.search(r"\b(?:R|A)\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD|FAULT|PU|PICK)?\b", n):
             phases.add("A")
-        if re.search(r"\bY\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD)\b", n):
+        if re.search(r"\bY\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD|FAULT|PU|PICK)?\b", n):
             phases.add("B")
-        if re.search(r"\b(?:B|C)\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD)\b", n):
-            phases.add("C")  # B = blue in RYB
+        if re.search(r"\bB\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD|FAULT|PU|PICK)?\b", n):
+            phases.add("C")  # Blue in RYB
+        if re.search(r"\bC\s*PH(?:ASE)?\s*(?:TRIP|START|OPTD|FAULT|PU|PICK)?\b", n):
+            phases.add("C")
+
+        # Western / IEC (PH B / TRIP B / 50B) — not "B PH" (handled as Blue above)
+        for letter, token in (("A", "A"), ("B", "B"), ("C", "C")):
+            if re.search(rf"\bPH(?:ASE)?\s+{token}\b", n):
+                phases.add(letter)
+            if re.search(rf"\bTRIP\s+(?:ON\s+)?(?:PHASE\s+)?{token}\b", n):
+                phases.add(letter)
+            if re.search(rf"\b{token}\s+TRIP\b", n):
+                phases.add(letter)
+            if re.search(rf"\bPH{token}\b", n):
+                phases.add(letter)
+            if re.search(rf"\b(?:50|51|67)[\s/]?{token}\b", n):
+                phases.add(letter)
+            if re.search(rf"\bI[\s]?{token}\s*[>≥]", n):
+                phases.add(letter)
+            if re.search(rf"\b{token}[\-/][NG]\b|\b{token}G\b", n):
+                phases.add(letter)
+
+    return phases
+
+
+def _ground_hint_from_names(names: list[str]) -> Optional[bool]:
+    """True when digitals/SOE clearly indicate earth/ground involvement."""
+    import re
+
+    for raw in names:
+        n = (raw or "").upper().replace("_", " ")
+        if re.search(
+            r"50N|51N|67N|64R|SEF|REF|EARTH|GROUND|RESIDUAL|"
+            r"\bI[\s]?N\s*[>≥]|\bI0\b|\bN[\-/]E\b|\bEF\b|"
+            r"\b[ABC][\-/][NG]\b|\b[ABC]G\b|\b[RYB][\-/]?E\b|"
+            r"\bABG\b|\bBCG\b|\bCAG\b|\bAG\b|\bBG\b|\bCG\b",
+            n,
+        ):
+            return True
+    return None
+
+
+def _fault_type_from_phases(phases: set[str], ground: bool) -> Optional[str]:
+    if not phases:
+        return None
+    if phases == {"A", "B", "C"}:
+        return "ABCG" if ground else "ABC"
+    if phases == {"A", "B"}:
+        return "ABG" if ground else "AB"
+    if phases == {"B", "C"}:
+        return "BCG" if ground else "BC"
+    if phases == {"C", "A"}:
+        return "CAG" if ground else "CA"
+    if len(phases) == 1:
+        return {"A": "AG", "B": "BG", "C": "CG"}[next(iter(phases))]
+    return None
+
+
+def _phase_hint_from_names(names: list[str]) -> Optional[str]:
+    """Return A/B/C when digitals show a single-phase trip/start (Indian RYB: R/Y/B)."""
+    phases = _phases_from_names(names)
     if len(phases) == 1:
         return next(iter(phases))
     return None
@@ -316,24 +436,43 @@ def _refine_with_digital_phase(
     feat: dict[str, Any],
     phase_hint: Optional[str],
 ) -> tuple[str, str, str]:
-    """Correct ABC mis-class on multi-bay DFRs when a single phase trip digital asserts."""
+    """Backward-compatible single-phase refine (tests). Prefer ``_refine_with_digital_phases``."""
     if not phase_hint or phase_hint not in ("A", "B", "C"):
         return ft, status, conf
+    return _refine_with_digital_phases(ft, status, conf, feat, {phase_hint})
+
+
+def _refine_with_digital_phases(
+    ft: str,
+    status: str,
+    conf: str,
+    feat: dict[str, Any],
+    phases: set[str],
+) -> tuple[str, str, str]:
+    """Apply digital/SOE phase involvement when electrical typing is weak or over-broad."""
+    if not phases:
+        return ft, status, conf
     ground = bool(feat.get("ground"))
-    mapped = {
-        "A": "AG" if ground else "AG",
-        "B": "BG" if ground else "BG",
-        "C": "CG" if ground else "CG",
-    }[phase_hint]
-    # If electrical claimed ABC/ABCG but only one phase tripped in digitals, trust digitals
-    if ft in ("ABC", "ABCG") or (ft == "UNKNOWN" and status in ("INCONCLUSIVE", "UNKNOWN")):
-        st = (
-            ClassificationStatus.CLASSIFIED.value
-            if ground
-            else ClassificationStatus.PROBABLE.value
-        )
-        return mapped, st, "MEDIUM"
-    return ft, status, conf
+    mapped = _fault_type_from_phases(phases, ground)
+    if not mapped:
+        return ft, status, conf
+
+    apply = False
+    if ft in ("UNKNOWN",) or status in ("INCONCLUSIVE", "UNKNOWN"):
+        apply = True
+    elif ft in ("ABC", "ABCG") and phases != {"A", "B", "C"}:
+        apply = True
+    elif ft in ("AB", "ABG", "BC", "BCG", "CA", "CAG") and len(phases) == 1:
+        apply = True
+
+    if not apply:
+        return ft, status, conf
+
+    if ground or len(phases) >= 2:
+        st = ClassificationStatus.CLASSIFIED.value
+    else:
+        st = ClassificationStatus.PROBABLE.value
+    return mapped, st, "MEDIUM"
 
 
 def motor_start_context(
@@ -474,23 +613,74 @@ def classify_fault(
     feat["event_classification"] = dfr.to_dict()
     limitations.extend(list(dfr.limitations or []))
 
-    # Asserted digitals only (timeline) for phase-trip hint — not the full CFG list
+    # Asserted digitals + SOE / event-report labels for phase-trip hint
     asserted_names = _asserted_digital_names(timeline)
+    earth_element_hit = False
     for a in assessments or []:
         d = a.to_dict() if hasattr(a, "to_dict") else (a if isinstance(a, dict) else {})
         op = str(d.get("actual_operation") or "").upper()
-        if op in ("OPERATED", "PICKED_UP", "TRIPPED"):
+        code = str(d.get("element") or "").upper().replace(" ", "")
+        tripped = op in ("OPERATED", "PICKED_UP", "TRIPPED") or d.get("trip") or d.get(
+            "pickup"
+        )
+        if tripped:
+            chans: list[str] = []
             for ch in d.get("channel_evidence") or []:
-                asserted_names.append(str(ch))
+                chans.append(str(ch))
+            for eid in d.get("evidence_ids") or []:
+                tok = str(eid)
+                if tok.upper().startswith("DIGITAL:"):
+                    tok = tok.split(":", 1)[1]
+                elif tok.upper().startswith("PHYS-"):
+                    continue
+                chans.append(tok)
+            meta = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
+            for ch in meta.get("channel_evidence") or meta.get("operate_channels") or []:
+                chans.append(str(ch))
+            asserted_names.extend(chans)
+            if code in (
+                "50N",
+                "51N",
+                "67N",
+                "64",
+                "64R",
+                "SEF",
+                "REF",
+                "51G",
+                "50G",
+            ) or code.startswith("50N") or code.startswith("51N"):
+                earth_element_hit = True
+            # Surface element code text for phase patterns (50A / 51N …)
+            if code:
+                asserted_names.append(code)
 
     context_names = list(asserted_names) + list(digital_channel_names or [])
+    phases = _phases_from_names(asserted_names)
+    ground_digital = _ground_hint_from_names(asserted_names)
+    if earth_element_hit or ground_digital is True:
+        if feat.get("available"):
+            feat["ground"] = True
+            feat["ground_from_digital"] = True
+        else:
+            feat = dict(feat)
+            feat["ground"] = True
+            feat["ground_from_digital"] = True
 
-    if dfr.event_class != EventClass.FAULT:
-        # Non-fault DFR class — never publish AG/AB/… or ground from current imbalance alone
+    # Explicit non-fault DFR classes suppress AG/AB/… typing.
+    # UNKNOWN (no timeline / insufficient V-I-digital gate) still allows
+    # current-feature typing so classic AG/ABC fixtures and current-only
+    # records remain classifiable — non-fault signatures stay gated above.
+    _suppress_shunt = dfr.event_class in (
+        EventClass.ENERGIZATION,
+        EventClass.MOTOR_START,
+        EventClass.SWITCHING,
+        EventClass.DISTURBANCE,
+    )
+    if _suppress_shunt:
+        # Inrush / motor / switching / disturbance — not shunt-fault ground
         ft = FaultType.UNKNOWN.value
         status = ClassificationStatus.INCONCLUSIVE.value
         conf = "LOW"
-        # Inrush / motor / switching often look "groundy" (I0/H2) — not shunt-fault ground
         feat["ground"] = None
         feat["ground_applicable"] = False
         feat["Ia_elevated"] = None
@@ -500,13 +690,14 @@ def classify_fault(
             limitations.append("DFR reasons: " + "; ".join(dfr.reasons[:4]))
     else:
         ft, status, conf = _classify_from_features(feat)
-        phase_hint = _phase_hint_from_names(asserted_names)
-        if phase_hint:
-            feat["digital_phase_hint"] = phase_hint
-            ft, status, conf = _refine_with_digital_phase(
-                ft, status, conf, feat, phase_hint
+        if phases:
+            feat["digital_phases"] = sorted(phases)
+            if len(phases) == 1:
+                feat["digital_phase_hint"] = next(iter(phases))
+            ft, status, conf = _refine_with_digital_phases(
+                ft, status, conf, feat, phases
             )
-        # Safety net (legacy detectors) if class said FAULT but inrush/motor still strong
+        # Safety net if class said FAULT/UNKNOWN but inrush/motor still strong
         ft, status, conf = _apply_inrush_and_motor_context(
             ft,
             status,
@@ -516,6 +707,20 @@ def classify_fault(
             limitations,
             assessments=assessments,
         )
+        if dfr.event_class == EventClass.UNKNOWN and ft != FaultType.UNKNOWN.value:
+            limitations.append(
+                "DFR event class UNKNOWN — shunt type from phase currents / digitals; "
+                "confirm with V sag / trip / clearance when available"
+            )
+        elif (
+            ft != FaultType.UNKNOWN.value
+            and not feat.get("available")
+            and phases
+        ):
+            limitations.append(
+                "Fault type from protection digitals / SOE phase asserts "
+                "(three-phase current map not available)"
+            )
 
     if distance_applicable is None:
         distance_applicable = distance_scheme_applicable(

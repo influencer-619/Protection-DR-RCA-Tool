@@ -459,6 +459,19 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+.editInputTag {
+  min-width: 88px;
+  max-width: 140px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-focus);
+  color: var(--text-primary);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 .muted {
   color: var(--text-muted);
   padding: 16px;

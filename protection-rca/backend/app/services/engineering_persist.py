@@ -36,6 +36,38 @@ _CONF_MAP = {
 }
 
 
+def _prefer_initiator_comtrade_paths(files: list[EventFile], paths: list[Any]) -> list[Any]:
+    """When INITIATOR/BACKUP (or LOCAL/REMOTE) packages coexist, parse the initiator first."""
+    from pathlib import Path as _P
+
+    init_stems: set[str] = set()
+    backup_stems: set[str] = set()
+    for ef in files:
+        meta = ef.file_metadata if isinstance(ef.file_metadata, dict) else {}
+        lab = str(meta.get("cascade_role") or meta.get("end_label") or "").upper()
+        stem = _P(ef.original_filename or "").stem.lower()
+        if not stem:
+            continue
+        if lab in ("INITIATOR", "LOCAL"):
+            init_stems.add(stem)
+        elif lab in ("BACKUP", "REMOTE") or lab.startswith("REMOTE"):
+            backup_stems.add(stem)
+    if not init_stems:
+        return list(paths)
+    preferred: list[Any] = []
+    rest: list[Any] = []
+    for p in paths:
+        stem = _P(str(p)).stem.lower()
+        # Match CFG/DAT pair stems for initiator package
+        if any(stem == s or stem.startswith(s) or s.startswith(stem) for s in init_stems):
+            preferred.append(p)
+        elif any(stem == s or stem.startswith(s) or s.startswith(stem) for s in backup_stems):
+            rest.append(p)
+        else:
+            preferred.append(p)
+    return preferred if preferred else list(paths)
+
+
 def _json_safe(obj: Any) -> Any:
     """Make values safe for SQLAlchemy JSON columns (no datetime/bytes/custom)."""
     if obj is None or isinstance(obj, (str, int, float, bool)):
@@ -215,8 +247,25 @@ async def persist_engineering_analysis(
 
     from comtrade.service import ComtradeService
     from app.services.analysis_pipeline import AnalysisPipeline
+    from app.services.waveform_service import _group_files_by_end
 
-    ingest = ComtradeService().ingest(paths, validate_after_parse=True)
+    # Cascade / multi-bay: ingest ONLY initiator (or LOCAL) COMTRADE for the primary
+    # pipeline — never mix two CFG/DAT pairs in one parse (that fails or looks single-IED).
+    # Keep all_paths for LBB digital/SOE scan across both packages.
+    all_paths = list(paths)
+    end_groups = _group_files_by_end(list(files))
+    primary_files = list(files)
+    for lab, fl in end_groups:
+        if lab in ("INITIATOR", "LOCAL"):
+            primary_files = fl
+            break
+    else:
+        if end_groups:
+            primary_files = end_groups[0][1]
+    ingest_paths = _materialize_event_files(storage, primary_files)
+    if not ingest_paths:
+        ingest_paths = _prefer_initiator_comtrade_paths(list(files), all_paths)
+    ingest = ComtradeService().ingest(ingest_paths, validate_after_parse=True)
     if not ingest.success or ingest.record is None:
         return {
             "success": False,
@@ -334,7 +383,7 @@ async def persist_engineering_analysis(
         duration_s=record_duration_s(record),
     )
 
-    # Enrich plant labels from CFG when wizard left UNKNOWN
+    # Enrich plant labels from CFG when wizard left UNKNOWN.
     extra = dict(event.extra) if isinstance(event.extra, dict) else {}
     plant = extra.get("plant_labels") if isinstance(extra.get("plant_labels"), dict) else {}
     current_ss = str(plant.get("substation_name") or extra.get("substation_name") or "").upper()
@@ -342,7 +391,11 @@ async def persist_engineering_analysis(
     if record.station and current_ss in ("", "UNKNOWN"):
         extra["substation_name"] = record.station
         plant["substation_name"] = record.station
-    if record.device and current_relay in ("", "NOT VERIFIED"):
+    if (
+        record.device
+        and current_relay in ("", "NOT VERIFIED")
+        and "+" not in current_relay
+    ):
         extra["relay_tag"] = record.device
         plant["relay_tag"] = record.device
 
@@ -407,7 +460,10 @@ async def persist_engineering_analysis(
             extra["substation_name"] = asset["substation"]
             plant["substation_name"] = asset["substation"]
             current_ss = str(asset["substation"]).upper()
-        if asset.get("bay") and str(plant.get("bay_name") or "").upper() in ("", "NOT VERIFIED"):
+        if asset.get("bay") and str(plant.get("bay_name") or "").upper() in (
+            "",
+            "NOT VERIFIED",
+        ):
             plant["bay_name"] = asset["bay"]
             extra["bay_name"] = asset["bay"]
         if asset.get("feeder") and not event.feeder:
@@ -553,6 +609,30 @@ async def persist_engineering_analysis(
             return str(file_name)
         return str(payload)
 
+    # Per-end file inventory for combined cascade / local-remote UI
+    ends_inv: dict[str, Any] = {}
+    for ef in files:
+        meta = ef.file_metadata if isinstance(ef.file_metadata, dict) else {}
+        lab = str(meta.get("cascade_role") or meta.get("end_label") or "UNLABELED").upper()
+        bucket = ends_inv.setdefault(lab, {"files": 0, "types": {}})
+        bucket["files"] = int(bucket["files"]) + 1
+        st = str(ef.source_type or "OTHER").upper()
+        types = bucket["types"] if isinstance(bucket["types"], dict) else {}
+        types[st] = int(types.get(st) or 0) + 1
+        bucket["types"] = types
+    if ends_inv:
+        extra["ends_inventory"] = ends_inv
+
+    ends_note = None
+    if ends_inv:
+        parts = [
+            f"{role}: {info.get('files', 0)} file(s)"
+            for role, info in ends_inv.items()
+            if role not in ("UNLABELED",)
+        ]
+        if parts:
+            ends_note = " · ".join(parts)
+
     extra["file_processing"] = {
         "comtrade": "OK" if record.samples else "NO_SAMPLES",
         "settings": (
@@ -565,6 +645,7 @@ async def persist_engineering_analysis(
         "line_params": "OK" if line_params else "NOT LOADED",
         "ct_vt": "OK" if ct_vt_ratios else "NOT LOADED",
         "param_keys_detected": param_detected_keys or None,
+        "ends": ends_note,
     }
     event.extra = _json_safe(extra)
 
@@ -600,8 +681,27 @@ async def persist_engineering_analysis(
         )
         if p
     )
+    # LBB / multi-bay cascade: scan all CFG + SOE digitals (initiator + backup packages)
+    from app.services.cascade_lbb import enrich_event_cascade
+
+    dig_from_record = [
+        getattr(ch, "name", None) or str(ch)
+        for ch in (getattr(record, "digital_channels", None) or [])
+    ]
+    cascade_flags = await enrich_event_cascade(
+        db,
+        event,
+        file_paths=list(all_paths),
+        digital_channel_names=dig_from_record,
+    )
+    extra = event.extra if isinstance(event.extra, dict) else {}
+    # Refresh local extra after cascade write
+    extra_ev = extra
+    multi_end_block = dict(extra_ev.get("multi_end") or {}) if isinstance(
+        extra_ev.get("multi_end"), dict
+    ) else {}
+
     pipeline = AnalysisPipeline()
-    extra_ev = event.extra if isinstance(event.extra, dict) else {}
     result = pipeline.run(
         record,
         event_meta={
@@ -618,7 +718,9 @@ async def persist_engineering_analysis(
             "channel_map": extra_ev.get("channel_map"),
             "digital_map": extra_ev.get("digital_map"),
             "cause_evidence": extra_ev.get("cause_evidence"),
-            "multi_end": extra_ev.get("multi_end"),
+            "multi_end": multi_end_block or extra_ev.get("multi_end"),
+            "cascade": extra_ev.get("cascade"),
+            "cascade_flags": cascade_flags,
             "asset_type": extra_ev.get("asset_type"),
             "asset_name": extra_ev.get("asset_name"),
             "lightning_csv": extra_ev.get("lightning_csv"),
@@ -636,6 +738,7 @@ async def persist_engineering_analysis(
                     "lightning_csv",
                     "digital_map",
                     "channel_map",
+                    "cascade",
                 )
                 if extra_ev.get(k) is not None
             },
@@ -998,6 +1101,13 @@ async def persist_engineering_analysis(
                     "reason": dist.get("reason") if dist_applicable else None,
                     "algorithms": (dist.get("algorithms") or []) if dist_applicable else [],
                 },
+                "elevation_method": feat.get("elevation_method"),
+                "prefault_rms": feat.get("prefault_rms"),
+                "fault_window": (
+                    (elec.get("detectors") or {}).get("fault_window")
+                    if isinstance(elec.get("detectors"), dict)
+                    else feat.get("fault_window")
+                ),
             },
             classifier_version=str(fault.get("algorithm_version") or settings.signal_algorithm_version),
             is_primary=True,
@@ -1052,6 +1162,19 @@ async def persist_engineering_analysis(
                     "raw": h,
                     "missing_evidence": h.get("missing_evidence"),
                     "is_primary": i == 1,
+                    # DATA-011 — reproducible rule / matrix stamps
+                    "rca_engine_version": settings.rca_engine_version,
+                    "protection_rules_version": settings.protection_rules_version,
+                    "matrix_version": (
+                        (rca.get("matrix") or {}).get("matrix_version")
+                        if isinstance(rca.get("matrix"), dict)
+                        else None
+                    ),
+                    "matrix_scenario": (
+                        (rca.get("matrix") or {}).get("matched_scenario_id")
+                        if isinstance(rca.get("matrix"), dict)
+                        else None
+                    ),
                 },
             )
         )
@@ -1097,6 +1220,20 @@ async def persist_engineering_analysis(
 
     ft = str(fault.get("fault_type") or "UNKNOWN")
     extra["fault_type"] = ft
+    ec = fault.get("event_class")
+    if not ec and isinstance(fault.get("evidence"), dict):
+        _ecf = fault["evidence"].get("event_classification")
+        if isinstance(_ecf, dict):
+            ec = _ecf.get("event_class")
+    if ec:
+        extra["event_class"] = str(ec)
+    # List display: prefer typed fault; else DFR event class over bare UNKNOWN
+    if ft not in ("", "UNKNOWN"):
+        extra["fault_display"] = ft
+    elif ec and str(ec).upper() not in ("", "UNKNOWN"):
+        extra["fault_display"] = str(ec)
+    else:
+        extra["fault_display"] = ft
     operated_codes: list[str] = []
     seen: set[str] = set()
     from protection.operate_evidence import assessment_has_operate_evidence as _has_op_evid
@@ -1117,11 +1254,19 @@ async def persist_engineering_analysis(
             continue
         seen.add(key)
         operated_codes.append(code)
-    # Prefer ANSI-like codes first (digits), stable order
+    # Prefer ANSI-like codes first (digits), stable order — show technical names in UI lists
     operated_codes.sort(
         key=lambda c: (0 if any(ch.isdigit() for ch in c) else 1, c.upper())
     )
-    extra["protection_summary"] = ", ".join(operated_codes) if operated_codes else None
+    try:
+        from protection.ansi_names import format_ansi_list
+
+        extra["protection_summary"] = (
+            format_ansi_list(operated_codes) if operated_codes else None
+        )
+    except Exception:  # noqa: BLE001
+        extra["protection_summary"] = ", ".join(operated_codes) if operated_codes else None
+    extra["protection_codes"] = operated_codes or None
     sevs = [
         str(f.get("severity") or "")
         for f in (result.consistency_findings or [])
@@ -1152,6 +1297,18 @@ async def persist_engineering_analysis(
                 for lim in lims
                 if "FAULT DISTANCE" not in str(lim).upper() and "Z1/KM" not in str(lim).upper()
             ]
+        # ML/similarity honesty is on supporting_scores — keep engineering limitations clean
+        _ml_sim = (
+            "ml anomaly scores unavailable",
+            "historical similarity unavailable",
+            "ml weight contribution",
+            "similarity weight contribution",
+        )
+        lims = [
+            lim
+            for lim in lims
+            if not any(n in str(lim).lower() for n in _ml_sim)
+        ]
         extra["analysis_limitations"] = lims
 
     if distance_zones:
@@ -1230,6 +1387,30 @@ async def persist_engineering_analysis(
     event_for_report.setdefault("description", event.description)
     event_for_report["asset"] = asset_line or event_for_report.get("asset")
     event_for_report["relay"] = relay_line or event_for_report.get("relay")
+    rca_dict = result.rca_hypotheses or {}
+    matrix_block = rca_dict.get("matrix") if isinstance(rca_dict.get("matrix"), dict) else {}
+    # Persist compound LBB / matrix outcome onto cascade shell for Summary UI
+    casc = dict(extra.get("cascade") or {}) if isinstance(extra.get("cascade"), dict) else {}
+    if primary and primary.get("hypothesis_id"):
+        casc["primary_hypothesis"] = primary.get("hypothesis_id")
+        casc["primary_status"] = primary.get("status")
+    if matrix_block:
+        casc["compound_class"] = matrix_block.get("compound_class")
+        casc["matrix_scenario"] = matrix_block.get("matched_scenario_id")
+        casc["matrix_version"] = matrix_block.get("matrix_version")
+        casc["matrix_traces"] = list(matrix_block.get("traces") or [])[:12]
+        if matrix_block.get("lbb_steps"):
+            casc["lbb_steps"] = matrix_block.get("lbb_steps")
+            casc["lbb_steps_passed"] = matrix_block.get("lbb_steps_passed")
+            casc["lbb_steps_total"] = matrix_block.get("lbb_steps_total")
+        casc["rca"] = {
+            "primary": primary,
+            "compound_class": matrix_block.get("compound_class"),
+            "scenario": matrix_block.get("matched_scenario_id"),
+        }
+    if casc:
+        extra["cascade"] = casc
+
     extra["report_analysis"] = {
         "event": event_for_report,
         "data_quality": result.data_quality or {},
@@ -1250,17 +1431,37 @@ async def persist_engineering_analysis(
         "consistency_findings": list(result.consistency_findings or []),
         "fault_classification": result.fault_classification or {},
         "breaker_analysis": result.breaker_analysis or {},
-        "rca_hypotheses": result.rca_hypotheses or {},
-        "enrichment": (result.rca_hypotheses or {}).get("enrichment") or {},
-        "scheme": (result.rca_hypotheses or {}).get("scheme") or {},
+        "rca_hypotheses": rca_dict,
+        "enrichment": rca_dict.get("enrichment") or {},
+        "scheme": rca_dict.get("scheme") or {},
+        "matrix": matrix_block,
         "distance_zones": distance_zones,
         "evidence": list(result.evidence or [])[:50],
         "similar_events": result.similar_events
-        or {"message": "SIMILARITY RESULT: NOT AVAILABLE"},
+        or {"message": "SIMILARITY RESULT: NOT AVAILABLE", "status": "NOT_AVAILABLE"},
+        "anomalies": getattr(result, "anomalies", None)
+        or {"message": "ML RESULT: NOT AVAILABLE", "status": "NOT_AVAILABLE"},
+        "supporting_scores": (rca_dict.get("supporting_scores") if isinstance(rca_dict, dict) else None)
+        or {
+            "ml": {"available": False, "status": "NOT_AVAILABLE", "message": "ML RESULT: NOT AVAILABLE"},
+            "similarity": {
+                "available": False,
+                "status": "NOT_AVAILABLE",
+                "message": "SIMILARITY RESULT: NOT AVAILABLE",
+            },
+        },
         "decision": decision,
         "limitations": list(result.limitations or []),
         "setting_reference": setting_ref,
         "engineer_review": "PENDING",
+        # DATA-011 — versions shown in report footer / UI
+        "versions": {
+            "rca_engine": settings.rca_engine_version,
+            "protection_rules": settings.protection_rules_version,
+            "matrix": matrix_block.get("matrix_version") if matrix_block else None,
+            "report_template": settings.report_template_version,
+            "signal_algorithm": settings.signal_algorithm_version,
+        },
     }
     event.extra = _json_safe(extra)
     try:

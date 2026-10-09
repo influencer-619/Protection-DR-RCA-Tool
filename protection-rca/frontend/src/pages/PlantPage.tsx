@@ -221,6 +221,8 @@ export function PlantPage() {
     kind: Level;
     id: string;
     name: string;
+    /** IED relay tag (shown next to name in the tree) */
+    tag?: string;
     kv: string;
     unit: VoltageUnit;
   } | null>(null);
@@ -287,6 +289,7 @@ export function PlantPage() {
       kind: n.level,
       id: n.id,
       name: n.name,
+      tag: n.level === 'ied' ? n.code || '' : undefined,
       kv: kvMatch?.[1] ?? '',
       unit: 'kV',
     });
@@ -299,6 +302,11 @@ export function PlantPage() {
     const parsedKv = isVoltage ? parseKv(editing.kv, trimmed, editing.unit) : undefined;
     const vlName = isVoltage ? voltageLevelName(trimmed, parsedKv) : trimmed;
     if (!vlName) return;
+    const tagTrimmed = (editing.tag ?? '').trim();
+    if (editing.kind === 'ied' && !tagTrimmed) {
+      setError('IED tag is required');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -314,7 +322,11 @@ export function PlantPage() {
       } else if (editing.kind === 'feeder') {
         await api.updateFeeder(editing.id, { name: vlName });
       } else {
-        await api.updateIed(editing.id, { name: vlName });
+        // Update both display name and relay_tag — tag is what shows as "RL9" in the tree
+        await api.updateIed(editing.id, {
+          name: vlName,
+          relay_tag: tagTrimmed,
+        });
       }
       setEditing(null);
       await load();
@@ -412,12 +424,27 @@ export function PlantPage() {
                   value={editing.name}
                   autoFocus
                   aria-label={`Rename ${cfg.label}`}
+                  placeholder={n.level === 'ied' ? 'Display name' : undefined}
                   onChange={(e) => setEditing({ ...editing, name: e.target.value })}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') void submitEdit();
                     if (e.key === 'Escape') setEditing(null);
                   }}
                 />
+                {n.level === 'ied' && (
+                  <input
+                    className={styles.editInputTag}
+                    value={editing.tag ?? ''}
+                    aria-label="IED tag"
+                    placeholder="Tag (e.g. RL9)"
+                    title="Relay tag shown next to the IED name"
+                    onChange={(e) => setEditing({ ...editing, tag: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void submitEdit();
+                      if (e.key === 'Escape') setEditing(null);
+                    }}
+                  />
+                )}
                 {n.level === 'voltage' && (
                   <span className={styles.kvField}>
                     <input
@@ -455,7 +482,9 @@ export function PlantPage() {
                           editing.name,
                           parseKv(editing.kv, editing.name, editing.unit),
                         )
-                      : !editing.name.trim())
+                      : n.level === 'ied'
+                        ? !editing.name.trim() || !(editing.tag ?? '').trim()
+                        : !editing.name.trim())
                   }
                   onClick={() => void submitEdit()}
                 >

@@ -7,6 +7,7 @@ from typing import Any, Optional
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.secret_redaction import redact_secrets
 from app.models import AuditLog
 
 
@@ -24,17 +25,18 @@ async def write_audit(
     request_id: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
 ) -> AuditLog:
+    """Write an immutable audit entry. Secret-like keys are redacted (SEC-012)."""
     entry = AuditLog(
         user_id=user_id,
         action=action,
         object_type=object_type,
         object_id=object_id,
-        old_value=old_value,
-        new_value=new_value,
+        old_value=redact_secrets(old_value) if old_value is not None else None,
+        new_value=redact_secrets(new_value) if new_value is not None else None,
         ip_address=ip_address,
         user_agent=user_agent,
         request_id=request_id,
-        metadata_json=metadata,
+        metadata_json=redact_secrets(metadata) if metadata is not None else None,
     )
     db.add(entry)
     await db.flush()

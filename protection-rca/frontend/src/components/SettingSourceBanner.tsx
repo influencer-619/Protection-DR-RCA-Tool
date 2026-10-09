@@ -4,6 +4,10 @@ import styles from './SettingSourceBanner.module.css';
 
 interface Props {
   source: SettingSourceInfo;
+  /** Override relay display (combined cascade / multi-end labels). */
+  relayDisplay?: string | null;
+  /** Extra note under the title (e.g. initiator settings bound). */
+  note?: string | null;
 }
 
 function plainActive(status: string | undefined, sourceMissing: boolean): string {
@@ -13,7 +17,7 @@ function plainActive(status: string | undefined, sourceMissing: boolean): string
   return 'Uploaded settings are treated as APPROVED automatically';
 }
 
-export function SettingSourceBanner({ source }: Props) {
+export function SettingSourceBanner({ source, relayDisplay, note }: Props) {
   const active =
     source.active_group_status ?? source.verification_state ?? 'NOT VERIFIED';
   const src = String(source.source || '').toUpperCase();
@@ -23,10 +27,12 @@ export function SettingSourceBanner({ source }: Props) {
     src === 'NOT_AVAILABLE' ||
     src === 'NOT VERIFIED' ||
     src === 'UNKNOWN';
+  const relay = relayDisplay || source.relay_tag || '—';
 
   return (
     <div className={styles.banner} role="status">
       <div className={styles.title}>Setting source (bound for this analysis)</div>
+      {note ? <div className={styles.hint} style={{ marginBottom: 8 }}>{note}</div> : null}
       <div className={styles.grid}>
         <div>
           <span className={styles.label}>Source</span>
@@ -50,7 +56,7 @@ export function SettingSourceBanner({ source }: Props) {
         </div>
         <div>
           <span className={styles.label}>Relay</span>
-          <span className={`mono ${styles.value}`}>{source.relay_tag ?? '—'}</span>
+          <span className={`mono ${styles.value}`}>{relay}</span>
         </div>
         <div>
           <span className={styles.label}>Effective from</span>

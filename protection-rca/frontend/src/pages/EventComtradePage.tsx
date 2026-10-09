@@ -5,6 +5,7 @@ import type { ComtradeFile } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { DataQualityBadge } from '@/components/DataQualityBadge';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 
 export function EventComtradePage() {
   const { id } = useParams<{ id: string }>();
@@ -87,6 +88,12 @@ export function EventComtradePage() {
 
   return (
     <div>
+      <div style={{ marginBottom: 12 }}>
+        <CombinedPageHeader
+          title="COMTRADE metadata"
+          subtitle="Parse / validation status for the primary recording"
+        />
+      </div>
       <div className="badge-row" style={{ marginBottom: 16 }}>
         {ct.validation_status && <StatusBadge status={ct.validation_status} />}
         {ct.data_quality && <DataQualityBadge quality={ct.data_quality} />}

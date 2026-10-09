@@ -174,13 +174,19 @@ def build_settings_document(
 
         if element == "21":
             block = protection.setdefault("21", {"zones": {}})
-            zone = f"zone{inst or len(block['zones']) + 1}"
+            # PDIS1…PDIS5 → zone1…zone5 (fallback: next free slot)
+            try:
+                zn_i = int(inst) if inst not in (None, "") else len(block["zones"]) + 1
+            except (TypeError, ValueError):
+                zn_i = len(block["zones"]) + 1
+            zn_i = max(1, min(5, zn_i))
+            zone = f"zone{zn_i}"
             block["zones"][zone] = params
             for k in ("reach_ohm", "delay_ms", "reach_x_ohm"):
                 if k in params:
                     block.setdefault(f"{zone}_{k.replace('_ohm', '')}", params[k])
-            if zone == "zone1" and "reach_ohm" in params:
-                block["zone1_reach"] = params["reach_ohm"]
+            if "reach_ohm" in params:
+                block[f"zone{zn_i}_reach"] = params["reach_ohm"]
             if "enabled" in params:
                 block["enabled"] = block.get("enabled", False) or params["enabled"]
             continue

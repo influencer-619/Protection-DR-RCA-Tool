@@ -5,6 +5,7 @@ import type { EvidenceItem } from '@/types';
 import { EvidenceDrawer } from '@/components/EvidenceDrawer';
 import { EmptyState } from '@/components/EmptyState';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 
 const MEANING = [
   {
@@ -70,15 +71,10 @@ export function EvidencePage() {
 
   return (
     <div className="stack-md">
-      <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Evidence</h1>
-          <p className="subtitle">
-            Plain-language facts behind the RCA — what supports the conclusion, what conflicts,
-            and what is still missing
-          </p>
-        </div>
-      </div>
+      <CombinedPageHeader
+        title="Evidence"
+        subtitle="Plain-language facts behind the RCA — what supports the conclusion, what conflicts, and what is still missing"
+      />
 
       <div className="alert alert-info" role="note">
         <strong>How to read this tab:</strong> open a row to see the explanation. Prefer Conflicts

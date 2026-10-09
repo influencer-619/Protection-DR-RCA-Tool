@@ -15,6 +15,7 @@ import {
   recentEventLabel,
   recentEventDetail,
 } from '@/utils/recentEvents';
+import { formatAnsiSummary, formatAnsiSummaryCompact } from '@/utils/ansiDeviceNames';
 import styles from './DashboardPage.module.css';
 
 type TrendDays = 7 | 30 | 90;
@@ -862,7 +863,25 @@ export function DashboardPage() {
                     <td>{ev.location}</td>
                     <td className="mono">{ev.relay}</td>
                     <td className="mono">{ev.fault_type ?? '—'}</td>
-                    <td className="mono">{ev.protection_summary}</td>
+                    <td
+                      className="mono"
+                      style={{
+                        maxWidth: 160,
+                        fontSize: '0.78rem',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                      title={
+                        ev.protection_summary
+                          ? formatAnsiSummary(ev.protection_summary)
+                          : undefined
+                      }
+                    >
+                      {ev.protection_summary
+                        ? formatAnsiSummaryCompact(ev.protection_summary)
+                        : '—'}
+                    </td>
                     <td>
                       <span
                         className={

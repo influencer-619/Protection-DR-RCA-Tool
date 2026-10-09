@@ -25,6 +25,15 @@ _PARAM_ALIASES: dict[str, str] = {
     "tds": "time_dial",
     "zone1_reach_ohm": "zone1_reach",
     "zone1_reach_percent": "zone1_reach",
+    "zone2_reach_ohm": "zone2_reach",
+    "zone3_reach_ohm": "zone3_reach",
+    "zone4_reach_ohm": "zone4_reach",
+    "zone5_reach_ohm": "zone5_reach",
+    "z1mag": "zone1_reach",
+    "z2mag": "zone2_reach",
+    "z3mag": "zone3_reach",
+    "z4mag": "zone4_reach",
+    "z5mag": "zone5_reach",
     "curve_type": "curve",
 }
 

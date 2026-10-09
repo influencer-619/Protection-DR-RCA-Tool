@@ -28,17 +28,29 @@ def _event_out(event, *, protection_summary: Optional[str] = None) -> EventOut:
     base = EventOut.model_validate(event)
     extra = event.extra if isinstance(event.extra, dict) else {}
     plant = extra.get("plant_labels") if isinstance(extra.get("plant_labels"), dict) else {}
+    combined = (
+        bool(extra.get("combined_ready"))
+        or isinstance(extra.get("combined_analysis"), dict)
+    )
+    # Combined events: prefer dual-end plant_labels over single-IED CFG tags
+    def _label(key: str):
+        if combined:
+            return plant.get(key) or extra.get(key)
+        return extra.get(key) or plant.get(key)
+
     prot = protection_summary if protection_summary is not None else extra.get("protection_summary")
     if isinstance(prot, str) and not prot.strip():
         prot = None
     return base.model_copy(
         update={
-            "substation_name": extra.get("substation_name") or plant.get("substation_name"),
-            "bay_name": extra.get("bay_name") or plant.get("bay_name"),
-            "relay_tag": extra.get("relay_tag") or plant.get("relay_tag"),
-            "breaker_tag": extra.get("breaker_tag") or plant.get("breaker_tag"),
-            "asset_name": extra.get("asset_name") or plant.get("asset_name"),
+            "substation_name": _label("substation_name"),
+            "bay_name": _label("bay_name"),
+            "relay_tag": _label("relay_tag"),
+            "breaker_tag": _label("breaker_tag"),
+            "asset_name": _label("asset_name"),
             "fault_type": extra.get("fault_type"),
+            "event_class": extra.get("event_class"),
+            "fault_display": extra.get("fault_display") or extra.get("fault_type"),
             "severity_summary": extra.get("severity_summary"),
             "protection_summary": prot,
         }
@@ -157,6 +169,12 @@ async def get_event(event_id: str, db: DbSession, user: CurrentUser) -> EventOut
     event = await event_service.get_event(db, event_id)
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")
+    # Heal sticky FAILED / ANALYZING when artefacts exist or the queue was orphaned.
+    from app.services import analysis_service as _analysis_svc
+
+    if str(event.status or "").upper() in ("FAILED", "ANALYZING", "PENDING"):
+        await _analysis_svc.heal_stuck_analysis(db, event)
+        await db.commit()
     extra = event.extra if isinstance(event.extra, dict) else {}
     prot = extra.get("protection_summary")
     if not prot:

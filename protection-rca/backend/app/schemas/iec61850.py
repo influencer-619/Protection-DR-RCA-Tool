@@ -67,7 +67,7 @@ class Iec61850AutoFetchIn(Iec61850Connection):
     )
     also_fetch_remote: bool = Field(
         False,
-        description="When a Remote IED is configured, also pull peer records into the same event as REMOTE",
+        description="Deprecated; ignored. Use Combined RCA for multi-IED analysis.",
     )
 
 

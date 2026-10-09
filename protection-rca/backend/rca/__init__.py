@@ -44,6 +44,22 @@ FAULT_SIDE_HYPOTHESES = frozenset(
         "SWITCHING_TRANSIENT",
         "SWITCH_ONTO_FAULT",  # close / energize into a shunt fault (SOTF)
         "MOTOR_START",
+        "MOTOR_LOCKED_ROTOR",
+        "MOTOR_LOAD_JAM",
+        "HIGH_IMPEDANCE_FAULT",
+        "INTERMITTENT_EARTH_FAULT",
+        "TEMPORARY_FAULT_RECLOSE",
+        "PERSISTENT_FAULT_RECLOSE",
+        "OVEREXCITATION",
+        "THERMAL_OVERLOAD",
+        "PHASE_LOSS",
+        "NEGATIVE_SEQUENCE",
+        "LOSS_OF_EXCITATION",
+        "FREQUENCY_EVENT",
+        "OUT_OF_STEP",
+        "ACCIDENTAL_ENERGIZATION",
+        "CAPACITOR_BANK_FAULT",
+        "OVERVOLTAGE",
     }
 )
 
@@ -211,11 +227,189 @@ def _element_assert_phrase(
     return None
 
 
+def _format_ansi_codes(codes: list[str]) -> str:
+    """``50P (Phase instantaneous overcurrent), 50BF (Breaker failure)``."""
+    try:
+        from protection.ansi_names import format_ansi
+
+        return ", ".join(format_ansi(c) for c in codes)
+    except Exception:  # noqa: BLE001
+        return ", ".join(codes)
+
+
+def _all_asserted_ansi_phrase(assessments: list[ProtectionAssessment]) -> Optional[str]:
+    """All digitally evidenced ANSI asserts with technical names."""
+    tripped: list[str] = []
+    pickup_only: list[str] = []
+    seen_t: set[str] = set()
+    seen_p: set[str] = set()
+    for a in assessments:
+        code = _element_code(a)
+        if not code:
+            continue
+        if not _assessment_has_digital_evidence(a):
+            continue
+        if _assessment_tripped(a):
+            if code not in seen_t:
+                seen_t.add(code)
+                tripped.append(code)
+        elif a.pickup is True or (
+            _assessment_operated(a) and not _assessment_tripped(a)
+        ):
+            if code not in seen_p and code not in seen_t:
+                seen_p.add(code)
+                pickup_only.append(code)
+    parts: list[str] = []
+    if tripped:
+        parts.append(f"{_format_ansi_codes(tripped)} trip asserted")
+    if pickup_only:
+        parts.append(f"{_format_ansi_codes(pickup_only)} pickup only (no trip)")
+    return "; ".join(parts) if parts else None
+
+
+def _step_by_step_evidence_chain(
+    bag: set[str],
+    assessments: list[ProtectionAssessment],
+    fault: FaultClassificationResult,
+    consistency: ConsistencyResult,
+    *,
+    hypothesis_steps: Optional[list[Optional[str]]] = None,
+) -> list[str]:
+    """Industry-style ordered evidence trail for every RCA hypothesis.
+
+    Always walks: waveforms/electrical → digitals (ANSI) → SOE/timeline markers
+    → scheme/cascade context → consistency → hypothesis-specific conclusion steps.
+    """
+    ft = fault.fault_type if fault.fault_type and fault.fault_type != "UNKNOWN" else None
+    steps: list[str] = []
+
+    # 1) Waveforms / electrical
+    elec: list[str] = []
+    if "fault_classified" in bag or "fault_classified_strong" in bag:
+        elec.append(f"fault typed {ft or 'UNKNOWN'} ({fault.status})")
+    if "current_increase_observed" in bag:
+        elec.append("fault current increase on waveforms")
+    if "current_persists" in bag:
+        elec.append("current persisted after trip command")
+    if "loop_impedance_available" in bag or "distance_estimate_available" in bag:
+        elec.append("impedance / distance estimate available")
+    if "waveform_distortion" in bag:
+        elec.append("waveform distortion observed")
+    if "harmonic_evidence" in bag:
+        elec.append("harmonic / inrush signature")
+    if "electrical_no_fault" in bag or "dfr_non_fault_event" in bag:
+        elec.append("electrical evidence leans non-fault / disturbance")
+    if "magnetizing_inrush_possible" in bag:
+        elec.append("magnetizing inrush possible")
+    if "motor_start_possible" in bag:
+        elec.append("motor-start current signature")
+    steps.append(
+        "1. Waveforms / electrical: " + ("; ".join(elec) if elec else "reviewed (no strong shunt-fault flags)")
+    )
+
+    # 2) Digitals / ANSI operates
+    ansi = _all_asserted_ansi_phrase(assessments)
+    dig: list[str] = []
+    if ansi:
+        dig.append(ansi)
+    else:
+        ph = _protection_assert_phrase(bag)
+        if ph:
+            dig.append(ph)
+        for tok, label in (
+            ("overcurrent_element_operated", "overcurrent (50/51) trip"),
+            ("earth_fault_element_operated", "earth-fault (50N/51N/67N) trip"),
+            ("distance_element_operated", "distance (21) trip"),
+            ("line_diff_operated", "line differential (87L) trip"),
+            ("transformer_diff_operated", "transformer differential (87T) trip"),
+            ("bus_diff_operated", "bus differential (87B) trip"),
+            ("generator_diff_operated", "generator differential (87G) trip"),
+            ("bf_logic_satisfied", "breaker failure (50BF) logic"),
+            ("sotf_element_asserted", "SOTF element"),
+        ):
+            if tok in bag and not any(tok.split("_")[0] in (d or "") for d in dig):
+                dig.append(label)
+    steps.append(
+        "2. Digitals / protection asserts: "
+        + ("; ".join(dig) if dig else "no clear protection digital trip/pickup mapped")
+    )
+
+    # 3) SOE / intertrip / timeline context
+    soe: list[str] = []
+    if "intertrip_receive_observed" in bag:
+        soe.append("intertrip / transfer-trip RECEIVE observed (backup clearance role)")
+    elif "intertrip_send_observed" in bag:
+        soe.append("intertrip / transfer-trip SEND observed (LBB transfer)")
+    elif "intertrip_signal_observed" in bag:
+        soe.append("intertrip / transfer-trip digital observed")
+    if "cascade_lbb_detected" in bag:
+        soe.append("LBB / multi-bay cascade pattern detected")
+    if "cascade_upstream_clearance" in bag:
+        soe.append("upstream / backup clearance (cascade consequence)")
+    if "trip_command_observed" in bag:
+        soe.append("trip command observed on timeline")
+    if "breaker_close_observed" in bag:
+        soe.append("breaker close before trip (close-into-fault context)")
+    if "autoreclose_issued" in bag:
+        soe.append("autoreclose (79) issued")
+    if "comm_channel_evidence" in bag:
+        soe.append("COMM / pilot channel evidence")
+    if "switching_event_correlated" in bag:
+        soe.append("switching event correlated")
+    steps.append(
+        "3. SOE / sequence markers: "
+        + ("; ".join(soe) if soe else "timeline reviewed (no intertrip/cascade markers)")
+    )
+
+    # 4) Consistency / settings
+    steps.append(f"4. Settings vs observed: {consistency.summary_status}")
+
+    # 5+) Hypothesis-specific conclusion steps
+    for i, raw in enumerate(hypothesis_steps or []):
+        if not raw:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        # Avoid duplicating numbered universal steps already added
+        if text.startswith(("1.", "2.", "3.", "4.")):
+            steps.append(text)
+        else:
+            steps.append(f"{5 + i}. {text}")
+
+    return steps
+
+
+def _merge_causal_chain(
+    bag: set[str],
+    assessments: list[ProtectionAssessment],
+    fault: FaultClassificationResult,
+    consistency: ConsistencyResult,
+    *,
+    hypothesis_steps: Optional[list[Optional[str]]] = None,
+    legacy_fallback: Optional[list[str]] = None,
+) -> list[str]:
+    chain = _step_by_step_evidence_chain(
+        bag,
+        assessments,
+        fault,
+        consistency,
+        hypothesis_steps=hypothesis_steps,
+    )
+    if len(chain) <= 4 and legacy_fallback:
+        # Keep any unique legacy tokens as trailing notes
+        for item in legacy_fallback:
+            s = str(item or "").strip()
+            if s and s not in chain:
+                chain.append(s)
+    return chain
+
+
 def _family_assert_phrase(
     assessments: list[ProtectionAssessment],
     family: frozenset[str],
 ) -> Optional[str]:
-    """Exact asserted codes — e.g. ``50N, 51N pickup with trip`` (never invent 67N)."""
+    """Exact asserted codes — e.g. ``50N (…), 51N (…) pickup with trip`` (never invent 67N)."""
     tripped: list[str] = []
     pickup_only: list[str] = []
     seen_t: set[str] = set()
@@ -238,9 +432,11 @@ def _family_assert_phrase(
                 pickup_only.append(code)
     parts: list[str] = []
     if tripped:
-        parts.append(f"{', '.join(tripped)} pickup with trip")
+        parts.append(f"{_format_ansi_codes(tripped)} pickup with trip")
     if pickup_only:
-        parts.append(f"{', '.join(pickup_only)} pickup asserted (no trip digital)")
+        parts.append(
+            f"{_format_ansi_codes(pickup_only)} pickup asserted (no trip digital)"
+        )
     return "; ".join(parts) if parts else None
 
 
@@ -510,15 +706,16 @@ def _hypothesis_scheme_fit(hid: str, bag: set[str]) -> str:
         return "pending" if zones else "open"
 
     if hid == "SWITCH_ONTO_FAULT":
+        if "cascade_lbb_detected" in bag or (
+            "bf_logic_satisfied" in bag and "sotf_element_asserted" not in bag
+        ):
+            return "mismatch"
         if "switch_onto_fault_possible" in bag or "sotf_element_asserted" in bag:
             return "match"
         if (
             "fault_classified" in bag
             and "protection_operated" in bag
-            and (
-                "switching_event_correlated" in bag
-                or "breaker_close_observed" in bag
-            )
+            and "breaker_close_observed" in bag
         ):
             return "pending"
         return "open"
@@ -642,7 +839,12 @@ def _scheme_tokens_from_assessments(assessments: list[ProtectionAssessment]) -> 
                 tokens.add("differential_operated")
                 tokens.add("scheme_differential")
         if code in _FAMILY_BREAKER_FAILURE:
-            _mark("scheme_breaker_failure_present", "bf_logic_satisfied", "scheme_breaker_failure")
+            # Digital 50BF operated ≠ local BF proven (needs current_persists / cascade)
+            _mark(
+                "scheme_breaker_failure_present",
+                "bf_element_operated",
+                "scheme_breaker_failure",
+            )
         if code in _FAMILY_DIRECTIONAL:
             _mark(
                 "scheme_directional_present",
@@ -729,6 +931,9 @@ class RCAResult:
     forced_inconclusive: bool = False
     enrichment: dict[str, Any] = field(default_factory=dict)
     scheme: dict[str, Any] = field(default_factory=dict)
+    matrix: dict[str, Any] = field(default_factory=dict)
+    # ML-014 — explicit availability; never fabricate ML/similarity confidence
+    supporting_scores: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -739,6 +944,8 @@ class RCAResult:
             "forced_inconclusive": self.forced_inconclusive,
             "enrichment": self.enrichment,
             "scheme": self.scheme,
+            "matrix": self.matrix,
+            "supporting_scores": self.supporting_scores,
         }
 
 
@@ -817,9 +1024,18 @@ class HypothesisEngine:
             ec_feat = (fault.evidence or {}).get("event_classification")
             if isinstance(ec_feat, dict):
                 ec = ec_feat.get("event_class")
+        _non_fault_ec = str(ec or "") in (
+            "ENERGIZATION",
+            "MOTOR_START",
+            "SWITCHING",
+            "DISTURBANCE",
+        )
         if ec:
             electrical_flags.setdefault("event_class", str(ec))
-            if str(ec) != "FAULT":
+            # Only explicit non-fault classes suppress shunt-fault framing.
+            # UNKNOWN (no timeline gate) must not set no_fault — CLASSIFIED AG/ABC
+            # fixtures and current-only records still carry fault_classified.
+            if _non_fault_ec:
                 electrical_flags.setdefault("no_fault", True)
                 electrical_flags["fault_indicated"] = False
                 if str(ec) == "ENERGIZATION":
@@ -829,8 +1045,13 @@ class HypothesisEngine:
                 elif str(ec) == "SWITCHING":
                     electrical_flags.setdefault("switching_correlated", True)
 
-        # Derive flags from fault when timeline did not flag them
-        if str(ec or "") == "FAULT" and fault.status in ("CLASSIFIED", "PROBABLE"):
+        # Derive flags when shunt type is published (FAULT or UNKNOWN gate)
+        _ft = str(getattr(fault, "fault_type", "") or "")
+        if (
+            not _non_fault_ec
+            and fault.status in ("CLASSIFIED", "PROBABLE")
+            and _ft not in ("", "UNKNOWN")
+        ):
             electrical_flags.setdefault("fault_indicated", True)
             feat = fault.evidence if isinstance(fault.evidence, dict) else {}
             if feat.get("available") and any(
@@ -840,6 +1061,30 @@ class HypothesisEngine:
                 electrical_flags.setdefault("current_increase", True)
 
         result = RCAResult(weights=dict(self.weights))
+        result.supporting_scores = {
+            "ml": {
+                "available": bool(ml_available),
+                "status": "OK" if ml_available else "NOT_AVAILABLE",
+                "weight": float(self.weights.get("ml") or 0.0),
+                "message": (
+                    None
+                    if ml_available
+                    else "ML RESULT: NOT AVAILABLE — score contribution is zero"
+                ),
+            },
+            "similarity": {
+                "available": bool(similarity_available),
+                "status": "OK" if similarity_available else "NOT_AVAILABLE",
+                "weight": float(self.weights.get("similarity") or 0.0),
+                "message": (
+                    None
+                    if similarity_available
+                    else "SIMILARITY RESULT: NOT AVAILABLE — score contribution is zero"
+                ),
+            },
+        }
+        # ML/similarity unavailability stays on supporting_scores (API / RCA UI).
+        # Do not append to limitations — those banners are for engineering gaps only.
         if enrichment_detail:
             result.enrichment = dict(enrichment_detail)
         if scheme_detail:
@@ -857,6 +1102,31 @@ class HypothesisEngine:
         )
         if extra_evidence:
             evidence_bag |= {str(t) for t in extra_evidence if t}
+
+        # Deep ladder: per-channel digitals (L1), chronological SOE (L2),
+        # executable L3 fallbacks when dedicated L1 bits are missing.
+        from rca.ladder import build_ladder_deep
+
+        ladder_deep = build_ladder_deep(
+            bag=evidence_bag,
+            timeline=electrical_flags.get("timeline_events"),
+            assessments=assessments,
+            digital_channel_names=electrical_flags.get("digital_channel_names"),
+            electrical_flags=electrical_flags,
+            fault=fault,
+        )
+        evidence_bag |= ladder_deep.tokens
+        # Refresh layer presence after ladder tokens merge
+        from rca.matrix import layer_tokens_present
+
+        for layer, present in layer_tokens_present(evidence_bag).items():
+            if present:
+                evidence_bag.add(f"evidence_{layer.lower()}_present")
+        result.enrichment = dict(result.enrichment or {})
+        result.enrichment["ladder_deep"] = ladder_deep.to_dict()
+        if ladder_deep.traces:
+            result.enrichment.setdefault("matrix_traces", [])
+            # defer merging traces until after matrix match
 
         for hyp in self.hypothesis_defs:
             hid = str(hyp.get("id", "UNKNOWN"))
@@ -997,6 +1267,89 @@ class HypothesisEngine:
                 consistency,
                 assessments=assessments,
             )
+            # Every hypothesis gets the same ordered evidence trail
+            # (waveforms → digitals/ANSI → SOE → settings → conclusion).
+            hyp_steps = list(narrative.get("causal_chain") or [])
+            narrative["causal_chain"] = _merge_causal_chain(
+                evidence_bag,
+                assessments,
+                fault,
+                consistency,
+                hypothesis_steps=[
+                    s
+                    for s in hyp_steps
+                    if s
+                    and not str(s).startswith(
+                        ("1. Waveforms", "2. Digitals", "3. SOE", "4. Settings")
+                    )
+                ],
+                legacy_fallback=hyp_steps,
+            )
+            # Expand bare ANSI in statement/explanation when possible.
+            # Longest codes first; never match a prefix inside 50N / 51P / etc.
+            try:
+                from protection.ansi_names import format_ansi
+
+                _ansi_expand_codes = (
+                    "50NBF",
+                    "50BF",
+                    "87RGF",
+                    "87GT",
+                    "50P",
+                    "51P",
+                    "50N",
+                    "51N",
+                    "50G",
+                    "51G",
+                    "67N",
+                    "67P",
+                    "67G",
+                    "21G",
+                    "21P",
+                    "21N",
+                    "87L",
+                    "87T",
+                    "87B",
+                    "87G",
+                    "81U",
+                    "81O",
+                    "81R",
+                    "32R",
+                    "62BF",
+                    "LBB",
+                    "50",
+                    "51",
+                    "21",
+                    "67",
+                    "79",
+                    "86",
+                    "27",
+                    "59",
+                    "46",
+                    "48",
+                    "49",
+                    "68",
+                    "78",
+                    "25",
+                    "87",
+                )
+                for key in ("statement", "explanation"):
+                    text = str(narrative.get(key) or "")
+                    for code in _ansi_expand_codes:
+                        named = format_ansi(code)
+                        if named == code:
+                            continue
+                        # Token boundary: do not split 51N via code "51".
+                        # Also skip already-expanded ``51N (…​)``.
+                        text = re.sub(
+                            rf"(?<![A-Za-z0-9]){re.escape(code)}(?![A-Za-z0-9])(?!\s*\()",
+                            named,
+                            text,
+                            flags=re.IGNORECASE,
+                        )
+                    narrative[key] = text
+            except Exception:  # noqa: BLE001
+                pass
 
             result.hypotheses.append(
                 HypothesisResult(
@@ -1025,6 +1378,37 @@ class HypothesisEngine:
                 statement="Insufficient structured evidence to form an RCA hypothesis.",
             )
             return result
+
+        # Matrix pack (L1/L2/L3 + LBB) — compound class, checklist, bus guardrail
+        from rca.matrix import apply_matrix_to_hypotheses, match_matrix
+
+        matrix_result = match_matrix(evidence_bag)
+        apply_matrix_to_hypotheses(result.hypotheses, matrix_result)
+        result.matrix = matrix_result.to_dict()
+        result.enrichment = dict(result.enrichment or {})
+        # L1/L2/L3 deep ladder traces before scenario traces
+        deep_tr = list((result.enrichment.get("ladder_deep") or {}).get("traces") or [])
+        merged_tr = list(deep_tr) + list(matrix_result.traces or [])
+        if merged_tr:
+            result.enrichment["matrix_traces"] = merged_tr
+        if matrix_result.compound_class:
+            result.enrichment["compound_class"] = matrix_result.compound_class
+        if matrix_result.matched_scenario_id:
+            result.enrichment["matrix_scenario"] = matrix_result.matched_scenario_id
+        if matrix_result.level_coverage:
+            result.enrichment["level_coverage"] = dict(matrix_result.level_coverage)
+        # Taxonomy: L3-only fallback without L1 → do not leave CONFIRMED on zone hyps
+        if "l3_fallback_applied" in evidence_bag and "evidence_l1_present" not in evidence_bag:
+            for h in result.hypotheses:
+                if (
+                    h.hypothesis_id in ZONE_PRIMARY_HYPOTHESES
+                    and h.status == HypothesisStatus.CONFIRMED.value
+                ):
+                    h.status = HypothesisStatus.PROBABLE.value
+                    h.explanation = (
+                        (h.explanation or "")
+                        + " Downgraded to PROBABLE — L3 waveform fallback without L1 digital assert."
+                    ).strip()
 
         if result.forced_inconclusive:
             # Policy: disposition primary stays INCONCLUSIVE when settings critical,
@@ -1075,6 +1459,51 @@ class HypothesisEngine:
             )
         else:
             result.primary = self._select_primary(result.hypotheses)
+            # Prefer matrix primary when L1/L2/L3 ladder agrees (≥2 layers) or YAML opts in.
+            pref = matrix_result.primary_hypothesis
+            prefer = bool(getattr(matrix_result, "prefer_primary", False))
+            if not prefer:
+                for cand in matrix_result.candidates or []:
+                    if cand.get("id") == matrix_result.matched_scenario_id:
+                        prefer = bool(cand.get("prefer_primary"))
+                        break
+            if not prefer and matrix_result.matched_scenario_id:
+                prefer = matrix_result.matched_scenario_id in {
+                    "SC_LBB_CASCADE_COMPOUND",
+                    "SC_INRUSH_ENERGIZATION_FALLBACK",
+                    "SC_SWITCH_ONTO_FAULT",
+                    "SC_XFMR_INTERNAL_THROUGH_EXCLUDED",
+                    "SC_BUS_ZONE_REQUIRES_87B",
+                }
+            agree = int((matrix_result.level_coverage or {}).get("agree_count") or 0)
+            if (
+                pref
+                and prefer
+                and result.primary
+                and result.primary.hypothesis_id != pref
+            ):
+                alt = next(
+                    (h for h in result.hypotheses if h.hypothesis_id == pref), None
+                )
+                # Taxonomy: multi-layer agreement may promote from POSSIBLE;
+                # single-layer still requires PROBABLE+.
+                min_status = (
+                    HypothesisStatus.POSSIBLE.value
+                    if agree >= 2
+                    else HypothesisStatus.PROBABLE.value
+                )
+                if alt is not None and STATUS_RANK.get(alt.status, 0) >= STATUS_RANK.get(
+                    min_status, 0
+                ):
+                    prev = result.primary.hypothesis_id
+                    result.primary = alt
+                    result.enrichment = dict(result.enrichment or {})
+                    result.enrichment["matrix_primary_override"] = {
+                        "from": prev,
+                        "to": pref,
+                        "ladder": (matrix_result.level_coverage or {}).get("ladder"),
+                        "agree_count": agree,
+                    }
         return result
 
     def _select_primary(self, hypotheses: list[HypothesisResult]) -> HypothesisResult:
@@ -1094,8 +1523,51 @@ class HypothesisEngine:
                 HypothesisStatus.POSSIBLE.value, 0
             ):
                 return alt
-        # Prefer Switch onto fault over zone-primary when SOTF context is strong
-        # and scores are close (mechanism explains the trip better than zone alone).
+        # Prefer Breaker failure only for *local* BF / LBB cascade initiator.
+        # A bay that successfully cleared (e.g. HV after LV LBB) may show 50BF
+        # digitals — that must not become primary RCA over the zone fault.
+        bf = next((h for h in ranked if h.hypothesis_id == "BREAKER_FAILURE"), None)
+        if (
+            bf is not None
+            and top.hypothesis_id
+            in ZONE_PRIMARY_HYPOTHESES
+            | {
+                "INTERTRIP_OPERATION",
+                "EXTERNAL_LINE_FAULT",
+                "TRANSFORMER_INTERNAL_FAULT",
+                "SWITCH_ONTO_FAULT",
+            }
+            and STATUS_RANK.get(bf.status, 0)
+            >= STATUS_RANK.get(HypothesisStatus.PROBABLE.value, 0)
+            and bf.score + 0.08 >= top.score
+        ):
+            support = set(bf.supporting_evidence or [])
+            local_bf = "bf_logic_satisfied" in support and "current_persists" in support
+            # Initiator cascade only — not upstream RX-only clearance
+            cascade_bf = (
+                "cascade_lbb_detected" in support
+                and "cascade_upstream_clearance" not in support
+                and "intertrip_receive_observed" not in support
+            )
+            if cascade_bf or local_bf:
+                return bf
+        # Backup / upstream bay that *received* LBB intertrip: primary is
+        # transfer-trip clearance, not a local feeder / zone root cause.
+        inter = next((h for h in ranked if h.hypothesis_id == "INTERTRIP_OPERATION"), None)
+        if (
+            inter is not None
+            and top.hypothesis_id in ZONE_PRIMARY_HYPOTHESES
+            and STATUS_RANK.get(inter.status, 0)
+            >= STATUS_RANK.get(HypothesisStatus.POSSIBLE.value, 0)
+        ):
+            isupport = set(inter.supporting_evidence or [])
+            if (
+                "intertrip_receive_observed" in isupport
+                or "cascade_upstream_clearance" in isupport
+            ):
+                return inter
+        # Prefer Switch onto fault over zone-primary only with strong close/SOTF evidence
+        # (not a plain trip with 52a open, and not AR reclaim into fault).
         sotf = next((h for h in ranked if h.hypothesis_id == "SWITCH_ONTO_FAULT"), None)
         if (
             sotf is not None
@@ -1105,12 +1577,10 @@ class HypothesisEngine:
             and sotf.score + 0.05 >= top.score
         ):
             support = set(sotf.supporting_evidence or [])
-            if support & {
-                "sotf_element_asserted",
-                "switch_onto_fault_possible",
-                "breaker_close_observed",
-                "switch_onto_fault_context",
-            }:
+            # Dedicated SOTF digital or pre-trip close (not AR-only) may win.
+            if "sotf_element_asserted" in support:
+                return sotf
+            if "breaker_close_observed" in support:
                 return sotf
         return top
 
@@ -1147,10 +1617,27 @@ class HypothesisEngine:
                 elif str(ec) == "SWITCHING":
                     bag.add("switching_event_correlated")
 
-        if str(ec or "") == "FAULT" and fault.status in ("CLASSIFIED", "PROBABLE"):
+        # Shunt fault tokens: require CLASSIFIED/PROBABLE type, not an explicit
+        # non-fault DFR class. FAULT and UNKNOWN (or missing) event_class both OK.
+        _non_fault_ec = str(ec or "") in (
+            "ENERGIZATION",
+            "MOTOR_START",
+            "SWITCHING",
+            "DISTURBANCE",
+        )
+        _ft = str(getattr(fault, "fault_type", "") or "")
+        if (
+            not _non_fault_ec
+            and fault.status in ("CLASSIFIED", "PROBABLE")
+            and _ft not in ("", "UNKNOWN")
+        ):
             bag.add("fault_classified")
             bag.add(f"fault_type_{fault.fault_type}")
-        if str(ec or "") == "FAULT" and fault.status == "CLASSIFIED":
+        if (
+            not _non_fault_ec
+            and fault.status == "CLASSIFIED"
+            and _ft not in ("", "UNKNOWN")
+        ):
             bag.add("fault_classified_strong")
 
         any_trip = any(_assessment_tripped(a) for a in assessments)
@@ -1189,21 +1676,62 @@ class HypothesisEngine:
             bag.add("trip_command_observed")
         if electrical_flags.get("intertrip"):
             bag.add("intertrip_signal_observed")
+        if electrical_flags.get("intertrip_receive_seen"):
+            bag.add("intertrip_signal_observed")
+            bag.add("intertrip_receive_observed")
+        if electrical_flags.get("intertrip_send_seen"):
+            bag.add("intertrip_signal_observed")
+            bag.add("intertrip_send_observed")
+        if electrical_flags.get("cascade_upstream_clearance"):
+            bag.add("cascade_upstream_clearance")
+            bag.add("intertrip_signal_observed")
         if electrical_flags.get("comm_channel"):
             bag.add("comm_channel_evidence")
         if electrical_flags.get("switching_correlated"):
             bag.add("switching_event_correlated")
         if electrical_flags.get("external_event_correlated"):
             bag.add("external_event_correlated")
-        # Breaker close / 52a change (switch-onto-fault context)
-        tl_types = electrical_flags.get("timeline_event_types")
-        if not isinstance(tl_types, (list, tuple, set)):
-            tl_types = []
-        if electrical_flags.get("breaker_close") or any(
-            str(t) in ("52a_change", "52b_change") for t in tl_types
-        ):
+        # LBB / multi-bay cascade (LV BF → HV intertrip clearance) — single incident
+        if electrical_flags.get("cascade_lbb_detected"):
+            bag.add("cascade_lbb_detected")
+            bag.add("scheme_breaker_failure")
+            bag.add("trip_command_observed")
+            bag.add("intertrip_signal_observed")
+            # Upstream/backup clearance only when this end received intertrip
+            # (or pipeline already stamped cascade_upstream_clearance).
+            rx_only = bool(electrical_flags.get("intertrip_receive_seen")) and not bool(
+                electrical_flags.get("intertrip_send_seen")
+            )
+            if rx_only or electrical_flags.get("cascade_upstream_clearance"):
+                bag.add("cascade_upstream_clearance")
+                bag.add("intertrip_receive_observed")
+            # Only claim local BF logic when persist is evidenced (waveform or
+            # explicit Combined Cascade mode) — not from CFG channel names alone.
+            if electrical_flags.get("current_persists") and not rx_only:
+                bag.add("current_persists")
+                bag.add("bf_logic_satisfied")
+        # Breaker CLOSE only — pipeline must set breaker_close for a *pre-trip* close.
+        # A trip/open 52a change or AR reclaim must not be treated as switch-onto-fault.
+        if electrical_flags.get("breaker_close"):
             bag.add("breaker_close_observed")
             bag.add("switching_event_correlated")
+        # Autoreclose after trip (79) — reclaim into fault ≠ energize/SOTF
+        tl_types = electrical_flags.get("timeline_event_types") or []
+        if not isinstance(tl_types, (list, tuple, set)):
+            tl_types = []
+        has_reclose_tl = "reclose" in {str(t) for t in tl_types}
+        has_79 = any(
+            str(getattr(a, "element", "") or "").upper() in ("79",)
+            and (
+                getattr(a, "pickup", None) is True
+                or getattr(a, "trip", None) is True
+                or str(getattr(a, "actual_operation", "") or "").upper()
+                in ("TRIPPED", "PICKED_UP", "OPERATED")
+            )
+            for a in assessments
+        )
+        if has_reclose_tl or has_79 or electrical_flags.get("autoreclose"):
+            bag.add("autoreclose_issued")
         # Magnetizing inrush / transformer charging (H2 detector)
         det = electrical_flags.get("detectors") if isinstance(electrical_flags.get("detectors"), dict) else {}
         inrush = det.get("magnetizing_inrush") if isinstance(det, dict) else None
@@ -1238,15 +1766,17 @@ class HypothesisEngine:
         elif isinstance(scheme_toks, dict):
             bag |= {str(t) for t in scheme_toks.keys() if t}
 
-        # Composite: close/energize into a shunt fault (not pickup-only inrush)
+        # Composite: close/energize into a shunt fault (not pickup-only inrush).
+        # Require named SOTF element or a confirmed *pre-trip* breaker close
+        # (pipeline already excludes AR reclaim / post-trip 52a rising).
         if (
             "fault_classified" in bag
             and "protection_operated" in bag
             and "dfr_non_fault_event" not in bag
+            and "cascade_lbb_detected" not in bag
             and (
                 "sotf_element_asserted" in bag
                 or "breaker_close_observed" in bag
-                or "switching_event_correlated" in bag
             )
         ):
             bag.add("switch_onto_fault_possible")
@@ -1261,6 +1791,14 @@ class HypothesisEngine:
             bag.add("settings_partial")
 
         bag |= _scheme_tokens_from_assessments(assessments)
+
+        # Local BF logic: 50BF digital + current still flowing (or cascade already set it)
+        if (
+            "bf_element_operated" in bag
+            and "current_persists" in bag
+            and "bf_logic_satisfied" not in bag
+        ):
+            bag.add("bf_logic_satisfied")
 
         if _through_fault_excluded_from_xfmr(assessments, electrical_flags):
             bag.add("through_fault_excluded")
@@ -1277,6 +1815,100 @@ class HypothesisEngine:
         feat = fault.evidence if isinstance(fault.evidence, dict) else {}
         if feat.get("ground"):
             bag.add("ground_involved")
+
+        # Soft shunt-fault token: trip + scheme/electrical evidence proves a fault
+        # was cleared even when AG/ABC typing stayed UNKNOWN (unmapped currents,
+        # 87T-only DRs). Unlocks matrix rows that require fault_classified without
+        # inventing a phase type.
+        if (
+            not _non_fault_ec
+            and "fault_classified" not in bag
+            and any_trip
+            and (
+                str(ec or "") == "FAULT"
+                or electrical_flags.get("fault_indicated")
+                or electrical_flags.get("current_increase")
+                or "differential_operated" in bag
+                or "overcurrent_element_operated" in bag
+                or "earth_fault_element_operated" in bag
+                or "distance_element_operated" in bag
+                or "bf_logic_satisfied" in bag
+                or "bf_element_operated" in bag
+            )
+        ):
+            bag.add("fault_classified")
+
+        # --- Matrix L3: analogue / sequence components from DR ---
+        def _fnum(*keys: str) -> Optional[float]:
+            for k in keys:
+                v = electrical_flags.get(k)
+                if v is None and isinstance(feat, dict):
+                    v = feat.get(k)
+                try:
+                    if v is not None:
+                        return float(v)
+                except (TypeError, ValueError):
+                    continue
+            return None
+
+        i_max = _fnum("I_max_a", "I_fault_a")
+        i2 = _fnum("I2", "I2_a")
+        i0 = _fnum("I0", "I0_a")
+        if i_max and i_max > 0:
+            if i2 is not None and i2 >= 0.15 * i_max:
+                bag.add("negative_sequence_elevated")
+                els = {
+                    str(getattr(a, "element", "") or "").upper() for a in assessments
+                }
+                if any(e == "46" or e.startswith("46") for e in els):
+                    bag.add("unbalance_protection_operated")
+            if i0 is not None and i0 >= 0.15 * i_max:
+                bag.add("zero_sequence_elevated")
+                bag.add("ground_involved")
+        v_min = _fnum("V_min_v")
+        v_max = _fnum("V_max_v")
+        if v_min is not None and v_max is not None and v_max > 0 and v_min <= 0.85 * v_max:
+            bag.add("voltage_sag_observed")
+        det = (
+            electrical_flags.get("detectors")
+            if isinstance(electrical_flags.get("detectors"), dict)
+            else {}
+        )
+        ct_sat = det.get("ct_saturation") if isinstance(det, dict) else None
+        if isinstance(ct_sat, dict) and str(ct_sat.get("status") or "").upper() in (
+            "POSSIBLE",
+            "LIKELY",
+            "CONFIRMED",
+        ):
+            bag.add("ct_saturation_suspected")
+
+        # --- Matrix L2: SOE / sequence markers from timeline ---
+        tl = {str(t) for t in (electrical_flags.get("timeline_event_types") or [])}
+        if electrical_flags.get("successful_clearing") or "current_interruption" in tl:
+            bag.add("successful_clearing")
+        if electrical_flags.get("breaker_open_confirmed"):
+            bag.add("breaker_open_confirmed")
+        elif (
+            "current_interruption" in tl
+            and not electrical_flags.get("current_persists")
+            and ("protection_trip" in tl or "breaker_trip_command" in tl or any_trip)
+        ):
+            bag.add("breaker_open_confirmed")
+            bag.add("successful_clearing")
+        if "fault_inception" in tl:
+            bag.add("fault_inception_observed")
+        if electrical_flags.get("settings_verified") or electrical_flags.get(
+            "engineer_verified_active_group"
+        ):
+            bag.add("settings_verified")
+
+        # Layer presence (Excel L1 / L2 / L3) — used by match_matrix ladder
+        from rca.matrix import layer_tokens_present
+
+        for layer, present in layer_tokens_present(bag).items():
+            if present:
+                bag.add(f"evidence_{layer.lower()}_present")
+
         return bag
 
     def _evaluate_evidence(
@@ -1409,7 +2041,16 @@ class HypothesisEngine:
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         if hid == "BREAKER_FAILURE":
-            for tok in ("bf_logic_satisfied", "scheme_breaker_failure", "current_persists", "trip_command_observed"):
+            for tok in (
+                "bf_logic_satisfied",
+                "scheme_breaker_failure",
+                "current_persists",
+                "trip_command_observed",
+                "cascade_lbb_detected",
+                "cascade_upstream_clearance",
+                "intertrip_signal_observed",
+                "intertrip_send_observed",
+            ):
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         if hid == "COMMUNICATION_FAILURE":
@@ -1422,7 +2063,15 @@ class HypothesisEngine:
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         if hid == "INTERTRIP_OPERATION":
-            for tok in ("intertrip_signal_observed", "scheme_pilot"):
+            for tok in (
+                "intertrip_signal_observed",
+                "intertrip_receive_observed",
+                "intertrip_send_observed",
+                "cascade_upstream_clearance",
+                "scheme_pilot",
+                "protection_trip_asserted",
+                "protection_operated",
+            ):
                 if tok in bag and tok not in supporting:
                     extras.append(tok)
         if hid == "RELAY_MISOPERATION":
@@ -1470,6 +2119,11 @@ class HypothesisEngine:
                 contradicting.append("non_line_differential_operated")
             if "transformer_diff_operated" in bag and "line_diff_operated" not in bag:
                 contradicting.append("transformer_diff_operated")
+            if (
+                "intertrip_receive_observed" in bag
+                or "cascade_upstream_clearance" in bag
+            ):
+                contradicting.append("cleared_via_intertrip_receive")
         if hid == "INTERNAL_FEEDER_FAULT":
             if "distance_element_operated" in bag and "overcurrent_element_operated" not in bag:
                 contradicting.append("distance_primary_without_oc")
@@ -1477,6 +2131,12 @@ class HypothesisEngine:
                 # 87RGF counts as EF; other diffs should not pick feeder
                 if "transformer_diff_operated" in bag or "bus_diff_operated" in bag or "generator_diff_operated" in bag or "line_diff_operated" in bag:
                     contradicting.append("differential_scheme_operated")
+            # HV/backup clearance via received LBB intertrip is not a local feeder root cause
+            if (
+                "intertrip_receive_observed" in bag
+                or "cascade_upstream_clearance" in bag
+            ):
+                contradicting.append("cleared_via_intertrip_receive")
         if hid == "TRANSFORMER_INTERNAL_FAULT":
             if "transformer_diff_operated" not in bag and "differential_operated" not in bag:
                 if "distance_element_operated" in bag or "overcurrent_element_operated" in bag:
@@ -1588,6 +2248,15 @@ class HypothesisEngine:
                 score -= 0.35
             elif "switch_onto_fault_possible" in bag:
                 score -= 0.28
+            # LBB cascade: HV/feeder trip is consequence — BF is primary (initiator)
+            if "cascade_lbb_detected" in bag:
+                score -= 0.30
+            # Upstream bay cleared after receiving intertrip — not local feeder RCA
+            if (
+                "intertrip_receive_observed" in bag
+                or "cascade_upstream_clearance" in bag
+            ):
+                score -= 0.40
             return min(max(score, 0.0), 1.0)
 
         if hid == "CABLE_FAULT":
@@ -1701,7 +2370,11 @@ class HypothesisEngine:
                 score += 0.18
             if "switch_onto_fault_possible" in bag:
                 score += 0.12
-            if "switching_event_correlated" in bag and "protection_operated" in bag:
+            if (
+                "switching_event_correlated" in bag
+                and "protection_operated" in bag
+                and ("sotf_element_asserted" in bag or "breaker_close_observed" in bag)
+            ):
                 score += 0.08
             if "current_increase_observed" in bag:
                 score += 0.06
@@ -1712,6 +2385,21 @@ class HypothesisEngine:
                 score -= 0.40
             if "motor_start_possible" in bag and "protection_operated" not in bag:
                 score -= 0.30
+            # BF / LBB cascade clearance is not switch-onto-fault
+            if "cascade_lbb_detected" in bag or "bf_logic_satisfied" in bag:
+                score -= 0.50
+            # AR reclaim alone (no pre-trip close / SOTF digital) → not SOTF
+            if (
+                "autoreclose_issued" in bag
+                and "sotf_element_asserted" not in bag
+                and "breaker_close_observed" not in bag
+            ):
+                score -= 0.45
+            if (
+                "sotf_element_asserted" not in bag
+                and "breaker_close_observed" not in bag
+            ):
+                score -= 0.40
             return min(max(score, 0.0), 1.0)
 
         if hid == "MOTOR_START":
@@ -1761,9 +2449,80 @@ class HypothesisEngine:
                 score += 0.15
             if "current_persists" in bag:
                 score += 0.25
-            return min(score, 1.0)
+            # Multi-bay LBB cascade (initiator BF + upstream intertrip clearance)
+            if "cascade_lbb_detected" in bag:
+                score += 0.22
+            # 50BF digital alone on a bay that cleared is not local breaker failure
+            # (typical HV upstream trip after LV LBB — zone fault is primary).
+            if (
+                "bf_logic_satisfied" in bag
+                and "current_persists" not in bag
+                and "cascade_lbb_detected" not in bag
+            ):
+                score -= 0.42
+            if "cascade_upstream_clearance" in bag and "current_persists" not in bag:
+                score -= 0.25
+            return min(max(score, 0.0), 1.0)
+        if hid == "INTERTRIP_OPERATION":
+            score = 0.12
+            if "intertrip_signal_observed" in bag:
+                score += 0.40
+            # Backup / upstream end: receiving LBB intertrip *is* the primary story
+            if (
+                "intertrip_receive_observed" in bag
+                or "cascade_upstream_clearance" in bag
+            ):
+                score += 0.30
+            # Initiator LBB cascade: intertrip is only the transfer step
+            elif "cascade_lbb_detected" in bag or "intertrip_send_observed" in bag:
+                score -= 0.35
+            return min(max(score, 0.0), 1.0)
         if hid == "PROTECTION_SETTING_ERROR":
             return 0.55 if "setting_inconsistency_unverified" in bag else 0.2
+        # Full Excel matrix — token-gated supporting hypotheses
+        _matrix_token_hyps: dict[str, tuple[str, ...]] = {
+            "MOTOR_LOCKED_ROTOR": ("locked_rotor_indicated", "motor_stall_indicated"),
+            "MOTOR_LOAD_JAM": ("load_jam_indicated", "motor_stall_indicated"),
+            "HIGH_IMPEDANCE_FAULT": ("high_impedance_fault_indicated", "hif_suspected"),
+            "INTERMITTENT_EARTH_FAULT": (
+                "intermittent_earth_indicated",
+                "transient_earth_indicated",
+            ),
+            "TEMPORARY_FAULT_RECLOSE": ("autoreclose_success", "reclose_successful"),
+            "PERSISTENT_FAULT_RECLOSE": ("autoreclose_fail", "reclose_unsuccessful"),
+            "OVEREXCITATION": ("overflux_operated", "vhz_elevated"),
+            "THERMAL_OVERLOAD": (
+                "thermal_overload_indicated",
+                "thermal_overload_operated",
+            ),
+            "PHASE_LOSS": ("phase_loss_indicated", "open_phase_indicated"),
+            "NEGATIVE_SEQUENCE": (
+                "negative_sequence_elevated",
+                "unbalance_protection_operated",
+            ),
+            "LOSS_OF_EXCITATION": (
+                "loss_of_excitation_operated",
+                "underexcitation_indicated",
+            ),
+            "FREQUENCY_EVENT": ("frequency_protection_operated", "frequency_anomaly"),
+            "OUT_OF_STEP": ("out_of_step_operated", "pole_slip_indicated"),
+            "ACCIDENTAL_ENERGIZATION": (
+                "accidental_energization_indicated",
+                "generator_offline_energized",
+            ),
+            "CAPACITOR_BANK_FAULT": (
+                "capacitor_unbalance_operated",
+                "capacitor_fault_indicated",
+            ),
+            "OVERVOLTAGE": ("overvoltage_operated", "overvoltage_indicated"),
+            "TRIP_CIRCUIT_FAILURE": ("trip_circuit_fail", "tc_supervision_alarm"),
+            "BREAKER_MECHANICAL_FAILURE": ("breaker_stuck", "breaker_mechanical_fail"),
+        }
+        if hid in _matrix_token_hyps:
+            toks = _matrix_token_hyps[hid]
+            if any(t in bag for t in toks):
+                return 0.78 if "protection_operated" in bag or "fault_classified" in bag else 0.62
+            return 0.08
         if hid == "UNKNOWN":
             if fault.status in ("CLASSIFIED", "PROBABLE"):
                 return 0.15
@@ -1851,13 +2610,21 @@ class HypothesisEngine:
                     return 0.80
                 return 0.40
             if hid == "SWITCH_ONTO_FAULT":
+                if "cascade_lbb_detected" in bag or "bf_logic_satisfied" in bag:
+                    return 0.20
+                if (
+                    "autoreclose_issued" in bag
+                    and "sotf_element_asserted" not in bag
+                    and "breaker_close_observed" not in bag
+                ):
+                    return 0.25
                 if "sotf_element_asserted" in bag:
                     return 0.92
-                if "switch_onto_fault_possible" in bag:
+                if "switch_onto_fault_possible" in bag and "breaker_close_observed" in bag:
                     return 0.85
                 if "breaker_close_observed" in bag and "protection_operated" in bag:
                     return 0.80
-                return 0.45
+                return 0.25
             if hid == "BREAKER_FAILURE":
                 return 0.85 if "bf_logic_satisfied" in bag else 0.25
             if hid == "CT_SATURATION":
@@ -2008,6 +2775,16 @@ class HypothesisEngine:
                 parts.append(_prot)
             if "protection_operated_consistently" in bag:
                 parts.append("operate also consistent with settings")
+            # If intertrip/cascade also present, say so — do not hide it behind OC trip
+            if "intertrip_receive_observed" in bag or "cascade_upstream_clearance" in bag:
+                parts.append(
+                    "intertrip RECEIVE also present — feeder OC may be clearance consequence, "
+                    "not standalone root cause (see Intertrip / Breaker-failure hypotheses)"
+                )
+            elif "cascade_lbb_detected" in bag or "intertrip_send_observed" in bag:
+                parts.append(
+                    "LBB cascade / intertrip SEND also present — check Breaker-failure as primary"
+                )
             statement = (
                 f"{title} is {status} based on: " + "; ".join(parts) + "."
                 if parts
@@ -2018,6 +2795,12 @@ class HypothesisEngine:
                 for a in (
                     "Confirm faulted feeder / bay equipment in the field",
                     "Review OC/EF/directional pickup and timing vs verified settings",
+                    "If intertrip/LBB digitals exist, compare against Breaker-failure / Intertrip RCA"
+                    if (
+                        "intertrip_signal_observed" in bag
+                        or "cascade_lbb_detected" in bag
+                    )
+                    else None,
                     "Confirm breaker opened and fault cleared"
                     if "trip_observed" in bag
                     else None,
@@ -2029,7 +2812,9 @@ class HypothesisEngine:
                 "statement": statement,
                 "explanation": (
                     "Feeder / local-circuit hypothesis — boosted for 50/51/EF/67 trip; "
-                    "pickup-only is stated as pickup, not trip/operate."
+                    "pickup-only is stated as pickup, not trip/operate. "
+                    "When intertrip or LBB cascade evidence exists, OC trip is weighed against "
+                    "Breaker-failure / Intertrip hypotheses before calling feeder root cause."
                 ),
                 "causal_chain": [
                     c
@@ -2038,6 +2823,12 @@ class HypothesisEngine:
                         oc_ph.title() if oc_ph else None,
                         ef_ph.title() if ef_ph else None,
                         dir_ph.title() if dir_ph else None,
+                        "Intertrip / cascade markers present — not OC-only story"
+                        if (
+                            "intertrip_signal_observed" in bag
+                            or "cascade_lbb_detected" in bag
+                        )
+                        else None,
                         f"Consistency summary: {consistency.summary_status}",
                     )
                     if c
@@ -2122,21 +2913,77 @@ class HypothesisEngine:
             }
 
         if hid == "BREAKER_FAILURE":
-            return {
-                "statement": (
-                    f"{title} is {status}"
-                    + (
-                        " based on 50BF / breaker-failure logic evidence."
-                        if "bf_logic_satisfied" in bag
-                        else " — breaker-failure evidence is incomplete."
+            oc_ph = _family_assert_phrase(asses, _FAMILY_OVERCURRENT)
+            bf_ph = _family_assert_phrase(asses, _FAMILY_BREAKER_FAILURE)
+            if "cascade_lbb_detected" in bag:
+                detail = (
+                    " — local breaker failed to open after a valid trip; "
+                    "50BF (Breaker failure) / LBB sent intertrip and the upstream bay cleared. "
+                    "Upstream trip is a cascade consequence, not the initiating cause. "
+                    "Local 50/51 (overcurrent) trip alone is not the root cause when BF + intertrip follow."
+                )
+                expl = (
+                    "Step-by-step LBB cascade: (1) fault current / waveforms, (2) local 50/51 trip "
+                    "command, (3) breaker fails to interrupt (current persists), (4) 50BF/LBB + intertrip "
+                    "send, (5) upstream clearance. Primary root cause = local breaker failure."
+                )
+                actions = [
+                    "Inspect / maintain the failed local breaker before re-energizing",
+                    "Confirm LBB timer and intertrip path (GOOSE / wired TT) operated as designed",
+                    "Do not treat upstream HV trip or local 50/51 alone as the primary root cause",
+                ]
+                chain = [
+                    c
+                    for c in (
+                        f"Fault classification: {fault.status} ({ft or 'UNKNOWN'})",
+                        "Waveforms / electrical: fault current and persist into BF window"
+                        if "current_persists" in bag or "current_increase_observed" in bag
+                        else None,
+                        oc_ph or ("Local overcurrent (50/51) trip asserted" if "overcurrent_element_operated" in bag else None),
+                        "Trip command issued — breaker did not clear",
+                        bf_ph or "50BF (Breaker failure) / LBB logic satisfied",
+                        "Intertrip / transfer-trip sent upstream"
+                        if "intertrip_signal_observed" in bag or "intertrip_send_observed" in bag
+                        else None,
+                        "Upstream / backup bay cleared (cascade consequence)"
+                        if "cascade_upstream_clearance" in bag
+                        else None,
+                        f"Consistency summary: {consistency.summary_status}",
                     )
-                ),
-                "explanation": "Requires BF element operation plus trip/current-persist evidence when available.",
-                "causal_chain": supporting[:6],
-                "recommended_actions": [
+                    if c
+                ]
+            else:
+                detail = (
+                    " based on 50BF (Breaker failure) logic evidence."
+                    if "bf_logic_satisfied" in bag
+                    else " — breaker-failure evidence is incomplete."
+                )
+                expl = (
+                    "Step check: trip command → current persists → 50BF operate. "
+                    "Requires BF element plus trip/current-persist evidence when available."
+                )
+                actions = [
                     "Verify trip issued and current persisted into BF window",
                     "Confirm adjacent breaker trips / BF lockout",
-                ],
+                ]
+                chain = [
+                    c
+                    for c in (
+                        f"Fault classification: {fault.status} ({ft or 'UNKNOWN'})",
+                        oc_ph,
+                        bf_ph or ("50BF (Breaker failure) operated" if "bf_logic_satisfied" in bag else None),
+                        "Current persisted after trip command"
+                        if "current_persists" in bag
+                        else None,
+                        f"Consistency summary: {consistency.summary_status}",
+                    )
+                    if c
+                ] or supporting[:6]
+            return {
+                "statement": f"{title} is {status}{detail}",
+                "explanation": expl,
+                "causal_chain": chain,
+                "recommended_actions": actions,
             }
 
         if hid == "EXTERNAL_GRID_DISTURBANCE":
@@ -2193,7 +3040,9 @@ class HypothesisEngine:
             if "sotf_element_asserted" in bag:
                 bits.append("SOTF digital / element asserted")
             if "breaker_close_observed" in bag:
-                bits.append("breaker close / 52a change observed")
+                bits.append("pre-trip breaker close observed")
+            elif "autoreclose_issued" in bag:
+                bits.append("autoreclose reclaim present (not used as SOTF close)")
             if "fault_classified" in bag:
                 bits.append(f"COMTRADE fault classified ({fault_bit})")
             if "protection_operated" in bag:
@@ -2387,21 +3236,77 @@ class HypothesisEngine:
             }
 
         if hid == "INTERTRIP_OPERATION":
-            return {
-                "statement": (
-                    f"{title} is {status}"
-                    + (
-                        " — intertrip / transfer-trip digital observed."
-                        if "intertrip_signal_observed" in bag
-                        else " — awaiting intertrip digital evidence."
+            oc_ph = _family_assert_phrase(asses, _FAMILY_OVERCURRENT)
+            if (
+                "intertrip_receive_observed" in bag
+                or "cascade_upstream_clearance" in bag
+            ):
+                detail = (
+                    " — this bay received LBB / transfer-trip (intertrip) and cleared as "
+                    "upstream backup. Local 50/51 (overcurrent) digitals here are clearance "
+                    "consequence, not the initiating feeder root cause. Correlate with the "
+                    "initiator (LV) event for breaker-failure primary RCA."
+                )
+                expl = (
+                    "Step-by-step: (1) waveforms show clearance at this end, (2) digital "
+                    "intertrip RX / transfer-trip asserted, (3) local trip follows intertrip — "
+                    "not a standalone feeder fault. Primary plant root cause is usually "
+                    "downstream breaker failure on the initiator end."
+                )
+                actions = [
+                    "Open the initiator (LV) event for breaker-failure / LBB primary RCA",
+                    "Confirm intertrip RX digital mapping and timing vs remote BF send",
+                    "Do not treat local 50/51 trip alone as feeder fault root cause when intertrip RX is present",
+                ]
+                chain = [
+                    c
+                    for c in (
+                        "Digital: intertrip / transfer-trip receive asserted",
+                        oc_ph
+                        or (
+                            "Local overcurrent (50/51) also asserted — treated as clearance consequence"
+                            if "overcurrent_element_operated" in bag
+                            else None
+                        ),
+                        "SOE / timeline: clearance after intertrip (not initiating BF)",
+                        "Upstream / backup role — not initiating bay",
+                        f"Fault classification at this end: {fault.status} ({ft or 'UNKNOWN'})",
+                        f"Consistency summary: {consistency.summary_status}",
                     )
-                ),
-                "explanation": "Requires intertrip_signal_observed from DR / SOE.",
-                "causal_chain": supporting[:6],
-                "recommended_actions": [
+                    if c
+                ]
+            elif "intertrip_signal_observed" in bag:
+                detail = " — intertrip / transfer-trip digital observed."
+                expl = (
+                    "Intertrip digital present — correlate with SOE and remote-end BF before "
+                    "calling a local feeder OC root cause."
+                )
+                actions = [
                     "Confirm TT / intertrip channel mapping on DR targets",
                     "Correlate remote-end trip timing",
-                ],
+                ]
+                chain = [
+                    c
+                    for c in (
+                        "Digital: intertrip / transfer-trip observed",
+                        oc_ph,
+                        f"Fault classification: {fault.status} ({ft or 'UNKNOWN'})",
+                    )
+                    if c
+                ] or supporting[:6]
+            else:
+                detail = " — awaiting intertrip digital evidence."
+                expl = "Requires intertrip_signal_observed from DR / SOE."
+                actions = [
+                    "Confirm TT / intertrip channel mapping on DR targets",
+                    "Correlate remote-end trip timing",
+                ]
+                chain = supporting[:6]
+            return {
+                "statement": f"{title} is {status}{detail}",
+                "explanation": expl,
+                "causal_chain": chain,
+                "recommended_actions": actions,
             }
 
         if hid in FAULT_SIDE_HYPOTHESES and hid not in (

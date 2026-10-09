@@ -23,6 +23,8 @@ export function deriveNextStep(opts: {
   needsChannelMap?: boolean;
   /** Prefer opening DR at inception after a successful analyse. */
   preferDr?: boolean;
+  /** Prior/current results exist — do not treat sticky FAILED as a hard stop. */
+  hasUsableResults?: boolean;
 }): NextStep | null {
   const {
     eventId,
@@ -32,6 +34,7 @@ export function deriveNextStep(opts: {
     onAnalyse,
     needsChannelMap,
     preferDr,
+    hasUsableResults,
   } = opts;
   const byKey = Object.fromEntries(lamps.map((l) => [l.key, l]));
   const base = `/events/${eventId}`;
@@ -44,11 +47,27 @@ export function deriveNextStep(opts: {
     };
   }
 
-  if (jobStatus === 'FAILED') {
+  if (jobStatus === 'FAILED' && !hasUsableResults) {
     return {
       title: 'Analysis failed',
       detail: 'Fix COMTRADE / channel map / files, then re-run. Prior results may still be viewable.',
       to: `${base}/comtrade`,
+      actionLabel: 'Re-run analysis',
+      onAction: onAnalyse,
+      actionDisabled: !onAnalyse,
+    };
+  }
+
+  if (
+    (jobStatus === 'FAILED' || jobStatus === 'PENDING') &&
+    hasUsableResults &&
+    !analysisBusy
+  ) {
+    return {
+      title: 'Results available — optional refresh',
+      detail:
+        'A later run did not finish, but prior findings are still shown. Re-run to refresh, or continue review.',
+      to: `${base}/summary`,
       actionLabel: 'Re-run analysis',
       onAction: onAnalyse,
       actionDisabled: !onAnalyse,
@@ -74,7 +93,7 @@ export function deriveNextStep(opts: {
     };
   }
 
-  if (jobStatus !== 'COMPLETED' && byKey.protection?.state === 'pending') {
+  if (jobStatus !== 'COMPLETED' && !hasUsableResults && byKey.protection?.state === 'pending') {
     return {
       title: 'Run analysis',
       detail:
@@ -114,10 +133,11 @@ export function deriveNextStep(opts: {
     };
   }
 
-  if (preferDr && jobStatus === 'COMPLETED') {
+  if (preferDr && (jobStatus === 'COMPLETED' || hasUsableResults)) {
     return {
       title: 'Inspect waveforms in DR',
-      detail: 'Place cursors A/B at inception and trip, check phasors / R–X, then continue RCA.',
+      detail:
+        'Place cursors A/B at inception and trip, check phasors / R–X, then continue RCA.',
       to: `${base}/dr`,
       actionLabel: 'Open DR workspace',
     };
@@ -126,7 +146,8 @@ export function deriveNextStep(opts: {
   if (byKey.rca?.state === 'warn' || byKey.rca?.state === 'pending') {
     return {
       title: 'Review RCA hypotheses',
-      detail: 'Check primary / alternative hypotheses and missing evidence before closing.',
+      detail:
+        'Check primary hypothesis and missing evidence before closing.',
       to: `${base}/rca`,
       actionLabel: 'Open RCA',
     };
@@ -135,7 +156,8 @@ export function deriveNextStep(opts: {
   if (byKey.report?.state === 'pending') {
     return {
       title: 'Generate report & review',
-      detail: 'Create the disturbance report, then complete engineer disposition on Review.',
+      detail:
+        'Create the disturbance report, then complete engineer disposition on Review.',
       to: `${base}/report`,
       actionLabel: 'Open Report',
     };

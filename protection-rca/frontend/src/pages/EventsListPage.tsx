@@ -14,6 +14,7 @@ import {
   removeRecentEvent,
   recentEventLabel,
 } from '@/utils/recentEvents';
+import { formatAnsiSummary, formatAnsiSummaryCompact } from '@/utils/ansiDeviceNames';
 
 const QUEUE_LABELS: Record<string, string> = {
   awaiting_analysis: 'Awaiting analysis',
@@ -332,25 +333,55 @@ export function EventsListPage() {
                     {fmtStamp(ev.created_at)}
                   </td>
                   <td>
-                    {ev.substation_name ??
-                      (ev.extra as { substation_name?: string } | undefined)?.substation_name ??
-                      '—'}
+                    {ev.substation_name ?? '—'}
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      {ev.bay_name ??
-                        (ev.extra as { bay_name?: string } | undefined)?.bay_name ??
-                        ''}
+                      {ev.bay_name ?? ''}
+                      {ev.feeder ? ` · ${ev.feeder}` : ''}
                     </div>
                   </td>
-                  <td className="mono">
-                    {ev.relay_tag ??
-                      (ev.extra as { relay_tag?: string } | undefined)?.relay_tag ??
-                      '—'}
-                  </td>
-                  <td className="mono">
-                    {ev.protection_summary || ev.fault_type || '—'}
-                    {ev.protection_summary && ev.fault_type ? (
-                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                        {ev.fault_type}
+                  <td className="mono">{ev.relay_tag ?? '—'}</td>
+                  <td
+                    className="mono"
+                    style={{
+                      maxWidth: 168,
+                      fontSize: '0.78rem',
+                      lineHeight: 1.25,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      verticalAlign: 'middle',
+                    }}
+                    title={
+                      ev.protection_summary
+                        ? [
+                            formatAnsiSummary(ev.protection_summary),
+                            ev.fault_display || ev.fault_type || ev.event_class || '',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                        : ev.fault_display || ev.fault_type || undefined
+                    }
+                  >
+                    {ev.protection_summary
+                      ? formatAnsiSummaryCompact(ev.protection_summary)
+                      : ev.fault_display || ev.fault_type || '—'}
+                    {ev.protection_summary &&
+                    (ev.fault_display || ev.fault_type || ev.event_class) ? (
+                      <div
+                        style={{
+                          fontSize: '0.7rem',
+                          color: 'var(--text-muted)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                        }}
+                      >
+                        {ev.fault_display ||
+                          (ev.fault_type && ev.fault_type !== 'UNKNOWN'
+                            ? ev.fault_type
+                            : ev.event_class && ev.event_class !== 'UNKNOWN'
+                              ? ev.event_class
+                              : ev.fault_type)}
                       </div>
                     ) : null}
                   </td>

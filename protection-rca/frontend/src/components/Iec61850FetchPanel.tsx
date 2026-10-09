@@ -16,7 +16,6 @@ interface Props {
   iedId: string;
   onFetched: (result: Iec61850FetchResult) => void;
   onAutoFetched: () => void;
-  remoteIedLabel?: string | null;
 }
 
 function formatSize(bytes: number): string {
@@ -38,7 +37,7 @@ function nameplateLabel(np?: Iec61850Nameplate | null): string {
   return [parts, ...extra].filter(Boolean).join(' · ');
 }
 
-export function Iec61850FetchPanel({ iedId, onFetched, onAutoFetched, remoteIedLabel }: Props) {
+export function Iec61850FetchPanel({ iedId, onFetched, onAutoFetched }: Props) {
   const [info, setInfo] = useState<Iec61850Info | null>(null);
   const [host, setHost] = useState('');
   const [port, setPort] = useState('102');
@@ -309,7 +308,6 @@ export function Iec61850FetchPanel({ iedId, onFetched, onAutoFetched, remoteIedL
           connection={conn}
           disabled={libraryMissing}
           onNewEvents={onAutoFetched}
-          remoteIedLabel={remoteIedLabel}
         />
       </section>
 

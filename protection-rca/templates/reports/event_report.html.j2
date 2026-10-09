@@ -165,10 +165,28 @@
 {% set breaker = analysis.breaker_analysis or {} %}
 {% set elec = analysis.electrical_analysis or {} %}
 
+{% set casc = analysis.cascade or {} %}
+{% set mend = analysis.multi_end or {} %}
+{% set comb = analysis.combined_analysis or casc.combined or mend.combined or {} %}
+{% set is_cascade = casc.detected or (comb.mode and ('CASCADE' in (comb.mode|string|upper) or 'LBB' in (comb.mode|string|upper))) %}
+{% set is_line = mend.detected or (comb.mode and ('LINE' in (comb.mode|string|upper) or 'MULTI_END' in (comb.mode|string|upper))) %}
+{% set _ev_evc = fault.evidence.event_classification if fault.evidence is mapping and fault.evidence.event_classification is mapping else {} %}
+{% set event_class = fault.event_class or _ev_evc.event_class or (fault.evidence.event_class if fault.evidence is mapping else none) or "UNKNOWN" %}
+{% set key_seq = analysis.key_sequence or [] %}
+{% set intertrip_summary = analysis.intertrip_summary or "None asserted" %}
+
 {# ——— Cover ——— #}
 <div class="cover">
-  <h1>Protection Disturbance Analysis Report</h1>
-  <p class="sub">Deterministic engineering report · COMTRADE / DR analysis</p>
+  <h1>
+    {% if is_cascade %}Cascade / LBB Disturbance Analysis Report
+    {% elif is_line %}Local / Remote Multi-End Analysis Report
+    {% else %}Protection Disturbance Analysis Report{% endif %}
+  </h1>
+  <p class="sub">
+    {% if is_cascade %}Combined initiator + backup · breaker failure primary RCA
+    {% elif is_line %}Combined LOCAL + REMOTE packages · single line disturbance
+    {% else %}Deterministic engineering report · COMTRADE / DR analysis{% endif %}
+  </p>
   <table class="kv">
     <tr><th>Event</th><td><strong>{{ ev.event_id or "NOT AVAILABLE" }}</strong></td></tr>
     <tr><th>DR time (relay)</th><td>{{ ev.event_datetime or "NOT AVAILABLE" }}</td></tr>
@@ -196,20 +214,20 @@
   </table>
   <div class="kpis">
     <div class="kpi">
-      <span class="lbl">Fault type</span>
-      <span class="val">{{ (fault.fault_type or "UNKNOWN") | humanize_label }}</span>
+      <span class="lbl">Event class</span>
+      <span class="val">{{ event_class | humanize_label }}</span>
     </div>
     <div class="kpi">
-      <span class="lbl">Decision</span>
-      <span class="val">{{ (decision.state or ev.decision_state or "—") | humanize_label }}</span>
+      <span class="lbl">Fault type</span>
+      <span class="val">{{ (fault.fault_type or "UNKNOWN") | humanize_label }}</span>
     </div>
     <div class="kpi">
       <span class="lbl">Primary RCA</span>
       <span class="val">{{ (primary.title or primary.hypothesis_id or "INCONCLUSIVE") | humanize_label }}</span>
     </div>
     <div class="kpi">
-      <span class="lbl">Data quality</span>
-      <span class="val">{{ (ev.data_quality or dq.event_data_quality or "—") | humanize_label }}</span>
+      <span class="lbl">Decision</span>
+      <span class="val">{{ (decision.state or ev.decision_state or "—") | humanize_label }}</span>
     </div>
   </div>
 </div>
@@ -228,10 +246,14 @@
   <p>{{ primary.statement }}</p>
   {% endif %}
   <p class="meta">
-    Fault: <strong>{{ fault.fault_type or "UNKNOWN" }}</strong>
+    Event class: <strong>{{ event_class | humanize_label }}</strong>
+    · Fault: <strong>{{ fault.fault_type or "UNKNOWN" }}</strong>
     ({{ fault.status or "—" }}, {{ fault.confidence or "INCONCLUSIVE" }})
+    {% if intertrip_summary and intertrip_summary != "None asserted" %}
+      · Intertrip: <strong>{{ intertrip_summary }}</strong>
+    {% endif %}
     {% if analysis.operated_elements %}
-      · Operated elements: <strong>{{ analysis.operated_elements | join(", ") }}</strong>
+      · Operated elements: <strong>{% for el in analysis.operated_elements %}{{ el | ansi_label }}{% if not loop.last %}, {% endif %}{% endfor %}</strong>
     {% endif %}
     {% if timing.pickup_to_trip_ms is defined and timing.pickup_to_trip_ms is not none %}
       · Pickup→trip: <strong>{{ timing.pickup_to_trip_ms }} ms</strong>
@@ -243,6 +265,11 @@
       · Location: <strong>{{ fault.distance_display }}</strong>
     {% endif %}
   </p>
+  {% if primary.causal_chain %}
+  <p class="meta"><strong>Causal chain:</strong>
+    {% for step in primary.causal_chain[:8] %}{{ step }}{% if not loop.last %} → {% endif %}{% endfor %}
+  </p>
+  {% endif %}
 </div>
 <ul>
 {% for s in statements %}
@@ -251,6 +278,46 @@
   <li>No structured statements — see detailed sections below.</li>
 {% endfor %}
 </ul>
+
+{% if is_cascade %}
+<h2>Cascade / LBB Analysis</h2>
+<div class="callout" style="background:#fff4ed;border-color:#f0c2a0;border-left-color:#c2410c;">
+  <p><strong>Combined cascade / LBB — single incident</strong></p>
+  <p>
+    Initiator bay breaker failure with upstream / backup clearance.
+    Primary RCA is breaker failure; backup trip is the cascade consequence, not a second unrelated fault.
+  </p>
+  <table class="kv">
+    <tr><th>Initiator</th><td>{{ casc.initiator_label or comb.primary_role or "—" }}
+      {% if comb.primary_event_code %} ({{ comb.primary_event_code }}){% endif %}</td></tr>
+    <tr><th>Backup</th><td>{{ casc.backup_label or comb.peer_role or "—" }}
+      {% if comb.peer_event_code %} ({{ comb.peer_event_code }}){% endif %}</td></tr>
+    <tr><th>Roles</th><td>{{ comb.primary_role or "INITIATOR" }} → {{ comb.peer_role or "BACKUP" }}</td></tr>
+    {% if casc.notes %}<tr><th>Notes</th><td>{{ casc.notes }}</td></tr>{% endif %}
+    {% if casc.time_order %}
+    <tr><th>Time order</th><td>
+      {% if casc.time_order.order_ok == true %}Initiator → intertrip → backup OK
+      {% elif casc.time_order.order_ok == false %}Check — order inconsistent
+      {% else %}Not assessed{% endif %}
+      {% if casc.time_order.notes %} ({{ casc.time_order.notes }}){% endif %}
+    </td></tr>
+    {% endif %}
+  </table>
+</div>
+{% elif is_line %}
+<h2>Local / Remote Multi-End Analysis</h2>
+<div class="callout" style="background:#eef7fb;border-color:#c7e0ea;">
+  <p><strong>Line multi-end — single disturbance</strong></p>
+  <p>LOCAL + REMOTE packages for the same line fault (differential / two-ended view).</p>
+  <table class="kv">
+    <tr><th>Local</th><td>{{ mend.local_label or "LOCAL" }}
+      {% if mend.local_event_code %} ({{ mend.local_event_code }}){% endif %}</td></tr>
+    <tr><th>Remote</th><td>{{ mend.remote_label or "REMOTE" }}
+      {% if mend.remote_event_code %} ({{ mend.remote_event_code }}){% endif %}</td></tr>
+    {% if mend.notes %}<tr><th>Notes</th><td>{{ mend.notes }}</td></tr>{% endif %}
+  </table>
+</div>
+{% endif %}
 
 {# ——— 2. Event identification ——— #}
 <h2>2. Event Identification</h2>
@@ -324,13 +391,20 @@
     · Trip → current clear: <strong>{{ timing.trip_to_clear_ms }} ms</strong>
   {% endif %}
   · Breaker: <strong>{{ breaker.assessment or "—" }}</strong>
+  {% if intertrip_summary and intertrip_summary != "None asserted" %}
+    · Intertrip: <strong>{{ intertrip_summary }}</strong>
+  {% endif %}
 </p>
+{% endif %}
+{% set seq_rows = key_seq if key_seq else (analysis.timeline or []) %}
+{% if key_seq %}
+<p class="meta">Key operate sequence ({{ key_seq|length }} of {{ (analysis.timeline or [])|length }} timeline events).</p>
 {% endif %}
 <table>
   <tr><th>Step</th><th>Time (s)</th><th>Source</th><th>Confidence</th></tr>
-  {% for e in analysis.timeline or [] %}
+  {% for e in seq_rows %}
   <tr>
-    <td>{{ e.event_type_label or e.event_type }}{% if e.label %} <span class="meta">({{ e.label }})</span>{% endif %}</td>
+    <td>{{ e.event_type_label or e.event_type }}{% if e.label %} <span class="meta">({{ e.label }})</span>{% endif %}{% if e.value and e.value != "—" %} <span class="meta">· {{ e.value }}</span>{% endif %}</td>
     <td>{{ "%.4f"|format(e.timestamp|float) if e.timestamp is not none else "—" }}</td>
     <td>{{ e.source or "—" }}</td>
     <td>{{ e.confidence or "—" }}</td>
@@ -367,9 +441,16 @@
 {# ——— 7. Fault ——— #}
 <h2>7. Fault Classification &amp; Location</h2>
 <table class="kv">
+  <tr><th>DFR event class</th><td>{{ event_class | humanize_label }}</td></tr>
   <tr><th>Fault type</th><td>{{ fault.fault_type or "UNKNOWN" }}</td></tr>
   <tr><th>Classification status</th><td>{{ fault.status or "—" }}</td></tr>
   <tr><th>Confidence</th><td>{{ fault.confidence or "INCONCLUSIVE" }}</td></tr>
+  {% if fault.involved_phases %}
+  <tr><th>Phases</th><td>{% if fault.involved_phases is string %}{{ fault.involved_phases }}{% else %}{{ fault.involved_phases | join(", ") }}{% endif %}</td></tr>
+  {% endif %}
+  {% if fault.ground_involved is not none %}
+  <tr><th>Ground</th><td>{{ "Yes" if fault.ground_involved else "No" }}</td></tr>
+  {% endif %}
   <tr>
     <th>Fault location</th>
     <td>
@@ -399,7 +480,7 @@
   </tr>
   {% for a in analysis.protection_assessment or [] %}
   <tr>
-    <td><strong>{{ a.element }}</strong></td>
+    <td><strong>{{ a.element | ansi_label }}</strong></td>
     <td>{{ a.enabled_display or a.enabled }}</td>
     <td>{{ a.pickup_display or a.pickup }}</td>
     <td>{{ a.trip_display or a.trip }}</td>
@@ -418,7 +499,7 @@
   <tr><th>Element</th><th>Check</th><th>Status</th><th>Severity</th><th>Explanation</th></tr>
   {% for f in analysis.consistency_findings or [] %}
   <tr>
-    <td>{{ f.element }}</td>
+    <td>{{ f.element | ansi_label }}</td>
     <td>{{ f.check_label or f.check_type }}</td>
     <td>{{ f.status }}</td>
     <td>{{ f.severity }}</td>
@@ -438,6 +519,12 @@
     · score {{ primary.score or "—" }}
   </p>
   {% if primary.statement %}<p>{{ primary.statement }}</p>{% endif %}
+  {% if primary.explanation %}<p class="meta">{{ primary.explanation }}</p>{% endif %}
+  {% if primary.causal_chain %}
+  <p><strong>Causal chain:</strong>
+    {% for step in primary.causal_chain[:8] %}{{ step }}{% if not loop.last %} → {% endif %}{% endfor %}
+  </p>
+  {% endif %}
   {% if primary.supporting_evidence_labels %}
   <p><strong>Supporting evidence:</strong> {{ primary.supporting_evidence_labels | join("; ") }}</p>
   {% endif %}
@@ -449,25 +536,6 @@
 </div>
 {% else %}
 <p>INCONCLUSIVE — no primary hypothesis ranked.</p>
-{% endif %}
-
-{% set alts = rca.hypotheses or [] %}
-{% if alts|length > 1 %}
-<h3>Alternative hypotheses</h3>
-<table>
-  <tr><th>Rank</th><th>Hypothesis</th><th>Status</th><th>Score</th><th>Missing / notes</th></tr>
-  {% for h in alts %}
-  {% if not loop.first %}
-  <tr>
-    <td>{{ loop.index }}</td>
-    <td>{{ h.title or h.hypothesis_id }}</td>
-    <td>{{ h.status }}</td>
-    <td>{{ h.score }}</td>
-    <td>{{ (h.missing_evidence_labels or h.missing_evidence or []) | join("; ") or "—" }}</td>
-  </tr>
-  {% endif %}
-  {% endfor %}
-</table>
 {% endif %}
 
 {# ——— 11. Actions ——— #}

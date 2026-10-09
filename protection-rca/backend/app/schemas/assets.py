@@ -134,13 +134,26 @@ class RelayCreate(BaseModel):
 
 
 class RemoteIedOut(BaseModel):
-    """Opposite-end IED for multi-end (87L) analysis."""
+    """Linked peer IED (line opposite end or cascade backup/initiator)."""
 
     id: str
     name: str
     relay_tag: str
     ip_address: Optional[str] = None
     substation_id: Optional[str] = None
+    peer_type: Optional[str] = None
+    cascade_role: Optional[str] = None
+    local_cascade_role: Optional[str] = None
+
+
+class PeerLinkOut(BaseModel):
+    peer_type: str = "none"
+    remote_relay_id: Optional[str] = None
+    cascade_role: Optional[str] = None
+    peer_end_label: Optional[str] = None
+    local_end_label: Optional[str] = "LOCAL"
+    default_analysis_mode: str = "NORMAL"
+    peer: Optional[RemoteIedOut] = None
 
 
 class RelayOut(BaseModel):
@@ -160,6 +173,9 @@ class RelayOut(BaseModel):
     is_active: bool
     created_at: datetime
     remote_ied: Optional[RemoteIedOut] = None
+    peer_type: Optional[str] = None
+    cascade_role: Optional[str] = None
+    peer_link: Optional[PeerLinkOut] = None
 
 
 class RelayUpdate(BaseModel):
@@ -170,6 +186,10 @@ class RelayUpdate(BaseModel):
     firmware_version: Optional[str] = None
     # Set peer IED id, or null/"" to clear
     remote_relay_id: Optional[str] = None
+    # none | line_remote | cascade
+    peer_type: Optional[str] = None
+    # INITIATOR | BACKUP when peer_type=cascade
+    cascade_role: Optional[str] = None
 
 
 class BreakerCreate(BaseModel):
@@ -280,6 +300,7 @@ class IedContextOut(BaseModel):
     substation: SubstationOut
     path_label: str
     remote_ied: Optional[RemoteIedOut] = None
+    peer_link: Optional[PeerLinkOut] = None
 
 
 class MapEventToIedRequest(BaseModel):

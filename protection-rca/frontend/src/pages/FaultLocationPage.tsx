@@ -5,6 +5,7 @@ import type { FaultCharacteristics, FaultLocationRow } from '@/types';
 import { StatusBadge } from '@/components/StatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 
 function fmt(v: number | null | undefined, d = 2): string {
   if (v == null || !Number.isFinite(v)) return '—';
@@ -52,9 +53,11 @@ export function FaultLocationPage() {
     return (
       <div className="stack-md">
         <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
-          <div>
-            <h1 style={{ fontSize: '1.1rem' }}>Location (optional)</h1>
-            <p className="subtitle">Not used for this protection scheme</p>
+          <div style={{ flex: 1 }}>
+            <CombinedPageHeader
+              title="Location (optional)"
+              subtitle="Not used for this protection scheme"
+            />
           </div>
           <Link className="btn btn-sm" to={`/events/${id}/fault-characteristics`}>
             Fault characteristics
@@ -77,11 +80,11 @@ export function FaultLocationPage() {
   return (
     <div className="stack-md">
       <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Location (optional)</h1>
-          <p className="subtitle">
-            Single-ended estimates when line data exists — distance (21) scheme only
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="Location (optional)"
+            subtitle="Single-ended estimates when line data exists — distance (21) scheme only"
+          />
         </div>
         <Link className="btn btn-sm" to={`/events/${id}/fault-characteristics`}>
           Fault characteristics

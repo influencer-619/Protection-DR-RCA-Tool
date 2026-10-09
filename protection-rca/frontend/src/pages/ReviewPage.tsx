@@ -2,6 +2,8 @@ import { useState, type FormEvent } from 'react';
 import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
 import type { ReviewAction } from '@/types';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
+import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
 
 const ACTIONS: { value: ReviewAction; label: string; hint: string }[] = [
   { value: 'ACCEPT', label: 'ACCEPT', hint: 'Accept analysis findings as-is' },
@@ -17,6 +19,7 @@ const ACTIONS: { value: ReviewAction; label: string; hint: string }[] = [
 
 export function ReviewPage() {
   const { id } = useParams<{ id: string }>();
+  useEventOrWorkspace(id);
   const [action, setAction] = useState<ReviewAction>('ACCEPT');
   const [comments, setComments] = useState('');
   const [modifications, setModifications] = useState('');
@@ -43,13 +46,11 @@ export function ReviewPage() {
 
   return (
     <div>
-      <div className="page-header" style={{ padding: 0, marginBottom: 16 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Engineer review</h1>
-          <p className="subtitle">
-            Disposition of automated analysis — What / Why / Setting / Evidence / Uncertainty
-          </p>
-        </div>
+      <div style={{ marginBottom: 16 }}>
+        <CombinedPageHeader
+          title="Engineer review"
+          subtitle="Disposition of automated analysis — What / Why / Setting / Evidence / Uncertainty"
+        />
       </div>
 
       {submitted && (

@@ -1386,6 +1386,76 @@ class AnalysisJob(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     event: Mapped[Event] = relationship("Event", back_populates="analysis_jobs")
 
 
+class Incident(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Parent multi-IED disturbance incident (links source events; not a file copy).
+
+    Combined Cascade / Local-Remote events remain first-class Events; they may
+    also be members of an Incident so late DRs can attach without timestamp-only merge.
+    """
+
+    __tablename__ = "incidents"
+    __table_args__ = (
+        Index("ix_incidents_incident_code", "incident_code", unique=True),
+        Index("ix_incidents_status", "status"),
+        Index("ix_incidents_mode", "mode"),
+    )
+
+    incident_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[Any] = mapped_column(String(255), nullable=True)
+    description: Mapped[Any] = mapped_column(Text, nullable=True)
+    # CASCADE_LBB | LINE_MULTI_END | MANUAL | UNKNOWN
+    mode: Mapped[str] = mapped_column(String(64), nullable=False, default="MANUAL")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="OPEN"
+    )  # OPEN | CLOSED | SPLIT
+    # Explicit correlation method — never TIMESTAMP_ONLY
+    correlation_reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    correlation_detail: Mapped[Any] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Any] = mapped_column(String(36), nullable=True)
+    combined_event_id: Mapped[Any] = mapped_column(
+        String(36), ForeignKey("events.id", ondelete="SET NULL"), nullable=True
+    )
+    extra: Mapped[Any] = mapped_column(JSON, nullable=True)
+
+    members: Mapped[list["IncidentMember"]] = relationship(
+        "IncidentMember",
+        back_populates="incident",
+        cascade="all, delete-orphan",
+    )
+    combined_event: Mapped[Any] = relationship(
+        "Event", foreign_keys=[combined_event_id]
+    )
+
+
+class IncidentMember(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Links an Event into an Incident with an explicit role and reason."""
+
+    __tablename__ = "incident_members"
+    __table_args__ = (
+        UniqueConstraint("incident_id", "event_id", name="uq_incident_event"),
+        Index("ix_incident_members_incident_id", "incident_id"),
+        Index("ix_incident_members_event_id", "event_id"),
+    )
+
+    incident_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False
+    )
+    event_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("events.id", ondelete="CASCADE"), nullable=False
+    )
+    # SOURCE | COMBINED | LOCAL | REMOTE | INITIATOR | BACKUP | LATE_ATTACH
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="SOURCE")
+    # Why this event belongs — must be explicit (ENGINEER_LINK, COMBINED_*, LATE_DR_ATTACH, …)
+    link_reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    link_detail: Mapped[Any] = mapped_column(Text, nullable=True)
+    linked_by: Mapped[Any] = mapped_column(String(36), nullable=True)
+    unlinked_at: Mapped[Any] = mapped_column(DateTime(timezone=True), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    incident: Mapped[Incident] = relationship("Incident", back_populates="members")
+    event: Mapped[Event] = relationship("Event")
+
+
 # ---------------------------------------------------------------------------
 # Public exports
 # ---------------------------------------------------------------------------
@@ -1424,5 +1494,7 @@ __all__ = [
     "RuleVersion",
     "ModelVersion",
     "AnalysisJob",
+    "Incident",
+    "IncidentMember",
     "generate_uuid",
 ]

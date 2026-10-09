@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AnalyseRequest(BaseModel):
@@ -33,6 +33,19 @@ class AnalysisJobOut(BaseModel):
     result_summary: Optional[dict[str, Any]] = None
     parameters: Optional[dict[str, Any]] = None
     created_at: datetime
+    age_seconds: Optional[float] = None
+
+    @model_validator(mode="after")
+    def _fill_age_seconds(self) -> "AnalysisJobOut":
+        if self.age_seconds is None and self.created_at is not None:
+            created = self.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            self.age_seconds = round(
+                max(0.0, (datetime.now(timezone.utc) - created).total_seconds()),
+                1,
+            )
+        return self
 
 
 class AnalyseResponse(BaseModel):
@@ -145,3 +158,7 @@ class FaultCharacteristicsOut(BaseModel):
     line_impedance_estimate: Optional[dict[str, Any]] = None
     limitations: list[str] = Field(default_factory=list)
     explanation: Optional[str] = None
+    # Fault-window / prefault elevation polish
+    elevation_method: Optional[str] = None
+    prefault_rms: Optional[dict[str, Any]] = None
+    fault_window: Optional[dict[str, Any]] = None

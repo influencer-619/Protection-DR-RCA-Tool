@@ -9,6 +9,8 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { FindingDetail } from '@/components/FindingDetail';
 import { formatCheckName, formatFindingValue } from '@/utils/findingValue';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
+import { ansiTechnicalName, formatAnsi, formatAnsiCompact } from '@/utils/ansiDeviceNames';
 
 type FilterKey = 'all' | 'actionable' | 'inconsistent' | 'consistent' | 'unverifiable';
 
@@ -100,11 +102,11 @@ export function ConsistencyPage() {
   return (
     <div>
       <div className="page-header" style={{ padding: 0, marginBottom: 12 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Consistency checker</h1>
-          <p className="subtitle">
-            Setting vs observed behaviour — element-level findings (never invents a pass)
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="Consistency checker"
+            subtitle="Setting vs observed behaviour — element-level findings (never invents a pass)"
+          />
         </div>
         <div className="badge-row">
           <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Overall</span>
@@ -225,7 +227,20 @@ export function ConsistencyPage() {
                     onClick={() => setSelected(f)}
                     data-testid={`finding-${f.finding_id}`}
                   >
-                    <td className="mono">{f.element === 'GENERAL' ? 'General' : f.element}</td>
+                    <td className="mono" title={formatAnsi(f.element)} style={{ whiteSpace: 'nowrap' }}>
+                      {f.element === 'GENERAL' ? (
+                        'General'
+                      ) : (
+                        <>
+                          <div>{formatAnsiCompact(f.element)}</div>
+                          {ansiTechnicalName(f.element) ? (
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 400 }}>
+                              {ansiTechnicalName(f.element)}
+                            </div>
+                          ) : null}
+                        </>
+                      )}
+                    </td>
                     <td>{formatCheckName(f.check_type)}</td>
                     <td style={{ fontSize: '0.82rem', maxWidth: 280, lineHeight: 1.45, whiteSpace: 'normal' }}>
                       {fmtCell(f.expected)}

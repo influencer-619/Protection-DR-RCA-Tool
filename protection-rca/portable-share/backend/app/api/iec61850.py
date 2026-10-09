@@ -244,7 +244,8 @@ async def save_auto_fetch(
         "include_events": body.include_events,
         "auto_analyse": body.auto_analyse,
         "import_existing": body.import_existing,
-        "also_fetch_remote": body.also_fetch_remote,
+        # Peer join is via Combined RCA; auto-fetch stays per-IED only.
+        "also_fetch_remote": False,
     }
     if body.enabled and not before.get("enabled"):
         # Fresh enable: take a new baseline and check right away.

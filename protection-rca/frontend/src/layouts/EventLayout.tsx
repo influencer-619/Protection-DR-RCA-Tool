@@ -18,6 +18,12 @@ import { wasDrVisited } from '@/utils/drSession';
 import { formatApiDateLocal, formatDrDate } from '@/utils/dateTime';
 import { resolveFaultType } from '@/utils/schemeContext';
 import { humanizeFaultType } from '@/utils/evidenceLabels';
+import {
+  effectiveEventStatus,
+  isOrphanedPendingJob,
+  eventHasUsableResults,
+  isBlockingAnalysisFailure,
+} from '@/utils/eventStatusDisplay';
 import styles from './EventLayout.module.css';
 
 type TabDef = { to: string; label: string };
@@ -139,7 +145,6 @@ function EventLayoutInner() {
     try {
       await api.startAnalysis(id, true);
       await reloadJob();
-      // Land on Summary after kick-off (conclude-first)
       navigate(`/events/${id}/summary`);
     } catch (err) {
       setDialogError(err instanceof Error ? err.message : 'Failed to start analysis');
@@ -209,8 +214,6 @@ function EventLayoutInner() {
   }, [event?.id, event?.event_id, event?.feeder, event?.status]);
 
   const plant = (event?.extra as Record<string, unknown> | undefined) ?? {};
-  const plantLabels =
-    (plant.plant_labels as Record<string, string> | undefined) ?? {};
 
   const lamps: PipelineLamp[] = useMemo(() => {
     const dq = (event?.data_quality || '').toUpperCase();
@@ -259,6 +262,7 @@ function EventLayoutInner() {
         to: 'protection',
         state: lampFromBool(
           job?.status === 'COMPLETED' ||
+            eventHasUsableResults(event) ||
             ['ANALYSED', 'REVIEW', 'CLOSED'].includes((event?.status || '').toUpperCase()),
         ),
       },
@@ -295,6 +299,10 @@ function EventLayoutInner() {
     ];
   }, [event, consOverall, hasComtrade, hasReport, job?.status, plant]);
 
+  const hasResults = eventHasUsableResults(event);
+  const blockingFail = isBlockingAnalysisFailure(event, job?.status);
+  const displayStatus = effectiveEventStatus(event, job?.status, job);
+
   const nextStep = useMemo(() => {
     if (!id || !event) return null;
     return deriveNextStep({
@@ -305,25 +313,26 @@ function EventLayoutInner() {
       onAnalyse: () => void onAnalyse(),
       onConfirmSettings: () => setConfirmSettings(true),
       needsChannelMap: hasComtrade && needsChannelMap,
-      preferDr: job?.status === 'COMPLETED' && !wasDrVisited(id),
+      preferDr:
+        (job?.status === 'COMPLETED' || (hasResults && !blockingFail)) && !wasDrVisited(id),
+      hasUsableResults: hasResults,
     });
-  }, [id, event, lamps, analysisBusy, job?.status, hasComtrade, needsChannelMap]);
+  }, [
+    id,
+    event,
+    lamps,
+    analysisBusy,
+    job?.status,
+    hasComtrade,
+    needsChannelMap,
+    hasResults,
+    blockingFail,
+  ]);
 
-  const substationLabel =
-    event?.substation_name ??
-    (typeof plant.substation_name === 'string' ? plant.substation_name : undefined) ??
-    plantLabels.substation_name ??
-    'UNKNOWN';
-  const bayLabel =
-    event?.bay_name ??
-    (typeof plant.bay_name === 'string' ? plant.bay_name : undefined) ??
-    plantLabels.bay_name ??
-    'NOT VERIFIED';
-  const relayLabel =
-    event?.relay_tag ??
-    (typeof plant.relay_tag === 'string' ? plant.relay_tag : undefined) ??
-    plantLabels.relay_tag ??
-    'NOT VERIFIED';
+  const substationLabel = event?.substation_name ?? 'UNKNOWN';
+  const bayLabel = event?.bay_name ?? 'NOT VERIFIED';
+  const relayLabel = event?.relay_tag ?? 'NOT VERIFIED';
+  const feederLabel = event?.feeder ?? null;
 
   const faultTypeRaw = resolveFaultType({
     eventFaultType: event?.fault_type,
@@ -396,7 +405,7 @@ function EventLayoutInner() {
               </div>
               <h1 className={styles.title}>
                 <span className="mono">{event?.event_id ?? id}</span>
-                {event?.feeder && <span className={styles.feeder}>{event.feeder}</span>}
+                {feederLabel && <span className={styles.feeder}>{feederLabel}</span>}
               </h1>
               <div className={styles.badges}>
                 {loading && <span className={styles.loading}>Loading…</span>}
@@ -417,11 +426,18 @@ function EventLayoutInner() {
                 )}
                 {event?.status && (
                   <StatusBadge
-                    status={event.status}
+                    status={displayStatus}
                     title={
-                      event.status === 'FAILED' && job?.error_message
-                        ? job.error_message
-                        : undefined
+                      (String(event.status).toUpperCase() === 'FAILED' ||
+                        isOrphanedPendingJob(job)) &&
+                      hasResults
+                        ? [
+                            'Prior analysis results are shown (latest run did not finish).',
+                            job?.error_message || 'Use Re-run analysis to refresh results.',
+                          ].join('\n')
+                        : event.status === 'FAILED' && job?.error_message
+                          ? job.error_message
+                          : undefined
                     }
                   />
                 )}
@@ -473,12 +489,20 @@ function EventLayoutInner() {
         </div>
       )}
 
-      {(nextStep || (normalizedJob && normalizedJob.status !== 'COMPLETED')) && (
+      {(nextStep ||
+        (normalizedJob &&
+          normalizedJob.status !== 'COMPLETED' &&
+          (blockingFail ||
+            normalizedJob.status === 'RUNNING' ||
+            normalizedJob.status === 'PENDING'))) && (
         <div className={styles.guide}>
           {nextStep && <NextStepBanner step={nextStep} />}
-          {normalizedJob && normalizedJob.status !== 'COMPLETED' && (
-            <AnalysisProgress job={normalizedJob as never} compact />
-          )}
+          {normalizedJob &&
+            (normalizedJob.status === 'RUNNING' ||
+              normalizedJob.status === 'PENDING' ||
+              blockingFail) && (
+              <AnalysisProgress job={normalizedJob as never} compact />
+            )}
         </div>
       )}
 

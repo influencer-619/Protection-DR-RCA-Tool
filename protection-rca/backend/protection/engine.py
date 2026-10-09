@@ -403,7 +403,39 @@ class ProtectionRuleEngine:
             # Resolve common settings
             resolutions: dict[str, SettingResolution] = {}
             settings_vals: dict[str, Any] = {}
-            for param in ("enabled", "pickup", "time_dial", "pickup_current", "zone1_reach", "curve"):
+            for param in (
+                "enabled",
+                "pickup",
+                "time_dial",
+                "pickup_current",
+                "pickup_voltage",
+                "pickup_hz",
+                "pickup_frequency",
+                "pickup_rocof",
+                "zone1_reach",
+                "zone2_reach",
+                "zone3_reach",
+                "zone4_reach",
+                "zone5_reach",
+                "zone_angle_deg",
+                "zones",
+                "curve",
+                "slope",
+                "bf_timer_s",
+                "timer_s",
+                "mta_deg",
+                "Id_min",
+                "pickup_a",
+                "I_flc",
+                "thermal_tau_s",
+                "dv_max_pu",
+                "df_max_hz",
+                "dphi_max_deg",
+                "reclaim_ms",
+                "reclaim_s",
+                "max_shots",
+                "shots",
+            ):
                 res = resolve_setting(param, setting_candidates, element=code)
                 resolutions[param] = res
                 if param == "enabled":

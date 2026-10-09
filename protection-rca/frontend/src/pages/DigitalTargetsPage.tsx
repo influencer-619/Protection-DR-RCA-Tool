@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { api } from '@/services/api';
 import { Skeleton } from '@/components/Skeleton';
 import { useEventOrWorkspace } from '@/context/EventWorkspaceContext';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 import styles from './ChannelMappingPage.module.css';
 
 const ROLE_COLS = [
@@ -120,12 +121,11 @@ export function DigitalTargetsPage() {
   return (
     <div className="stack-md">
       <div className="page-header" style={{ padding: 0, marginBottom: 0 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>DR targets</h1>
-          <p className="subtitle">
-            Protection digitals → operate evidence (pickup, trip, 52a…). Roles are inferred from
-            channel names; override when vendor labels are opaque — then Save and re-run analysis.
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="DR targets"
+            subtitle="Protection digitals → operate evidence (pickup, trip, 52a…). Roles are inferred from channel names; override when vendor labels are opaque — then Save and re-run analysis."
+          />
         </div>
         <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
           {busy ? 'Saving…' : 'Save targets'}

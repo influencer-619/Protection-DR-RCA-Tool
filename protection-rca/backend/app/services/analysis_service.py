@@ -78,6 +78,23 @@ async def enqueue_analysis(
         job = existing.scalar_one_or_none()
         if job is not None:
             return job
+    else:
+        # Supercede any stuck / in-flight job so Re-run is never blocked by an orphan.
+        active = (
+            await db.execute(
+                select(AnalysisJob).where(
+                    AnalysisJob.event_id == event.id,
+                    AnalysisJob.status.in_(("PENDING", "RUNNING")),
+                )
+            )
+        ).scalars().all()
+        now = datetime.now(timezone.utc)
+        for old in active:
+            old.status = "FAILED"
+            old.stage = JobStage.FAILED.value
+            old.error_message = "Superseded by forced re-run"
+            old.current_message = "Superseded"
+            old.finished_at = now
 
     job = AnalysisJob(
         event_id=event.id,
@@ -140,6 +157,22 @@ async def run_job_by_id(job_id: str) -> None:
             if job is None:
                 logger.error("Background analysis: job %s not found", job_id)
                 return
+            # Idempotent claim — avoid double-running after status-poll re-kick.
+            st = str(job.status or "").upper()
+            if st in ("COMPLETED", "FAILED", "CANCELLED"):
+                return
+            if st == "RUNNING" and job.started_at is not None:
+                return
+            job.status = "RUNNING"
+            job.started_at = job.started_at or datetime.now(timezone.utc)
+            job.current_message = "Starting analysis"
+            await db.flush()
+            await db.commit()
+
+            # Re-load after claim commit (session may expire instances).
+            job = await get_job(db, job_id)
+            if job is None:
+                return
             event = await event_service.get_event(db, job.event_id)
             if event is None:
                 logger.error("Background analysis: event missing for job %s", job_id)
@@ -164,7 +197,15 @@ async def run_job_by_id(job_id: str) -> None:
                         job.finished_at = datetime.now(timezone.utc)
                         event = await event_service.get_event(db2, job.event_id)
                         if event is not None:
-                            event.status = "FAILED"
+                            if event_has_prior_results(event):
+                                if str(event.status or "").upper() in (
+                                    "FAILED",
+                                    "ANALYZING",
+                                    "PENDING",
+                                ):
+                                    event.status = "REVIEW"
+                            else:
+                                event.status = "FAILED"
                         await db2.commit()
             except Exception:  # noqa: BLE001
                 logger.exception("Could not mark job %s failed", job_id)
@@ -180,6 +221,7 @@ async def run_pipeline_stages(
     artefacts so API consumers can exercise the full read path.
     Real signal/RCA engines plug in here when available.
     """
+    settings = get_settings()
     job.status = "RUNNING"
     job.started_at = datetime.now(timezone.utc)
     stages_state = list(job.stages or [])
@@ -219,23 +261,62 @@ async def run_pipeline_stages(
         event.status = "REVIEW"
         event.decision_state = event.decision_state or "ENGINEER_REVIEW_REQUIRED"
         event.data_quality = event.data_quality or "ACCEPTABLE"
+        # DATA-011 — keep job history on event (re-run does not erase prior job ids)
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+
+            extra = dict(event.extra) if isinstance(event.extra, dict) else {}
+            hist = list(extra.get("analysis_history") or [])
+            hist.append(
+                {
+                    "job_id": job.id,
+                    "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+                    "decision_state": event.decision_state,
+                    "component_versions": job.component_versions,
+                    "rca_engine_version": settings.rca_engine_version,
+                    "protection_rules_version": settings.protection_rules_version,
+                }
+            )
+            extra["analysis_history"] = hist[-20:]
+            extra["latest_analysis_job_id"] = job.id
+            event.extra = extra
+            flag_modified(event, "extra")
+        except Exception:  # noqa: BLE001
+            logger.debug("analysis_history stamp skipped", exc_info=True)
         await db.flush()
     except Exception as exc:  # noqa: BLE001
         job_id = getattr(job, "id", None)
+        event_id = getattr(event, "id", None)
         logger.exception("Analysis failed for job %s", job_id)
         err = str(exc)[:2000]
         try:
             await db.rollback()
         except Exception:  # noqa: BLE001
             pass
-        job.status = "FAILED"
-        job.stage = JobStage.FAILED.value
-        job.error_message = err
-        job.current_message = "Analysis failed"
-        job.finished_at = datetime.now(timezone.utc)
-        event.status = "FAILED"
+        # Fresh session after rollback — avoid MissingGreenlet on expired ORM state.
+        from app.database import AsyncSessionLocal
+
         try:
-            await db.commit()
+            async with AsyncSessionLocal() as db2:
+                j2 = await get_job(db2, job_id) if job_id else None
+                e2 = await event_service.get_event(db2, event_id) if event_id else None
+                if j2 is not None and j2.status not in ("COMPLETED",):
+                    j2.status = "FAILED"
+                    j2.stage = JobStage.FAILED.value
+                    j2.error_message = err
+                    j2.current_message = "Analysis failed"
+                    j2.finished_at = datetime.now(timezone.utc)
+                if e2 is not None:
+                    if event_has_prior_results(e2):
+                        if str(e2.status or "").upper() in (
+                            "FAILED",
+                            "ANALYZING",
+                            "PENDING",
+                        ):
+                            e2.status = "REVIEW"
+                    else:
+                        e2.status = "FAILED"
+                await db2.commit()
         except Exception:  # noqa: BLE001
             logger.exception("Could not persist FAILED status for job %s", job_id)
             raise
@@ -522,3 +603,161 @@ async def latest_job_for_event(
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+def event_has_prior_results(event: Event) -> bool:
+    """True when engineer-usable artefacts already exist (ignore sticky ANALYZING/FAILED)."""
+    decision = str(event.decision_state or "").upper()
+    if decision.startswith("ANALYSIS_COMPLETE") or decision.startswith("ENGINEER_REVIEW"):
+        return True
+    if event.fault_type and str(event.fault_type).upper() not in ("", "UNKNOWN"):
+        return True
+    extra = event.extra if isinstance(event.extra, dict) else {}
+    if extra.get("protection_summary") or extra.get("report_analysis"):
+        return True
+    casc = extra.get("cascade") if isinstance(extra.get("cascade"), dict) else {}
+    if casc.get("primary_hypothesis") or casc.get("sequence") or casc.get("rca"):
+        return True
+    # combined_ready shell alone is not "done".
+    return False
+
+
+def _job_age_seconds(job: AnalysisJob) -> float:
+    created = job.created_at
+    if created is None:
+        return 0.0
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - created).total_seconds())
+
+
+async def heal_stuck_analysis(
+    db: AsyncSession,
+    event: Event,
+    job: Optional[AnalysisJob] = None,
+    *,
+    orphan_after_s: float = 25.0,
+    rekick_before_fail: bool = True,
+) -> Optional[AnalysisJob]:
+    """
+    Unstick orphaned PENDING jobs (background worker never claimed the row) and
+    sticky ANALYZING/FAILED event status when prior results already exist.
+
+    Never fails a live RUNNING job. For aged PENDING, attempts one soft re-kick
+    before marking the queue orphaned (portable EXE / dropped BackgroundTasks).
+    """
+    if job is None:
+        job = await latest_job_for_event(db, event.id)
+
+    status = str(event.status or "").upper()
+    job_status = str(job.status or "").upper() if job else ""
+    has_prior = event_has_prior_results(event)
+    age = _job_age_seconds(job) if job is not None else 0.0
+
+    # Never touch a live RUNNING claim — heal must not kill in-flight work.
+    if job_status == "RUNNING":
+        await db.flush()
+        return job
+
+    # Orphaned queue: never left PENDING / progress 0.
+    if (
+        job is not None
+        and job_status == "PENDING"
+        and float(job.progress or 0) <= 0.01
+        and not job.started_at
+        and age >= orphan_after_s
+    ):
+        params = dict(job.parameters or {}) if isinstance(job.parameters, dict) else {}
+        already_rekicked = bool(params.get("_orphan_rekick"))
+        rekick_age = 0.0
+        if already_rekicked and params.get("_orphan_rekick_at"):
+            try:
+                rk = datetime.fromisoformat(str(params["_orphan_rekick_at"]))
+                if rk.tzinfo is None:
+                    rk = rk.replace(tzinfo=timezone.utc)
+                rekick_age = max(
+                    0.0, (datetime.now(timezone.utc) - rk).total_seconds()
+                )
+            except (TypeError, ValueError):
+                rekick_age = orphan_after_s
+
+        if rekick_before_fail and not already_rekicked:
+            params["_orphan_rekick"] = True
+            params["_orphan_rekick_at"] = datetime.now(timezone.utc).isoformat()
+            job.parameters = params
+            job.current_message = "Re-queued (orphan heal)"
+            await db.flush()
+            schedule_deferred_job(job.id)
+            logger.warning(
+                "Re-kicked orphaned PENDING job %s for event %s (age=%.1fs)",
+                job.id,
+                event.id,
+                age,
+            )
+        elif already_rekicked and rekick_age < orphan_after_s:
+            # Give the soft re-kick the same window before failing the queue.
+            pass
+        else:
+            job.status = "FAILED"
+            job.stage = JobStage.FAILED.value
+            job.error_message = (
+                "Orphaned queue — background analysis never started. "
+                "Use Re-run analysis."
+            )
+            job.current_message = "Queue timed out"
+            job.finished_at = datetime.now(timezone.utc)
+            job_status = "FAILED"
+            logger.warning(
+                "Healed orphaned PENDING job %s for event %s (age=%.1fs)",
+                job.id,
+                event.id,
+                age,
+            )
+
+    # Sticky event chrome after terminal / orphaned job.
+    if status in ("ANALYZING", "PENDING", "FAILED"):
+        if job_status in ("COMPLETED", "FAILED", "CANCELLED") or (
+            has_prior and job_status not in ("RUNNING", "PENDING")
+        ):
+            if has_prior or job_status == "COMPLETED":
+                event.status = "REVIEW"
+            elif job_status == "FAILED" and not has_prior:
+                event.status = "FAILED"
+        elif has_prior and job_status == "PENDING" and job is not None:
+            # Combined cascade often has shell metadata while a dead PENDING blocks the UI.
+            if age >= orphan_after_s:
+                event.status = "REVIEW"
+
+    await db.flush()
+    return job
+
+
+def schedule_deferred_job(job_id: str) -> bool:
+    """
+    Start deferred analysis on the running event loop.
+
+    Prefer ``asyncio.create_task`` after the HTTP handler has committed the job
+    row. FastAPI ``BackgroundTasks`` alone can drop work on portable EXE /
+    uvicorn edge cases; callers may still register BackgroundTasks as a backup.
+    """
+    import asyncio
+
+    async def _run() -> None:
+        await run_job_by_id(job_id)
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+        return True
+    except RuntimeError:
+        logger.warning("Could not schedule job %s — no event loop", job_id)
+        return False
+
+
+async def rekick_pending_job(job_id: str) -> None:
+    """Schedule a deferred job if it is still PENDING (safe to call from status poll)."""
+    schedule_deferred_job(job_id)
+
+
+def job_age_seconds(job: AnalysisJob) -> float:
+    """Public age helper for API schemas / metrics."""
+    return _job_age_seconds(job)

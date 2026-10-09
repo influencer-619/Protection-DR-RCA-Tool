@@ -1,0 +1,768 @@
+{
+  "source": "Complete_Generalized_Protection_RCA_Matrix_L1_L2_L3_Fallback_LBB.xlsx",
+  "scenarios": [
+    {
+      "row": 2,
+      "asset": "Transformer",
+      "scenario": "Normal energization",
+      "ansi": "Inrush / energization detection; differential supervision; switching logic",
+      "l1": "No sustained fault declaration; energization/start state recognized",
+      "l2": "CB CLOSE \u2192 energization \u2192 transient \u2192 stable state",
+      "l3": "Initial asymmetric magnetizing current followed by decay; no sustained fault signature",
+      "fallback": "If dedicated inrush/start signal missing: CB-close timestamp + current waveform asymmetry/decay + voltage recovery + absence of persistent fault",
+      "final_class": "NORMAL ENERGIZATION"
+    },
+    {
+      "row": 3,
+      "asset": "Transformer",
+      "scenario": "Energization inrush",
+      "ansi": "Inrush detector; transformer differential; overcurrent",
+      "l1": "Inrush indication if available; differential may transiently respond",
+      "l2": "CB CLOSE \u2192 current surge \u2192 protection response/blocking \u2192 reset/stable state",
+      "l3": "Large asymmetric/distorted magnetizing current, decay after energization; harmonics if available",
+      "fallback": "If inrush bit/harmonic channel missing: waveform timing + asymmetry + decay + CB close; harmonic evidence is supporting, not mandatory",
+      "final_class": "PROBABLE/CONFIRMED INRUSH"
+    },
+    {
+      "row": 4,
+      "asset": "Transformer",
+      "scenario": "Internal phase fault",
+      "ansi": "Transformer differential; phase OC; distance where applicable",
+      "l1": "Differential/phase protection operates with phase information if available",
+      "l2": "Protection pickup \u2192 trip \u2192 lockout/master trip if applicable \u2192 transformer CB(s) open",
+      "l3": "Sustained differential/fault current, affected phase voltage depression",
+      "fallback": "If differential signal missing: phase OC + both-side currents + voltages + topology + neighboring relay evidence",
+      "final_class": "INTERNAL / IN-ZONE PHASE FAULT"
+    },
+    {
+      "row": 5,
+      "asset": "Transformer",
+      "scenario": "Internal earth fault",
+      "ansi": "REF/earth fault/differential",
+      "l1": "Earth/differential protection operates",
+      "l2": "Earth-fault pickup \u2192 trip \u2192 breaker opening",
+      "l3": "Residual/neutral current and phase-earth voltage behavior",
+      "fallback": "If dedicated earth/REF signal missing: derive residual current from three-phase currents + neutral current if available + topology",
+      "final_class": "INTERNAL / IN-ZONE EARTH FAULT"
+    },
+    {
+      "row": 6,
+      "asset": "Transformer",
+      "scenario": "External through fault",
+      "ansi": "Phase/earth OC; directional OC; transformer differential restraint",
+      "l1": "OC/earth protection may operate; differential should normally restrain",
+      "l2": "External feeder/bus protection sequence \u2192 transformer protection response \u2192 breaker clearing",
+      "l3": "High through-current on both sides with differential current restrained relative to through-current",
+      "fallback": "If restraint/differential data unavailable: compare both-side currents, direction, sequence components, voltage depression and topology",
+      "final_class": "EXTERNAL / OUT-OF-ZONE FAULT"
+    },
+    {
+      "row": 7,
+      "asset": "Transformer",
+      "scenario": "Differential operation caused by CT saturation / measurement issue",
+      "ansi": "Differential; OC; CT supervision",
+      "l1": "Differential operates without convincing internal-fault declaration from independent evidence",
+      "l2": "Differential trip occurs during external/high-current event",
+      "l3": "High through-current + distorted/clipped CT waveform + temporary current mismatch",
+      "fallback": "If CT saturation flag unavailable: raw waveform distortion + both-side current comparison + external fault sequence",
+      "final_class": "CT SATURATION / INSTRUMENTATION SUSPECTED"
+    },
+    {
+      "row": 8,
+      "asset": "Transformer",
+      "scenario": "Overfluxing / overexcitation",
+      "ansi": "Overfluxing / V/Hz protection",
+      "l1": "Overfluxing stage operates",
+      "l2": "Pickup \u2192 timer/alarm/trip \u2192 system response",
+      "l3": "Elevated V/Hz; voltage and frequency relationship supports event",
+      "fallback": "If dedicated stage/frequency signal missing: derive V/Hz from voltage waveform and frequency",
+      "final_class": "OVEREXCITATION / OVERFLUXING"
+    },
+    {
+      "row": 9,
+      "asset": "Transformer",
+      "scenario": "Thermal overload",
+      "ansi": "Thermal model / overload / temperature protection",
+      "l1": "Thermal alarm/trip",
+      "l2": "Thermal pickup \u2192 delay \u2192 alarm/trip \u2192 load change",
+      "l3": "Sustained RMS current and/or temperature rise",
+      "fallback": "If thermal element unavailable: RMS current trend + RTD/temperature + loading duration",
+      "final_class": "THERMAL OVERLOAD"
+    },
+    {
+      "row": 10,
+      "asset": "Motor",
+      "scenario": "Normal starting",
+      "ansi": "Start supervision / motor-start element",
+      "l1": "Start state recognized; no fault protection trip",
+      "l2": "CB CLOSE \u2192 start detection \u2192 acceleration \u2192 start supervision reset",
+      "l3": "High starting current followed by expected decay/acceleration",
+      "fallback": "If start element absent: CB close + current envelope + speed/process feedback if available",
+      "final_class": "NORMAL START"
+    },
+    {
+      "row": 11,
+      "asset": "Motor",
+      "scenario": "Prolonged starting",
+      "ansi": "Start supervision / overload / locked-rotor",
+      "l1": "Start timer remains active or start-time limit reached",
+      "l2": "CB CLOSE \u2192 high current persists beyond expected start window \u2192 alarm/trip",
+      "l3": "Starting current remains high with insufficient decay/acceleration",
+      "fallback": "If timer bit absent: duration of elevated current + speed/auxiliary evidence",
+      "final_class": "PROLONGED START"
+    },
+    {
+      "row": 12,
+      "asset": "Motor",
+      "scenario": "Locked rotor",
+      "ansi": "Locked-rotor / start protection",
+      "l1": "Locked-rotor element or start timeout operates",
+      "l2": "Start \u2192 high current persists \u2192 locked-rotor/start timeout \u2192 trip",
+      "l3": "Near-constant high current with little/no acceleration evidence",
+      "fallback": "If locked-rotor bit absent: current duration + absence of speed increase + thermal rise",
+      "final_class": "LOCKED ROTOR"
+    },
+    {
+      "row": 13,
+      "asset": "Motor",
+      "scenario": "Load jam during running",
+      "ansi": "Jam / stall / overload protection",
+      "l1": "Jam/stall element operates",
+      "l2": "Running state \u2192 current rises \u2192 jam detection \u2192 trip",
+      "l3": "Sudden sustained current increase from running state",
+      "fallback": "If jam element absent: current step/rise + running-state SOE + speed/process feedback",
+      "final_class": "LOAD JAM"
+    },
+    {
+      "row": 14,
+      "asset": "Motor",
+      "scenario": "Thermal overload",
+      "ansi": "Thermal model / overload",
+      "l1": "Thermal stage operates",
+      "l2": "Thermal pickup \u2192 delay \u2192 trip",
+      "l3": "Sustained RMS current and temperature/thermal accumulation",
+      "fallback": "If thermal signal absent: current trend + temperature + duration",
+      "final_class": "THERMAL OVERLOAD"
+    },
+    {
+      "row": 15,
+      "asset": "Motor",
+      "scenario": "Phase loss / discontinuity",
+      "ansi": "Phase-loss / negative-sequence / phase monitoring",
+      "l1": "Phase-loss/discontinuity element operates",
+      "l2": "Detection \u2192 timer \u2192 alarm/trip",
+      "l3": "One phase current/voltage abnormal relative to others",
+      "fallback": "If dedicated element absent: compare IA/IB/IC and VA/VB/VC; derive negative sequence",
+      "final_class": "PHASE LOSS / DISCONTINUITY"
+    },
+    {
+      "row": 16,
+      "asset": "Motor",
+      "scenario": "Negative-sequence unbalance",
+      "ansi": "Negative-sequence protection",
+      "l1": "Negative-sequence stage operates",
+      "l2": "Pickup \u2192 timer/thermal limit \u2192 trip/alarm",
+      "l3": "Elevated I2/I1 and phase unbalance",
+      "fallback": "If element absent: calculate sequence components from synchronized three-phase current waveforms",
+      "final_class": "NEGATIVE-SEQUENCE / UNBALANCE"
+    },
+    {
+      "row": 17,
+      "asset": "Motor",
+      "scenario": "Internal phase fault",
+      "ansi": "Motor differential / phase OC",
+      "l1": "Differential or phase fault protection operates",
+      "l2": "Pickup \u2192 trip \u2192 motor CB open",
+      "l3": "High fault current, voltage depression, differential imbalance",
+      "fallback": "If differential unavailable: phase OC + current/voltage waveform + feeder topology",
+      "final_class": "INTERNAL MOTOR PHASE FAULT"
+    },
+    {
+      "row": 18,
+      "asset": "Motor",
+      "scenario": "Internal earth fault",
+      "ansi": "Earth fault / differential / sensitive earth fault",
+      "l1": "Earth/differential protection operates",
+      "l2": "Pickup \u2192 trip \u2192 breaker opening",
+      "l3": "Residual current / zero-sequence behavior + phase-earth voltage response",
+      "fallback": "If dedicated earth element absent: derive residual current from phase currents + topology",
+      "final_class": "INTERNAL MOTOR EARTH FAULT"
+    },
+    {
+      "row": 19,
+      "asset": "Feeder/Line",
+      "scenario": "Phase-earth in-zone fault",
+      "ansi": "Earth fault; directional earth fault; distance",
+      "l1": "Earth/directional/distance protection operates",
+      "l2": "START \u2192 timer/zone \u2192 trip \u2192 CB open",
+      "l3": "3I0/residual current + phase voltage depression; direction/impedance supports protected zone",
+      "fallback": "If zone/direction signal missing: phasors + sequence components + impedance trajectory + topology",
+      "final_class": "IN-ZONE PHASE-EARTH FAULT"
+    },
+    {
+      "row": 20,
+      "asset": "Feeder/Line",
+      "scenario": "Phase-phase in-zone fault",
+      "ansi": "Phase OC; directional OC; distance",
+      "l1": "Phase protection operates",
+      "l2": "START \u2192 timer/zone \u2192 trip",
+      "l3": "Two phase currents rise; corresponding voltages depress; negative sequence increases",
+      "fallback": "If zone signal absent: calculate apparent impedance and inspect phase current/voltage relationship",
+      "final_class": "IN-ZONE PHASE-PHASE FAULT"
+    },
+    {
+      "row": 21,
+      "asset": "Feeder/Line",
+      "scenario": "Three-phase in-zone fault",
+      "ansi": "Phase OC; directional OC; distance",
+      "l1": "Phase protection operates",
+      "l2": "START \u2192 zone/timer \u2192 trip",
+      "l3": "Three-phase current rise + voltage depression",
+      "fallback": "If distance/zone bit absent: V/I phasors + impedance trajectory + topology",
+      "final_class": "IN-ZONE 3-PHASE FAULT"
+    },
+    {
+      "row": 22,
+      "asset": "Feeder/Line",
+      "scenario": "External / out-of-zone fault",
+      "ansi": "OC; directional OC; distance",
+      "l1": "Relay sees fault current but direction/zone may restrain",
+      "l2": "Neighboring protection/backup sequence indicates external location",
+      "l3": "High current with direction/impedance inconsistent with protected zone",
+      "fallback": "If directional/zone data missing: topology + neighboring relay SOE + current/voltage comparison",
+      "final_class": "OUT-OF-ZONE FAULT"
+    },
+    {
+      "row": 23,
+      "asset": "Feeder/Line",
+      "scenario": "High-impedance fault",
+      "ansi": "High-impedance fault detection; sensitive earth fault",
+      "l1": "Special HIF/HIZ element may operate; conventional OC may not",
+      "l2": "Detection \u2192 alarm/trip if configured",
+      "l3": "Low/moderate fault current, abnormal residual/sequence signature, possible intermittent behavior",
+      "fallback": "If dedicated HIF element absent: residual/sequence current + voltage distortion + intermittent waveform pattern",
+      "final_class": "PROBABLE HIGH-IMPEDANCE FAULT"
+    },
+    {
+      "row": 24,
+      "asset": "Feeder/Line",
+      "scenario": "Intermittent / transient earth fault",
+      "ansi": "Transient/intermittent earth-fault detection",
+      "l1": "Transient earth-fault element may operate",
+      "l2": "Repeated short pickups/operations around intermittent events",
+      "l3": "Short residual-current bursts with repeated extinction/restrike behavior",
+      "fallback": "If dedicated signal absent: identify repeated synchronized 3I0/residual bursts + voltage disturbance",
+      "final_class": "INTERMITTENT EARTH FAULT"
+    },
+    {
+      "row": 25,
+      "asset": "Feeder/Line",
+      "scenario": "Temporary fault cleared by autoreclose",
+      "ansi": "Auto-reclose + fault protection",
+      "l1": "Protection trips; autoreclose operates",
+      "l2": "Trip \u2192 CB OPEN \u2192 dead time \u2192 CB CLOSE \u2192 no repeat trip",
+      "l3": "Fault signature exists before first opening and disappears after reclose",
+      "fallback": "If autoreclose bit absent: infer from CB open/close SOE and disappearance of fault signature",
+      "final_class": "TEMPORARY FAULT / SUCCESSFUL RECLOSURE"
+    },
+    {
+      "row": 26,
+      "asset": "Feeder/Line",
+      "scenario": "Persistent fault after autoreclose",
+      "ansi": "Auto-reclose + fault protection",
+      "l1": "Protection operates again after reclose",
+      "l2": "Trip \u2192 open \u2192 reclose \u2192 protection pickup/trip again",
+      "l3": "Fault signature persists after reclose",
+      "fallback": "If autoreclose signal absent: repeated CB open/close + repeated protection operation",
+      "final_class": "PERSISTENT FAULT / UNSUCCESSFUL RECLOSURE"
+    },
+    {
+      "row": 27,
+      "asset": "Feeder/Line",
+      "scenario": "Switch onto fault",
+      "ansi": "Switch-onto-fault / instantaneous protection",
+      "l1": "Fault protection operates immediately following close",
+      "l2": "CB CLOSE \u2192 immediate protection pickup/trip",
+      "l3": "Fault current and voltage collapse start essentially at energization",
+      "fallback": "If dedicated SOTF logic absent: CB close timing + immediate fault waveform",
+      "final_class": "SWITCH-ONTO-FAULT"
+    },
+    {
+      "row": 28,
+      "asset": "Busbar",
+      "scenario": "Internal bus fault",
+      "ansi": "Bus differential; bus overcurrent",
+      "l1": "Bus differential operates; multiple zones/feeders may trip",
+      "l2": "Bus protection trip \u2192 lockout/master trip \u2192 multiple breakers open",
+      "l3": "Simultaneous current contributions from multiple circuits + bus voltage collapse",
+      "fallback": "If bus differential bit absent: correlate multiple feeder/incomer currents, directions, bus voltage and breaker SOE",
+      "final_class": "INTERNAL BUS FAULT"
+    },
+    {
+      "row": 29,
+      "asset": "Busbar",
+      "scenario": "External feeder fault with bus restraint",
+      "ansi": "Bus differential + feeder protection",
+      "l1": "Feeder protection operates; bus differential should remain restrained",
+      "l2": "Feeder trip \u2192 feeder CB opens while bus remains energized",
+      "l3": "High feeder current but no credible bus-wide differential fault",
+      "fallback": "If bus differential data missing: feeder current + bus voltage + other breaker states + neighboring relay SOE",
+      "final_class": "EXTERNAL FEEDER FAULT"
+    },
+    {
+      "row": 30,
+      "asset": "Busbar",
+      "scenario": "Bus differential false operation / CT issue",
+      "ansi": "Bus differential; CT supervision",
+      "l1": "Bus differential trip without matching physical bus fault",
+      "l2": "Multiple breakers trip but event sequence does not match a bus fault",
+      "l3": "No credible bus-fault waveform; CT mismatch/distortion possible",
+      "fallback": "If CT diagnostic unavailable: compare all CT waveforms, current balance/polarity and external-fault sequence",
+      "final_class": "BUS PROTECTION MALOPERATION / CT ISSUE"
+    },
+    {
+      "row": 31,
+      "asset": "Generator",
+      "scenario": "Internal stator phase fault",
+      "ansi": "Generator differential; phase OC",
+      "l1": "Differential/phase protection operates",
+      "l2": "Pickup \u2192 trip \u2192 generator breaker opens",
+      "l3": "High differential/fault current + terminal voltage depression",
+      "fallback": "If differential unavailable: phase OC + current/voltage + sequence + topology",
+      "final_class": "INTERNAL STATOR PHASE FAULT"
+    },
+    {
+      "row": 32,
+      "asset": "Generator",
+      "scenario": "Stator earth fault",
+      "ansi": "Earth fault; generator differential; neutral/third-harmonic schemes",
+      "l1": "Earth-fault scheme operates",
+      "l2": "Pickup \u2192 trip \u2192 breaker opening",
+      "l3": "Residual/neutral/third-harmonic evidence depending protection scheme",
+      "fallback": "If dedicated element absent: residual current + neutral/terminal voltage + third harmonic if recorded",
+      "final_class": "STATOR EARTH FAULT"
+    },
+    {
+      "row": 33,
+      "asset": "Generator",
+      "scenario": "Loss of excitation / underexcitation",
+      "ansi": "Underexcitation / loss-of-field",
+      "l1": "Underexcitation protection operates",
+      "l2": "Pickup \u2192 delay \u2192 alarm/trip",
+      "l3": "P/Q and V/I operating trajectory consistent with loss of excitation",
+      "fallback": "If dedicated signal absent: P/Q + phasor trajectory + voltage/power-angle behavior",
+      "final_class": "PROBABLE LOSS OF EXCITATION"
+    },
+    {
+      "row": 34,
+      "asset": "Generator",
+      "scenario": "Negative-sequence heating",
+      "ansi": "Negative-sequence protection",
+      "l1": "Negative-sequence stage operates",
+      "l2": "Pickup \u2192 thermal/timer \u2192 trip",
+      "l3": "Elevated I2 and sustained phase unbalance",
+      "fallback": "If element absent: calculate I2/I1 from three-phase currents",
+      "final_class": "NEGATIVE-SEQUENCE CONDITION"
+    },
+    {
+      "row": 35,
+      "asset": "Generator",
+      "scenario": "Under/overfrequency",
+      "ansi": "Frequency protection; df/dt; load shedding",
+      "l1": "Frequency stage operates",
+      "l2": "Frequency pickup \u2192 timer/load shedding/trip",
+      "l3": "Frequency excursion and rate-of-change",
+      "fallback": "If relay frequency unavailable: derive frequency and df/dt from voltage waveform",
+      "final_class": "FREQUENCY EVENT"
+    },
+    {
+      "row": 36,
+      "asset": "Generator",
+      "scenario": "Out-of-step / pole slip",
+      "ansi": "Out-of-step / vector-shift",
+      "l1": "Out-of-step/vector-shift element operates",
+      "l2": "Detection \u2192 trip/blocking logic \u2192 breaker response",
+      "l3": "Impedance/power-angle trajectory or voltage-vector shift behavior",
+      "fallback": "If dedicated element absent: impedance trajectory + P/Q oscillation + voltage-angle behavior",
+      "final_class": "OUT-OF-STEP"
+    },
+    {
+      "row": 37,
+      "asset": "Generator",
+      "scenario": "Accidental energization",
+      "ansi": "Accidental energization/start protection",
+      "l1": "Dedicated logic/protection operates",
+      "l2": "CB CLOSE while generator is not in expected state \u2192 immediate protection response",
+      "l3": "Current appears immediately after unexpected energization; machine pre-event state inconsistent with normal operation",
+      "fallback": "If dedicated logic absent: CB close + pre-event machine state + current surge + voltage response",
+      "final_class": "ACCIDENTAL ENERGIZATION"
+    },
+    {
+      "row": 38,
+      "asset": "Generator",
+      "scenario": "Overfluxing",
+      "ansi": "V/Hz / overexcitation",
+      "l1": "Overfluxing stage operates",
+      "l2": "V/Hz pickup \u2192 timer \u2192 trip/alarm",
+      "l3": "Elevated V/Hz",
+      "fallback": "If stage absent: derive V/Hz from voltage waveform and frequency",
+      "final_class": "OVERFLUXING"
+    },
+    {
+      "row": 39,
+      "asset": "Capacitor Bank",
+      "scenario": "Normal switching transient",
+      "ansi": "Switching logic; voltage/current supervision",
+      "l1": "No sustained fault declaration",
+      "l2": "CB CLOSE \u2192 transient \u2192 decay \u2192 stable",
+      "l3": "Short-duration oscillatory/high-frequency transient synchronized with switching",
+      "fallback": "If switching signal absent: CB SOE + waveform onset/decay",
+      "final_class": "NORMAL SWITCHING TRANSIENT"
+    },
+    {
+      "row": 40,
+      "asset": "Capacitor Bank",
+      "scenario": "Capacitor unbalance / internal fault",
+      "ansi": "Unbalance; overcurrent; earth fault",
+      "l1": "Unbalance/fault protection operates",
+      "l2": "Pickup \u2192 alarm/trip \u2192 CB open",
+      "l3": "Phase/current/neutral imbalance or sustained abnormal voltage/current",
+      "fallback": "If dedicated unbalance signal absent: calculate phase/neutral imbalance from DR",
+      "final_class": "CAPACITOR UNBALANCE / INTERNAL FAULT"
+    },
+    {
+      "row": 41,
+      "asset": "Capacitor Bank",
+      "scenario": "Overvoltage",
+      "ansi": "Overvoltage / sequence-voltage protection",
+      "l1": "Overvoltage stage operates",
+      "l2": "Pickup \u2192 delay \u2192 trip/alarm",
+      "l3": "Sustained elevated voltage",
+      "fallback": "If protection bit absent: calculate RMS and sequence voltages from DR",
+      "final_class": "OVERVOLTAGE CONDITION"
+    },
+    {
+      "row": 42,
+      "asset": "Breaker",
+      "scenario": "Normal successful operation",
+      "ansi": "Trip command; breaker status; current interruption",
+      "l1": "Trip command issued; status changes normally",
+      "l2": "Trip command \u2192 52a/52b transition \u2192 current interruption",
+      "l3": "Current drops to zero after expected opening; breaker status agrees",
+      "fallback": "If breaker status unavailable: current interruption + neighboring device SOE + voltage/state change",
+      "final_class": "BREAKER SUCCESSFUL"
+    },
+    {
+      "row": 43,
+      "asset": "Breaker",
+      "scenario": "Breaker fails to open after trip",
+      "ansi": "Breaker failure / backup breaker logic",
+      "l1": "Breaker-failure element operates if available",
+      "l2": "Primary trip command \u2192 expected clearing time expires \u2192 current persists \u2192 backup trip",
+      "l3": "Fault current persists after local trip command; local status fails to change",
+      "fallback": "If BF bit absent: trip command + persistent current + unchanged status + subsequent upstream breaker trip",
+      "final_class": "BREAKER FAILURE / LBB"
+    },
+    {
+      "row": 44,
+      "asset": "Breaker",
+      "scenario": "Trip circuit failure",
+      "ansi": "Trip-circuit supervision / breaker monitoring",
+      "l1": "Trip-circuit alarm/supervision may operate",
+      "l2": "Trip command issued but no expected breaker response",
+      "l3": "No current interruption and/or breaker status unchanged; DC/trip voltage abnormal if recorded",
+      "fallback": "If supervision signal absent: command/status mismatch + current persistence + DC/trip voltage if available",
+      "final_class": "TRIP CIRCUIT / CONTROL FAILURE"
+    },
+    {
+      "row": 45,
+      "asset": "Breaker",
+      "scenario": "Breaker stuck / mechanical failure",
+      "ansi": "Breaker monitoring; breaker failure",
+      "l1": "Failure to open or close as commanded",
+      "l2": "Command \u2192 no status transition within expected time",
+      "l3": "Current/state remains inconsistent with command",
+      "fallback": "If dedicated monitoring absent: SOE command/status mismatch + current/voltage evidence",
+      "final_class": "BREAKER MECHANICAL/CONTROL FAILURE"
+    },
+    {
+      "row": 46,
+      "asset": "System",
+      "scenario": "Local Breaker Backup / LBB cascade clearing",
+      "ansi": "Breaker failure + backup protection + lockout",
+      "l1": "Local BF/LBB function starts or operates",
+      "l2": "Primary feeder/transformer breaker trip command \u2192 local CB fails \u2192 BF timer \u2192 upstream/incomer/bus-side breakers trip",
+      "l3": "Fault current persists after primary trip and disappears only after backup breakers open",
+      "fallback": "If BF/LBB signal absent: reconstruct using trip command, 52 status, current persistence, BF timer-equivalent interval and upstream breaker trips",
+      "final_class": "FAULT + LOCAL BREAKER FAILURE + LBB/CASCADE CLEARING"
+    },
+    {
+      "row": 47,
+      "asset": "System",
+      "scenario": "Cascade trip caused by protection coordination",
+      "ansi": "Primary protection + backup protection",
+      "l1": "Primary protection may fail/block; backup stage operates",
+      "l2": "Primary device \u2192 no/failed clearing \u2192 backup relay operates \u2192 additional breaker(s) trip",
+      "l3": "Fault persists through first clearing attempt and clears after backup device operation",
+      "fallback": "If backup stage signal absent: SOE order + current persistence + sequential breaker openings",
+      "final_class": "PRIMARY CLEARING FAILURE / BACKUP CASCADE"
+    },
+    {
+      "row": 48,
+      "asset": "System",
+      "scenario": "Bus/incomer trip caused by downstream feeder breaker failure",
+      "ansi": "Feeder protection + breaker failure + incomer/bus protection",
+      "l1": "Feeder protection trips first; incomer/bus-side protection trips later",
+      "l2": "Feeder trip command \u2192 feeder CB fails \u2192 BF/LBB \u2192 incomer/bus breaker trips",
+      "l3": "Feeder fault current continues until incomer/bus breaker opens",
+      "fallback": "If feeder BF signal missing: time-order + feeder 52 status + current persistence + incomer trip",
+      "final_class": "DOWNSTREAM FEEDER FAULT WITH LBB"
+    },
+    {
+      "row": 49,
+      "asset": "System",
+      "scenario": "Multiple-breaker cascade without bus fault",
+      "ansi": "Feeder protection + backup/LBB + lockout",
+      "l1": "One primary fault declaration followed by backup trips",
+      "l2": "Primary breaker command \u2192 failed clearing \u2192 backup trips in defined hierarchy",
+      "l3": "Single fault signature persists while successive breakers open; no independent bus-fault signature",
+      "fallback": "If topology/logic signals missing: reconstruct from SOE timestamps and current discontinuity after each breaker opening",
+      "final_class": "CASCADE / BACKUP CLEARING \u2014 NOT AUTOMATICALLY A BUS FAULT"
+    },
+    {
+      "row": 50,
+      "asset": "System",
+      "scenario": "Successful backup clearing after primary breaker failure",
+      "ansi": "Breaker failure + backup trip",
+      "l1": "Primary protection operates; local breaker fails; backup protection succeeds",
+      "l2": "Primary trip \u2192 BF interval \u2192 backup breaker(s) trip \u2192 fault current clears",
+      "l3": "Current persists during BF interval then collapses after backup breaker opening",
+      "fallback": "If BF signal absent: current persistence + breaker sequence + final clearing location",
+      "final_class": "BREAKER FAILURE WITH SUCCESSFUL BACKUP CLEARING"
+    },
+    {
+      "row": 51,
+      "asset": "Instrumentation",
+      "scenario": "VT failure / voltage measurement loss",
+      "ansi": "VT supervision; voltage-dependent protection",
+      "l1": "VT supervision may alarm/block voltage-dependent elements",
+      "l2": "Voltage supervision change \u2192 protection block/alarm \u2192 no matching current fault",
+      "l3": "One/more voltage channels collapse while currents/power/system state do not support a real voltage fault",
+      "fallback": "If VT supervision absent: phase-voltage comparison + sequence voltage + current/power continuity + independent voltage source",
+      "final_class": "VT / MEASUREMENT ISSUE"
+    },
+    {
+      "row": 52,
+      "asset": "Instrumentation",
+      "scenario": "CT saturation / current measurement distortion",
+      "ansi": "Differential; overcurrent; CT supervision",
+      "l1": "Protection may respond abnormally during high current",
+      "l2": "Protection operation occurs during high external/through-fault event",
+      "l3": "CT waveform clipping/distortion/asymmetry and current mismatch during high through-current",
+      "fallback": "If CT flag absent: raw waveform + both-side current comparison + external-fault evidence",
+      "final_class": "CT SATURATION SUSPECTED"
+    },
+    {
+      "row": 53,
+      "asset": "Instrumentation",
+      "scenario": "CT polarity/ratio/channel mismatch",
+      "ansi": "Differential; metering; current supervision",
+      "l1": "Unexpected differential or imbalance may appear",
+      "l2": "Mismatch appears during otherwise balanced/known conditions",
+      "l3": "Current magnitude/phase relationship inconsistent between channels",
+      "fallback": "If diagnostic unavailable: compare channels across healthy load and known faults; cross-check independent relay/meter records",
+      "final_class": "CT CONFIGURATION / CHANNEL ISSUE"
+    },
+    {
+      "row": 54,
+      "asset": "Control",
+      "scenario": "Protection logic/control-system malfunction",
+      "ansi": "Programmable logic; trip matrix; interlocking",
+      "l1": "Unexpected START/TRIP/lockout logic",
+      "l2": "SOE order contradicts expected protection sequence or command originates without valid initiating condition",
+      "l3": "DR may show no corresponding physical fault",
+      "fallback": "If logic signals unavailable: compare relay events, breaker commands, SCADA commands and DR physical state",
+      "final_class": "CONTROL / LOGIC MALOPERATION"
+    },
+    {
+      "row": 55,
+      "asset": "Protection",
+      "scenario": "Protection maloperation / unexplained trip",
+      "ansi": "Any protection function",
+      "l1": "Protection declares trip",
+      "l2": "Trip sequence exists but independent evidence does not support fault",
+      "l3": "DR lacks corresponding physical signature or contradicts declared condition",
+      "fallback": "Cross-check independent relay, neighboring device, CT/VT health, breaker status and topology",
+      "final_class": "PROTECTION MALOPERATION SUSPECTED"
+    }
+  ],
+  "lbb_cascade_logic": [
+    {
+      "step": "1",
+      "question": "Was there a credible primary fault signature?",
+      "if_yes": "Identify fault type and probable location",
+      "if_no": "Check protection/control/measurement issue before assuming fault",
+      "meaning": "Primary fault determination"
+    },
+    {
+      "step": "2",
+      "question": "Did primary protection START/OPERATE?",
+      "if_yes": "Record initiating protection",
+      "if_no": "Use DR/SOE/neighbouring relay if signal missing",
+      "meaning": "Primary detection"
+    },
+    {
+      "step": "3",
+      "question": "Was a trip command issued to local breaker?",
+      "if_yes": "Record command timestamp",
+      "if_no": "If no command, investigate blocking/logic/control",
+      "meaning": "Primary clearing attempt"
+    },
+    {
+      "step": "4",
+      "question": "Did local breaker status change correctly?",
+      "if_yes": "Confirm local breaker opened",
+      "if_no": "Proceed to current persistence check",
+      "meaning": "Breaker performance"
+    },
+    {
+      "step": "5",
+      "question": "Did fault current disappear after local breaker opening?",
+      "if_yes": "Primary clearing successful",
+      "if_no": "Persistent current \u2192 suspect breaker failure/LBB",
+      "meaning": "Key LBB discriminator"
+    },
+    {
+      "step": "6",
+      "question": "Did breaker-failure/LBB logic start or time out?",
+      "if_yes": "Record BF/LBB interval",
+      "if_no": "Infer from elapsed time + persistent current + backup trip sequence",
+      "meaning": "Breaker failure evidence"
+    },
+    {
+      "step": "7",
+      "question": "Did upstream/incomer/bus-side breaker(s) trip afterward?",
+      "if_yes": "Identify backup clearing path",
+      "if_no": "If not, investigate incomplete backup action",
+      "meaning": "Cascade/backup action"
+    },
+    {
+      "step": "8",
+      "question": "Did fault current disappear only after backup breaker(s) opened?",
+      "if_yes": "Strong LBB/cascade evidence",
+      "if_no": "Look for alternate source/parallel feed",
+      "meaning": "Physical validation"
+    },
+    {
+      "step": "9",
+      "question": "Is there independent evidence of a bus fault?",
+      "if_yes": "Do not automatically label feeder LBB as bus fault; classify actual bus evidence separately",
+      "if_no": "Classify as downstream feeder fault + LBB",
+      "meaning": "Root-cause separation"
+    },
+    {
+      "step": "10",
+      "question": "Final classification",
+      "if_yes": "Fault + breaker failure + backup clearing",
+      "if_no": "If evidence incomplete, use PROBABLE/POSSIBLE",
+      "meaning": "Avoid 'multiple breaker trip = bus fault' error"
+    }
+  ],
+  "fallback_methodology": [
+    {
+      "level": "L1 - Relay",
+      "primary": "START/PICKUP, OPERATE, TRIP, stage, phase, direction, zone",
+      "fallback": "Related protection function(s) and available status bits",
+      "rule": "Never infer a missing relay bit as if it existed."
+    },
+    {
+      "level": "L2 - SOE",
+      "primary": "Protection sequence, timers, trip commands, breaker status",
+      "fallback": "Relay event timestamps + SCADA/SOE + neighboring relays",
+      "rule": "Reconstruct chronological causality from timestamps."
+    },
+    {
+      "level": "L3 - DR",
+      "primary": "Measured currents, voltages, sequence, impedance, P/Q, frequency, temperature, harmonics",
+      "fallback": "Derive quantities mathematically from raw waveforms",
+      "rule": "Waveform-derived evidence may replace a missing dedicated indication."
+    },
+    {
+      "level": "Topology",
+      "primary": "Breaker positions, bus/feeder connectivity, source directions",
+      "fallback": "Neighboring relay events and switching state",
+      "rule": "Location claims require topology context."
+    },
+    {
+      "level": "LBB",
+      "primary": "BF/LBB signal + timer",
+      "fallback": "Trip command + unchanged breaker status + persistent current + delayed backup trip",
+      "rule": "Do not call a cascade a bus fault without independent bus-fault evidence."
+    },
+    {
+      "level": "Inrush",
+      "primary": "Dedicated inrush detector",
+      "fallback": "CB close + asymmetric/distorted decaying current waveform",
+      "rule": "Harmonics support the diagnosis but are not mandatory."
+    },
+    {
+      "level": "In-zone",
+      "primary": "Configured distance/differential/REF zone",
+      "fallback": "Impedance/current/voltage/topology inference",
+      "rule": "Label inferred zone decisions appropriately."
+    },
+    {
+      "level": "Confidence",
+      "primary": "Independent L1+L2+L3 agreement",
+      "fallback": "Partial evidence with explicit missing channels",
+      "rule": "CONFIRMED / PROBABLE / POSSIBLE / NOT CONFIRMED."
+    }
+  ],
+  "rca_taxonomy": [
+    {
+      "classification": "CONFIRMED",
+      "meaning": "Independent evidence agrees across relay/SOE/DR or equivalent fallback paths",
+      "minimum": "At least two independent evidence classes; preferably L1+L2+L3"
+    },
+    {
+      "classification": "PROBABLE",
+      "meaning": "Strong physical and chronological evidence but one important signal/channel is missing",
+      "minimum": "Strong DR/SOE or equivalent independent evidence"
+    },
+    {
+      "classification": "POSSIBLE",
+      "meaning": "Plausible but insufficient to distinguish from alternatives",
+      "minimum": "Partial evidence; alternatives remain"
+    },
+    {
+      "classification": "NOT CONFIRMED",
+      "meaning": "Declared by relay/event but physical evidence does not support it",
+      "minimum": "Contradictory or absent physical signature"
+    },
+    {
+      "classification": "BREAKER FAILURE / LBB",
+      "meaning": "Primary fault exists but local breaker fails and backup clears",
+      "minimum": "Persistent current after local trip + backup breaker clearing"
+    },
+    {
+      "classification": "CASCADE / BACKUP CLEARING",
+      "meaning": "Multiple breakers operate as consequence of failed/backup clearing",
+      "minimum": "Time-ordered sequential trip pattern"
+    },
+    {
+      "classification": "INSTRUMENTATION ISSUE",
+      "meaning": "CT/VT/channel problem likely explains protection declaration",
+      "minimum": "Measurement inconsistency/distortion"
+    },
+    {
+      "classification": "CONTROL / LOGIC ISSUE",
+      "meaning": "Trip or blocking sequence inconsistent with physical fault",
+      "minimum": "SOE/logic contradiction"
+    },
+    {
+      "classification": "PROTECTION MALOPERATION SUSPECTED",
+      "meaning": "Protection operation lacks physical/system support after instrumentation/control checks",
+      "minimum": "Relay declaration contradicted by independent evidence"
+    }
+  ]
+}

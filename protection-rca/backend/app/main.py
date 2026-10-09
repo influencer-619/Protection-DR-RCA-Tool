@@ -61,14 +61,17 @@ def _resolve_frontend_dist() -> Path | None:
 
 async def _renumber_legacy_events() -> None:
     from app.database import AsyncSessionLocal
-    from app.services.event_service import renumber_legacy_events
+    from app.services.event_service import renumber_combined_events, renumber_legacy_events
 
     try:
         async with AsyncSessionLocal() as db:
             count = await renumber_legacy_events(db)
+            comb = await renumber_combined_events(db)
             await db.commit()
         if count:
             logger.info("events_renumbered", count=count)
+        if comb:
+            logger.info("combined_events_renumbered", count=comb)
     except Exception as exc:  # startup must not fail on a cosmetic migration
         logger.warning("events_renumber_failed", error=str(exc))
 

@@ -306,8 +306,10 @@ def zones_from_settings_flat(
     z1 = pick("zone1_reach", "zone1_reach_ohm", "z1_reach_ohm", "z1mag", "z1p", "reach_ohm")
     z2 = pick("zone2_reach", "zone2_reach_ohm", "z2_reach_ohm", "z2mag", "z2p")
     z3 = pick("zone3_reach", "zone3_reach_ohm", "z3_reach_ohm", "z3mag", "z3p")
+    z4 = pick("zone4_reach", "zone4_reach_ohm", "z4_reach_ohm", "z4mag", "z4p")
+    z5 = pick("zone5_reach", "zone5_reach_ohm", "z5_reach_ohm", "z5mag", "z5p")
     for idx, (lab, reach) in enumerate(
-        (("Z1", z1), ("Z2", z2), ("Z3", z3)),
+        (("Z1", z1), ("Z2", z2), ("Z3", z3), ("Z4", z4), ("Z5", z5)),
         start=1,
     ):
         if reach and reach > 0:

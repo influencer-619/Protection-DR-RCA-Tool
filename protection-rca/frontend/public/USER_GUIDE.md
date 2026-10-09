@@ -554,7 +554,11 @@ On an IED row click **Open**. The breadcrumb shows **IED workspace**.
 - **Plant path**: Substation › Voltage › Bay › Feeder
 - **IED name** as the title
 - Chips: relay **Tag**, **kV** (from the voltage level), **IP** (once an IEC 61850 connection has been saved), **Remote** (opposite-end IED when configured)
-- **Remote IED (opposite end)** dropdown — pick the peer relay for 87L / multi-end work. The link is **bidirectional** (A↔B). Clear with **None — single-end only**. Optional; leave unset for single-ended analysis.
+- **Peer relationship** — choose how this IED relates to another plant IED:
+  - **None** — single-IED analysis only
+  - **Line remote** — opposite end for 87L / two-ended line work
+  - **Cascade / LBB** — initiator ↔ backup bay (e.g. LV feeder BF → HV clearance); set **This IED role** (Initiator or Backup)
+  - Then pick the **Peer IED**. The link is **bidirectional**. Upload/fetch DRs **per IED**; at **Analyse** choose Normal / Local–Remote / Cascade.
 - Stats: **Events** (total for this relay) · **In review** · **Last event** (how long ago the newest event occurred)
 
 ### Acquire panel — two modes
@@ -566,14 +570,14 @@ A segmented switch at the top of the panel selects how records come in:
 | **Fetch from IED** | The relay is reachable over the network (IEC 61850 / MMS). See [§10](#10-fetching-records-from-the-relay-iec-61850) and [§11](#11-automatic-fetch-auto-fetch) |
 | **Manual upload** | You have files exported from the relay tool, e-mail, USB, etc. See [§14](#14-uploading-files-manually) |
 
-**Manual upload** shows **two** drop zones:
+**Manual upload** is a **single** drop zone for **this IED’s** files only (folder drop / Add folder supported). Create both IEDs in Plant, upload each bay’s DR on its own IED workspace, then use **Analyse** for normal single-IED RCA. For multi-IED incidents, open **Combined RCA** in the left nav:
 
-| Zone | Stamp | Use for |
-|------|-------|---------|
-| **LOCAL** | `end_label = LOCAL` | COMTRADE / settings / SOE from **this** IED |
-| **REMOTE** (optional) | `end_label = REMOTE` | Files from the opposite end (label shows the Remote IED name when set) |
+| Combined RCA | When | What happens |
+|--------------|------|----------------|
+| **Local / Remote** | Line ends | Pick local + remote IEDs/events → one combined line RCA |
+| **Cascade / LBB** | Initiator + backup bays | Pick roles + events → single-incident breaker-failure RCA |
 
-Both zones feed **one event**. Dropped files appear as chips (× to remove); **Clear N files** empties both lists. Analysis auto-pairs LOCAL + REMOTE COMTRADE when both are present (`multi_end`).
+Auto-fetch stays **per IED only** (no peer join). Enable it on each bay, then combine later via Combined RCA.
 
 | Package | Button label | What happens |
 |---------|--------------|--------------|
@@ -740,9 +744,8 @@ Cannot enable without an IP. Settings save immediately on the IED.
 | **Events** | On | Download / read SOE / protection status **with every new DR** (then matched per [§10.7](#107-matching-soe--events-to-the-right-dr)) |
 | **Start analysis automatically** | On | Queue analysis when COMTRADE + settings are present |
 | **Also import records already on the IED** | Off | Editable only while auto-fetch is **off**. First cycle also imports the backlog (still max 10 per cycle) |
-| **Also fetch remote IED** | Off | Requires a **Remote IED** on this workspace. When on, after each local DR is imported (stamped **LOCAL**), the server also pulls a matching new record from the peer into the **same event** (stamped **REMOTE**). Peer offline / no new remote DR → local cycle still succeeds |
 
-Files acquired by auto-fetch (and manual Fetch) are stamped **LOCAL** for the polled IED. **Also fetch remote IED** stays **off by default** so enabling auto-fetch never silently polls another substation.
+Files acquired by auto-fetch (and manual Fetch) are stamped **LOCAL** for the polled IED. Multi-IED Cascade / Local–Remote analysis is done later via **Combined RCA**, not during auto-fetch.
 
 **SCL is not fetched by auto-fetch** (use manual Fetch if needed).
 
@@ -1312,6 +1315,8 @@ Assessed when multi-end / winding / bus currents or BF timing evidence exist in 
 
 **87 operate/restraint:** when both-side currents exist, Id = |I1−I2|, Ir = (|I1|+|I2|)/2; trip expected if Id > Ip + k·Ir. The Protection tab can show an **Id/Ir** characteristic plot. Soft **CT saturation** cues use phase currents only (not residual IN alone).
 
+**LBB / multi-bay cascade (single incident):** upload initiator + backup packages under **Cascade / LBB** on the IED workspace (see [§9](#9-ied-workspace)). Digitals/SOE showing 50BF/LBB plus intertrip send/receive set `cascade_lbb_detected`. Primary RCA becomes **Breaker failure**; INTERTRIP / feeder / transformer hypotheses are demoted so the HV clearance is framed as consequence of initiator BF, not a separate root cause.
+
 ### Scheme library (RCA context)
 
 Deterministic scheme detection from operated/enabled elements and digital roles, for example:
@@ -1321,7 +1326,7 @@ Deterministic scheme detection from operated/enabled elements and digital roles,
 - POTT / communication-aided schemes (when channel evidence exists)  
 - Feeder overcurrent / earth-fault  
 - Transformer / bus / generator unit schemes  
-- Breaker-failure cascade  
+- Breaker-failure cascade (LBB multi-bay single incident)  
 
 Scheme context influences RCA ranking; it does **not** invent trips or measurements.
 

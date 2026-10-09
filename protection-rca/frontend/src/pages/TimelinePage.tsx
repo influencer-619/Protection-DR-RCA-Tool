@@ -11,6 +11,7 @@ import {
   matchTimelineType,
   timelineEventTitle,
 } from '@/utils/timelineCardInfo';
+import { CombinedPageHeader } from '@/components/CombinedPageHeader';
 import styles from './TimelinePage.module.css';
 
 function digitalId(e: TimelineEntry): string {
@@ -151,11 +152,11 @@ export function TimelinePage() {
   return (
     <div>
       <div className="page-header" style={{ padding: 0, marginBottom: 16 }}>
-        <div>
-          <h1 style={{ fontSize: '1.1rem' }}>Field sequence of operation</h1>
-          <p className="subtitle">
-            Chronological protection / digital changes · {entries.length} entries (AFAS-style)
-          </p>
+        <div style={{ flex: 1 }}>
+          <CombinedPageHeader
+            title="Field sequence of operation"
+            subtitle={`Chronological protection / digital changes · ${entries.length} entries (AFAS-style)`}
+          />
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
